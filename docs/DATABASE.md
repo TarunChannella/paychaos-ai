@@ -909,12 +909,37 @@ for the same order.
 |---|---|---:|---|---|---|
 | `id` | `uuid` | No | generated UUID | PRIMARY KEY | Business-effect ID |
 | `order_id` | `uuid` | No | — | FK → `orders.id` | Fulfilled merchant order |
-| `payment_id` | `uuid` | No | — | FK → `payments.id` | Payment authorizing effect |
-| `trigger_processing_attempt_id` | `uuid` | Yes | `NULL` | FK → `event_processing_attempts.id` | Processing attempt that caused effect |
+| `payment_id` | `uuid` | No | — | FK → `payments.id` | Payment authorizing effect — **added in Phase 2** (not present in the Phase 1 migration; see Column Phasing Note and Phase Ownership below) |
+| `trigger_processing_attempt_id` | `uuid` | Yes | `NULL` | FK → `event_processing_attempts.id` | Processing attempt that caused effect — added in Phase 2 (see Phase Ownership below) |
 | `effect_type` | `text` | No | `'FULFIL_ORDER'` | CHECK P0 value | Business effect |
 | `idempotency_key` | `text` | No | — | UNIQUE | Business-effect idempotency boundary |
 | `applied_at` | `timestamptz` | No | `now()` | — | Actual effect time |
 | `created_at` | `timestamptz` | No | `now()` | — | Audit creation time |
+
+---
+
+## Column Phasing Note
+
+This table definition describes the **complete, final** `fulfilments` schema. Not every column is
+created by the Phase 1 migration.
+
+- `payment_id` — **deferred to Phase 2.** `payments` does not exist until Phase 2, so a `NOT NULL`
+  foreign key to it cannot be created in Phase 1. Phase 1 creates `fulfilments` **without** this
+  column. Phase 2 creates `payments` first, then adds `payment_id` to the already-approved Phase 1
+  `fulfilments` table through a **new additive migration** — never by editing or rewriting the
+  original Phase 1 migration.
+- `trigger_processing_attempt_id` — deferred to Phase 2 for the same reason
+  (`event_processing_attempts` does not exist until Phase 2), added through an additive migration, as
+  already documented in Phase Ownership below.
+
+Phase 2 adds these columns through one or more additive migration files, as technically appropriate.
+The exact migration-file grouping is an implementation choice; what is fixed is that both columns are
+added on top of the approved Phase 1 table, never by rewriting it.
+
+**Phase 1 must not insert any row into `fulfilments`.** No authoritative payment evidence exists in
+Phase 1 — there is no `payments` table and no verified capture — so no Phase 1 code path may
+populate this table. The table exists in Phase 1 only to establish the approved business-effect
+representation and the future duplicate-fulfilment detection model; it remains empty until Phase 2.
 
 ---
 
@@ -1000,8 +1025,8 @@ Required:
 
 - UNIQUE `idempotency_key`;
 - index `order_id`;
-- index `payment_id`;
-- index `trigger_processing_attempt_id`;
+- index `payment_id` — created with the column in Phase 2, not part of the Phase 1 migration;
+- index `trigger_processing_attempt_id` — created with the column in Phase 2, not part of the Phase 1 migration;
 - index `applied_at`.
 
 ---
@@ -1010,19 +1035,42 @@ Required:
 
 ### Phase 1
 
-Creates business-effect representation.
+Creates the business-effect representation **without `payment_id`**: `id`, `order_id`, `effect_type`,
+`idempotency_key`, `applied_at`, `created_at`, plus their constraints and indexes (excluding the
+`payment_id` index, which arrives with the column in Phase 2). This establishes the approved
+business-effect model and the future duplicate-fulfilment (`COUNT(fulfilments) <= 1`) design ahead of
+the payment evidence that will populate it.
+
+Phase 1 must not insert a fulfilment row. No authoritative payment evidence exists yet — there is no
+`payments` table and no verified capture — so no Phase 1 code path may write to this table. It stays
+empty until Phase 2.
 
 ### Phase 2
 
-Connects fulfilment to verified payment/event processing.
+Connects fulfilment to verified payment/event processing, through one or more additive migrations —
+as technically appropriate — to the already-approved Phase 1 `fulfilments` table:
 
-`trigger_processing_attempt_id` is added in Phase 2, once `event_processing_attempts` exists, as an
-**additive migration** to the approved Phase 1 `fulfilments` table.
+1. **`payment_id`** — added once `payments` exists (`payments` is itself created in Phase 2, before
+   this migration). The column must be:
 
-Phase 2 must extend the table through a new migration file that adds the nullable
-`trigger_processing_attempt_id` column and its foreign key. Phase 2 must not edit or rewrite the
-original Phase 1 `fulfilments` migration. This preserves the approved Phase 1 migration history and
-keeps the schema change traceable to the phase that required it.
+   ```text
+   payment_id uuid NOT NULL REFERENCES payments(id)
+   ```
+
+   using `ON DELETE RESTRICT`, consistent with the FK/delete-semantics default this document already
+   establishes in Section 41 for important evidence relationships.
+
+2. **`trigger_processing_attempt_id`** — added once `event_processing_attempts` exists, nullable,
+   `FK → event_processing_attempts.id`.
+
+Whether these two columns are added by one migration file or two is an implementation choice. What
+is fixed is that each may only be added once its referenced table exists, and neither may be added by
+altering the original Phase 1 migration.
+
+**The original Phase 1 `fulfilments` migration must never be rewritten to insert either column.**
+Once Phase 1 is approved, its migrations are immutable; every later requirement is layered on
+through new migration files only. This preserves the approved Phase 1 migration history and keeps
+each schema change traceable to the phase that required it.
 
 ---
 
@@ -2641,6 +2689,9 @@ plus:
 - RLS;
 - foundational indexes.
 
+`fulfilments` is created **without** `payment_id` — see the `fulfilments` table's Column Phasing
+Note and Phase Ownership sections. Phase 1 must not insert any fulfilment row.
+
 No webhook, chaos, invariant, diagnosis, or regression tables yet.
 
 ---
@@ -2657,9 +2708,13 @@ event_processing_attempts
 
 and finalizes approved Razorpay-related payment-attempt fields.
 
-Also adds the fulfilment → processing-attempt relationship (`fulfilments.trigger_processing_attempt_id`)
-through a new additive migration once `event_processing_attempts` exists. This extends the approved
-Phase 1 `fulfilments` table; it must not rewrite the original Phase 1 migration.
+Also extends the approved Phase 1 `fulfilments` table through one or more additive migrations, as
+technically appropriate, none of which may rewrite the original Phase 1 migration:
+
+- **`fulfilments.payment_id`** — added once `payments` exists (created earlier in this same phase),
+  as `uuid NOT NULL REFERENCES payments(id)` with `ON DELETE RESTRICT`.
+- **`fulfilments.trigger_processing_attempt_id`** — added once `event_processing_attempts` exists,
+  as a nullable `FK → event_processing_attempts.id`.
 
 ---
 
