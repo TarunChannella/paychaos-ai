@@ -1,0 +1,30 @@
+# dependencies
+node_modules
+
+# next.js build output
+.next/
+out/
+build/
+
+# testing artifacts
+coverage/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+
+# typescript build info
+next-env.d.ts
+*.tsbuildinfo
+
+# lockfiles (not hand-formatted)
+package-lock.json
+
+# vercel
+.vercel
+
+# project documentation and agent config are out of Phase 1A formatting scope
+docs/
+.claude/
+CLAUDE.md
+AGENTS.md
