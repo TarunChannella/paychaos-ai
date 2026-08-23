@@ -12,10 +12,12 @@
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,mjs,cjs,json,css}\" --ignore-unknown",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,mjs,cjs,json,css}\" --ignore-unknown",
     "test": "vitest run",
+    "test:integration:supabase": "vitest run --config vitest.integration.config.ts",
     "e2e": "playwright test"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
+    "@supabase/supabase-js": "^2.112.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.33.0",
