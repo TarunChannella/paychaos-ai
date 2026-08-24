@@ -15,6 +15,11 @@ const listLatestPaymentAttemptsForOrderIdsMock = vi.fn();
 const insertPaymentAttemptMock = vi.fn();
 const markPaymentAttemptOrderCreatedMock = vi.fn();
 const markPaymentAttemptFailedObservedMock = vi.fn();
+const getPaymentAttemptByIdMock = vi.fn();
+const markPaymentAttemptCheckoutInProgressMock = vi.fn();
+const getPaymentByRazorpayPaymentIdMock = vi.fn();
+const insertVerifiedPaymentMock = vi.fn();
+const listLatestPaymentsForAttemptIdsMock = vi.fn();
 
 vi.mock("@/lib/demo-merchant/repository", () => ({
   insertOrder: insertOrderMock,
@@ -27,6 +32,24 @@ vi.mock("@/lib/demo-merchant/repository", () => ({
   insertPaymentAttempt: insertPaymentAttemptMock,
   markPaymentAttemptOrderCreated: markPaymentAttemptOrderCreatedMock,
   markPaymentAttemptFailedObserved: markPaymentAttemptFailedObservedMock,
+  getPaymentAttemptById: getPaymentAttemptByIdMock,
+  markPaymentAttemptCheckoutInProgress:
+    markPaymentAttemptCheckoutInProgressMock,
+  getPaymentByRazorpayPaymentId: getPaymentByRazorpayPaymentIdMock,
+  insertVerifiedPayment: insertVerifiedPaymentMock,
+  listLatestPaymentsForAttemptIds: listLatestPaymentsForAttemptIdsMock,
+}));
+
+const verifyCheckoutSignatureMock = vi.fn();
+vi.mock("@/lib/razorpay/checkout-verification", () => ({
+  verifyCheckoutSignature: verifyCheckoutSignatureMock,
+}));
+
+const FAKE_KEY_ID = "rzp_test_fake_key_id_not_real";
+const FAKE_KEY_SECRET = "fake-razorpay-key-secret-not-real";
+const getRazorpayEnvMock = vi.fn();
+vi.mock("@/lib/config/razorpay-env", () => ({
+  getRazorpayEnv: getRazorpayEnvMock,
 }));
 
 const createRazorpayOrderMock = vi.fn();
@@ -78,6 +101,8 @@ function orderRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+const VALID_ATTEMPT_ID = "22222222-2222-2222-2222-222222222222";
+
 function attemptRow(overrides: Record<string, unknown> = {}) {
   return {
     id: "attempt-1",
@@ -89,6 +114,24 @@ function attemptRow(overrides: Record<string, unknown> = {}) {
     razorpay_receipt: "pc_order_1_1_fake-uuid",
     razorpay_order_id: null,
     razorpay_order_status: null,
+    created_at: "2026-01-01T00:00:00.000Z",
+    updated_at: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function paymentRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "payment-1",
+    payment_attempt_id: VALID_ATTEMPT_ID,
+    razorpay_payment_id: "pay_fake_id",
+    razorpay_payment_status: null,
+    amount_subunits: 50000,
+    currency: "INR",
+    checkout_signature_verified: true,
+    checkout_verified_at: "2026-01-01T00:00:00.000Z",
+    captured_at: null,
+    failed_at: null,
     created_at: "2026-01-01T00:00:00.000Z",
     updated_at: "2026-01-01T00:00:00.000Z",
     ...overrides,
@@ -107,7 +150,18 @@ beforeEach(() => {
   insertPaymentAttemptMock.mockReset();
   markPaymentAttemptOrderCreatedMock.mockReset();
   markPaymentAttemptFailedObservedMock.mockReset();
+  getPaymentAttemptByIdMock.mockReset();
+  markPaymentAttemptCheckoutInProgressMock.mockReset();
+  getPaymentByRazorpayPaymentIdMock.mockReset();
+  insertVerifiedPaymentMock.mockReset();
+  listLatestPaymentsForAttemptIdsMock.mockReset().mockResolvedValue(new Map());
   createRazorpayOrderMock.mockReset();
+  verifyCheckoutSignatureMock.mockReset();
+  getRazorpayEnvMock.mockReset().mockReturnValue({
+    mode: "test",
+    keyId: FAKE_KEY_ID,
+    keySecret: FAKE_KEY_SECRET,
+  });
   logEventMock.mockReset();
 });
 
@@ -690,5 +744,442 @@ describe("createRazorpayOrderForMerchantOrder", () => {
     await createRazorpayOrderForMerchantOrder(VALID_ORDER_ID);
 
     expect(insertOrderMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("prepareCheckoutForPaymentAttempt", () => {
+  it("is declared with exactly one parameter — no amount/currency/orderId argument exists for the browser to override", async () => {
+    const { prepareCheckoutForPaymentAttempt } =
+      await import("@/lib/demo-merchant/service");
+    expect(prepareCheckoutForPaymentAttempt.length).toBe(1);
+  });
+
+  it("rejects a malformed attempt id before ever querying the database", async () => {
+    const {
+      prepareCheckoutForPaymentAttempt,
+      DemoMerchantPaymentAttemptNotFoundError,
+    } = await import("@/lib/demo-merchant/service");
+
+    await expect(
+      prepareCheckoutForPaymentAttempt("not-a-uuid"),
+    ).rejects.toThrow(DemoMerchantPaymentAttemptNotFoundError);
+    expect(getPaymentAttemptByIdMock).not.toHaveBeenCalled();
+  });
+
+  it("throws DemoMerchantPaymentAttemptNotFoundError when the attempt does not exist", async () => {
+    getPaymentAttemptByIdMock.mockResolvedValue(null);
+    const {
+      prepareCheckoutForPaymentAttempt,
+      DemoMerchantPaymentAttemptNotFoundError,
+    } = await import("@/lib/demo-merchant/service");
+
+    await expect(
+      prepareCheckoutForPaymentAttempt(VALID_ATTEMPT_ID),
+    ).rejects.toThrow(DemoMerchantPaymentAttemptNotFoundError);
+  });
+
+  it("rejects an attempt with no trusted Razorpay Order correlation yet", async () => {
+    getPaymentAttemptByIdMock.mockResolvedValue(
+      attemptRow({
+        id: VALID_ATTEMPT_ID,
+        status: "CREATED",
+        razorpay_order_id: null,
+      }),
+    );
+    const {
+      prepareCheckoutForPaymentAttempt,
+      DemoMerchantCheckoutNotEligibleError,
+    } = await import("@/lib/demo-merchant/service");
+
+    await expect(
+      prepareCheckoutForPaymentAttempt(VALID_ATTEMPT_ID),
+    ).rejects.toThrow(DemoMerchantCheckoutNotEligibleError);
+    expect(markPaymentAttemptCheckoutInProgressMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an attempt in an ineligible state (e.g. FAILED_OBSERVED) even with a Razorpay Order id present", async () => {
+    getPaymentAttemptByIdMock.mockResolvedValue(
+      attemptRow({
+        id: VALID_ATTEMPT_ID,
+        status: "FAILED_OBSERVED",
+        razorpay_order_id: "order_fake_id",
+      }),
+    );
+    const {
+      prepareCheckoutForPaymentAttempt,
+      DemoMerchantCheckoutNotEligibleError,
+    } = await import("@/lib/demo-merchant/service");
+
+    await expect(
+      prepareCheckoutForPaymentAttempt(VALID_ATTEMPT_ID),
+    ).rejects.toThrow(DemoMerchantCheckoutNotEligibleError);
+  });
+
+  it("ORDER_CREATED: transitions to CHECKOUT_IN_PROGRESS and returns the exact trusted amount/currency/order id/Key ID", async () => {
+    getPaymentAttemptByIdMock.mockResolvedValue(
+      attemptRow({
+        id: VALID_ATTEMPT_ID,
+        status: "ORDER_CREATED",
+        razorpay_order_id: "order_trusted_id",
+        amount_subunits: 50000,
+        currency: "INR",
+      }),
+    );
+    getOrderByIdMock.mockResolvedValue(orderRow());
+    markPaymentAttemptCheckoutInProgressMock.mockResolvedValue(
+      attemptRow({
+        id: VALID_ATTEMPT_ID,
+        status: "CHECKOUT_IN_PROGRESS",
+        razorpay_order_id: "order_trusted_id",
+        amount_subunits: 50000,
+        currency: "INR",
+      }),
+    );
+
+    const { prepareCheckoutForPaymentAttempt } =
+      await import("@/lib/demo-merchant/service");
+    const result = await prepareCheckoutForPaymentAttempt(VALID_ATTEMPT_ID);
+
+    expect(getPaymentAttemptByIdMock).toHaveBeenCalledWith(VALID_ATTEMPT_ID);
+    expect(getOrderByIdMock).toHaveBeenCalledWith(VALID_ORDER_ID);
+    expect(markPaymentAttemptCheckoutInProgressMock).toHaveBeenCalledWith(
+      VALID_ATTEMPT_ID,
+    );
+    expect(result).toEqual({
+      razorpayKeyId: FAKE_KEY_ID,
+      razorpayOrderId: "order_trusted_id",
+      amountSubunits: 50000,
+      currency: "INR",
+      paymentAttemptId: VALID_ATTEMPT_ID,
+      orderId: VALID_ORDER_ID,
+      name: expect.any(String),
+      description: expect.any(String),
+    });
+    // Never the Key Secret, webhook secret, or service-role key — the
+    // returned object's keys are exhaustively the Checkout-safe set.
+    expect(Object.keys(result).sort()).toEqual(
+      [
+        "amountSubunits",
+        "currency",
+        "description",
+        "name",
+        "orderId",
+        "paymentAttemptId",
+        "razorpayKeyId",
+        "razorpayOrderId",
+      ].sort(),
+    );
+    expect(JSON.stringify(result)).not.toContain(FAKE_KEY_SECRET);
+  });
+
+  it("CHECKOUT_IN_PROGRESS: reopens without transitioning again and without creating a new payment attempt", async () => {
+    getPaymentAttemptByIdMock.mockResolvedValue(
+      attemptRow({
+        id: VALID_ATTEMPT_ID,
+        status: "CHECKOUT_IN_PROGRESS",
+        razorpay_order_id: "order_trusted_id",
+      }),
+    );
+    getOrderByIdMock.mockResolvedValue(orderRow());
+
+    const { prepareCheckoutForPaymentAttempt } =
+      await import("@/lib/demo-merchant/service");
+    await prepareCheckoutForPaymentAttempt(VALID_ATTEMPT_ID);
+
+    expect(markPaymentAttemptCheckoutInProgressMock).not.toHaveBeenCalled();
+    expect(insertPaymentAttemptMock).not.toHaveBeenCalled();
+  });
+
+  it("re-validates Test Mode configuration before returning anything (fails closed on a fake Live key)", async () => {
+    getPaymentAttemptByIdMock.mockResolvedValue(
+      attemptRow({
+        id: VALID_ATTEMPT_ID,
+        status: "ORDER_CREATED",
+        razorpay_order_id: "order_trusted_id",
+      }),
+    );
+    getOrderByIdMock.mockResolvedValue(orderRow());
+    getRazorpayEnvMock.mockImplementation(() => {
+      throw new Error("Live Mode key rejected");
+    });
+
+    const { prepareCheckoutForPaymentAttempt } =
+      await import("@/lib/demo-merchant/service");
+    await expect(
+      prepareCheckoutForPaymentAttempt(VALID_ATTEMPT_ID),
+    ).rejects.toThrow("Live Mode key rejected");
+    expect(markPaymentAttemptCheckoutInProgressMock).not.toHaveBeenCalled();
+  });
+
+  it("never marks the merchant order PAID, never creates a fulfilment, and never marks the attempt CAPTURED (no such repository call exists)", async () => {
+    getPaymentAttemptByIdMock.mockResolvedValue(
+      attemptRow({
+        id: VALID_ATTEMPT_ID,
+        status: "ORDER_CREATED",
+        razorpay_order_id: "order_trusted_id",
+      }),
+    );
+    getOrderByIdMock.mockResolvedValue(orderRow());
+    markPaymentAttemptCheckoutInProgressMock.mockResolvedValue(
+      attemptRow({ id: VALID_ATTEMPT_ID, status: "CHECKOUT_IN_PROGRESS" }),
+    );
+
+    const { prepareCheckoutForPaymentAttempt } =
+      await import("@/lib/demo-merchant/service");
+    await prepareCheckoutForPaymentAttempt(VALID_ATTEMPT_ID);
+
+    expect(insertOrderMock).not.toHaveBeenCalled();
+    expect(markPaymentAttemptOrderCreatedMock).not.toHaveBeenCalled();
+    expect(markPaymentAttemptFailedObservedMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("verifyCheckoutAndPersistPayment", () => {
+  const validInput = {
+    paymentAttemptId: VALID_ATTEMPT_ID,
+    razorpayPaymentId: "pay_fake_id",
+    razorpayOrderId: "order_trusted_id",
+    razorpaySignature: "fake-signature-hex",
+  };
+
+  function eligibleAttempt(overrides: Record<string, unknown> = {}) {
+    return attemptRow({
+      id: VALID_ATTEMPT_ID,
+      status: "CHECKOUT_IN_PROGRESS",
+      razorpay_order_id: "order_trusted_id",
+      amount_subunits: 50000,
+      currency: "INR",
+      ...overrides,
+    });
+  }
+
+  it("rejects a malformed attempt id before ever querying the database", async () => {
+    const {
+      verifyCheckoutAndPersistPayment,
+      DemoMerchantPaymentAttemptNotFoundError,
+    } = await import("@/lib/demo-merchant/service");
+
+    await expect(
+      verifyCheckoutAndPersistPayment({
+        ...validInput,
+        paymentAttemptId: "not-a-uuid",
+      }),
+    ).rejects.toThrow(DemoMerchantPaymentAttemptNotFoundError);
+    expect(getPaymentAttemptByIdMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a missing/empty razorpayPaymentId before touching the database", async () => {
+    const {
+      verifyCheckoutAndPersistPayment,
+      RazorpayCheckoutSignatureInvalidError,
+    } = await import("@/lib/demo-merchant/service");
+
+    await expect(
+      verifyCheckoutAndPersistPayment({ ...validInput, razorpayPaymentId: "" }),
+    ).rejects.toThrow(RazorpayCheckoutSignatureInvalidError);
+    expect(getPaymentAttemptByIdMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a missing/empty razorpaySignature before touching the database", async () => {
+    const {
+      verifyCheckoutAndPersistPayment,
+      RazorpayCheckoutSignatureInvalidError,
+    } = await import("@/lib/demo-merchant/service");
+
+    await expect(
+      verifyCheckoutAndPersistPayment({ ...validInput, razorpaySignature: "" }),
+    ).rejects.toThrow(RazorpayCheckoutSignatureInvalidError);
+    expect(getPaymentAttemptByIdMock).not.toHaveBeenCalled();
+  });
+
+  it("throws DemoMerchantPaymentAttemptNotFoundError when the attempt does not exist", async () => {
+    getPaymentAttemptByIdMock.mockResolvedValue(null);
+    const {
+      verifyCheckoutAndPersistPayment,
+      DemoMerchantPaymentAttemptNotFoundError,
+    } = await import("@/lib/demo-merchant/service");
+
+    await expect(verifyCheckoutAndPersistPayment(validInput)).rejects.toThrow(
+      DemoMerchantPaymentAttemptNotFoundError,
+    );
+  });
+
+  it("throws DemoMerchantCheckoutNotEligibleError when the attempt has no trusted Razorpay Order id yet", async () => {
+    getPaymentAttemptByIdMock.mockResolvedValue(
+      eligibleAttempt({ razorpay_order_id: null }),
+    );
+    const {
+      verifyCheckoutAndPersistPayment,
+      DemoMerchantCheckoutNotEligibleError,
+    } = await import("@/lib/demo-merchant/service");
+
+    await expect(verifyCheckoutAndPersistPayment(validInput)).rejects.toThrow(
+      DemoMerchantCheckoutNotEligibleError,
+    );
+  });
+
+  it("CRITICAL: rejects a browser-supplied razorpayOrderId that differs from the trusted DB order id — WITHOUT ever calling the signature verifier", async () => {
+    getPaymentAttemptByIdMock.mockResolvedValue(
+      eligibleAttempt({ razorpay_order_id: "order_trusted_id" }),
+    );
+    const {
+      verifyCheckoutAndPersistPayment,
+      RazorpayCheckoutOrderMismatchError,
+    } = await import("@/lib/demo-merchant/service");
+
+    await expect(
+      verifyCheckoutAndPersistPayment({
+        ...validInput,
+        razorpayOrderId: "order_ATTACKER_supplied",
+      }),
+    ).rejects.toThrow(RazorpayCheckoutOrderMismatchError);
+    expect(verifyCheckoutSignatureMock).not.toHaveBeenCalled();
+    expect(insertVerifiedPaymentMock).not.toHaveBeenCalled();
+  });
+
+  it("computes the signature using the TRUSTED database order id, never the browser-supplied one", async () => {
+    getPaymentAttemptByIdMock.mockResolvedValue(
+      eligibleAttempt({ razorpay_order_id: "order_trusted_id" }),
+    );
+    getPaymentByRazorpayPaymentIdMock.mockResolvedValue(null);
+    insertVerifiedPaymentMock.mockResolvedValue(paymentRow());
+    verifyCheckoutSignatureMock.mockReturnValue(true);
+
+    const { verifyCheckoutAndPersistPayment } =
+      await import("@/lib/demo-merchant/service");
+    await verifyCheckoutAndPersistPayment(validInput);
+
+    expect(verifyCheckoutSignatureMock).toHaveBeenCalledWith({
+      trustedRazorpayOrderId: "order_trusted_id",
+      razorpayPaymentId: validInput.razorpayPaymentId,
+      razorpaySignature: validInput.razorpaySignature,
+    });
+  });
+
+  it("an invalid signature is rejected, creates zero trusted payments rows, and never mutates the order/business/fulfilment state", async () => {
+    getPaymentAttemptByIdMock.mockResolvedValue(eligibleAttempt());
+    verifyCheckoutSignatureMock.mockReturnValue(false);
+
+    const {
+      verifyCheckoutAndPersistPayment,
+      RazorpayCheckoutSignatureInvalidError,
+    } = await import("@/lib/demo-merchant/service");
+
+    await expect(verifyCheckoutAndPersistPayment(validInput)).rejects.toThrow(
+      RazorpayCheckoutSignatureInvalidError,
+    );
+    expect(insertVerifiedPaymentMock).not.toHaveBeenCalled();
+    expect(getPaymentByRazorpayPaymentIdMock).not.toHaveBeenCalled();
+    // No order/business/fulfilment mutation function is even exposed by
+    // the mocked repository module, so none can have been called.
+    expect(insertOrderMock).not.toHaveBeenCalled();
+    expect(markPaymentAttemptOrderCreatedMock).not.toHaveBeenCalled();
+  });
+
+  it("on a valid signature: persists the canonical payment using ONLY trusted attempt fields (amount/currency), never any input-side amount", async () => {
+    getPaymentAttemptByIdMock.mockResolvedValue(
+      eligibleAttempt({ amount_subunits: 50000, currency: "INR" }),
+    );
+    getPaymentByRazorpayPaymentIdMock.mockResolvedValue(null);
+    insertVerifiedPaymentMock.mockResolvedValue(paymentRow());
+    verifyCheckoutSignatureMock.mockReturnValue(true);
+
+    const { verifyCheckoutAndPersistPayment } =
+      await import("@/lib/demo-merchant/service");
+    const result = await verifyCheckoutAndPersistPayment(validInput);
+
+    expect(insertVerifiedPaymentMock).toHaveBeenCalledWith({
+      paymentAttemptId: VALID_ATTEMPT_ID,
+      razorpayPaymentId: validInput.razorpayPaymentId,
+      amountSubunits: 50000,
+      currency: "INR",
+    });
+    // VerifyCheckoutInput has no amount/currency field at all — structural:
+    // there is no way for a caller to have supplied a different value.
+    expect(Object.keys(validInput).sort()).toEqual(
+      [
+        "paymentAttemptId",
+        "razorpayOrderId",
+        "razorpayPaymentId",
+        "razorpaySignature",
+      ].sort(),
+    );
+    expect(result.checkoutSignatureVerified).toBe(true);
+    expect(result.checkoutVerifiedAt).not.toBeNull();
+    // Absent stronger provider evidence in Phase 2C, both remain NULL —
+    // reflected straight from the persisted row, never inferred.
+    expect(result.razorpayPaymentStatus).toBeNull();
+    expect(result.capturedAt).toBeNull();
+    expect(result.failedAt).toBeNull();
+    // The signature itself is never part of the insert call.
+    const insertArgs = insertVerifiedPaymentMock.mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(insertArgs.razorpaySignature).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain(validInput.razorpaySignature);
+  });
+
+  it("never mutates orders/fulfilments and never marks the attempt CAPTURED on success (no such repository call exists in this module's dependency set)", async () => {
+    getPaymentAttemptByIdMock.mockResolvedValue(eligibleAttempt());
+    getPaymentByRazorpayPaymentIdMock.mockResolvedValue(null);
+    insertVerifiedPaymentMock.mockResolvedValue(paymentRow());
+    verifyCheckoutSignatureMock.mockReturnValue(true);
+
+    const { verifyCheckoutAndPersistPayment } =
+      await import("@/lib/demo-merchant/service");
+    await verifyCheckoutAndPersistPayment(validInput);
+
+    expect(insertOrderMock).not.toHaveBeenCalled();
+    expect(markPaymentAttemptOrderCreatedMock).not.toHaveBeenCalled();
+    expect(markPaymentAttemptCheckoutInProgressMock).not.toHaveBeenCalled();
+  });
+
+  it("idempotent: the same razorpay_payment_id already verified for the SAME attempt returns the existing row without inserting a duplicate", async () => {
+    getPaymentAttemptByIdMock.mockResolvedValue(eligibleAttempt());
+    const existing = paymentRow({ payment_attempt_id: VALID_ATTEMPT_ID });
+    getPaymentByRazorpayPaymentIdMock.mockResolvedValue(existing);
+    verifyCheckoutSignatureMock.mockReturnValue(true);
+
+    const { verifyCheckoutAndPersistPayment } =
+      await import("@/lib/demo-merchant/service");
+    const result = await verifyCheckoutAndPersistPayment(validInput);
+
+    expect(insertVerifiedPaymentMock).not.toHaveBeenCalled();
+    expect(result.id).toBe(existing.id);
+  });
+
+  it("rejects (integrity error) when the razorpay_payment_id already belongs to a DIFFERENT payment attempt — never silently reassigned", async () => {
+    getPaymentAttemptByIdMock.mockResolvedValue(eligibleAttempt());
+    getPaymentByRazorpayPaymentIdMock.mockResolvedValue(
+      paymentRow({ payment_attempt_id: "some-other-attempt-id" }),
+    );
+    verifyCheckoutSignatureMock.mockReturnValue(true);
+
+    const {
+      verifyCheckoutAndPersistPayment,
+      RazorpayPaymentIdentityConflictError,
+    } = await import("@/lib/demo-merchant/service");
+
+    await expect(verifyCheckoutAndPersistPayment(validInput)).rejects.toThrow(
+      RazorpayPaymentIdentityConflictError,
+    );
+    expect(insertVerifiedPaymentMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves a concurrent-insert race safely: insertVerifiedPayment returning null (DB unique-constraint race) re-reads and returns the winning row", async () => {
+    getPaymentAttemptByIdMock.mockResolvedValue(eligibleAttempt());
+    const raceWinner = paymentRow({ payment_attempt_id: VALID_ATTEMPT_ID });
+    getPaymentByRazorpayPaymentIdMock
+      .mockResolvedValueOnce(null) // first check: no existing row yet
+      .mockResolvedValueOnce(raceWinner); // re-read after the race
+    insertVerifiedPaymentMock.mockResolvedValue(null); // lost the race
+    verifyCheckoutSignatureMock.mockReturnValue(true);
+
+    const { verifyCheckoutAndPersistPayment } =
+      await import("@/lib/demo-merchant/service");
+    const result = await verifyCheckoutAndPersistPayment(validInput);
+
+    expect(result.id).toBe(raceWinner.id);
   });
 });

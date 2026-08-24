@@ -416,6 +416,226 @@ describe("markPaymentAttemptFailedObserved", () => {
   });
 });
 
+describe("getPaymentAttemptById", () => {
+  it("looks up by id and returns the row", async () => {
+    const attemptRow = {
+      id: "attempt-1",
+      order_id: "order-1",
+      status: "ORDER_CREATED",
+      razorpay_order_id: "order_fake_id",
+    };
+    const builder = makeQueryBuilder({ data: attemptRow, error: null });
+    fromMock.mockReturnValue(builder);
+
+    const { getPaymentAttemptById } =
+      await import("@/lib/demo-merchant/repository");
+    const result = await getPaymentAttemptById("attempt-1");
+
+    expect(fromMock).toHaveBeenCalledWith("payment_attempts");
+    expect(builder.eq).toHaveBeenCalledWith("id", "attempt-1");
+    expect(result).toEqual(attemptRow);
+  });
+
+  it("returns null when no attempt matches", async () => {
+    const builder = makeQueryBuilder({ data: null, error: null });
+    fromMock.mockReturnValue(builder);
+
+    const { getPaymentAttemptById } =
+      await import("@/lib/demo-merchant/repository");
+    expect(await getPaymentAttemptById("does-not-exist")).toBeNull();
+  });
+
+  it("throws DemoMerchantRepositoryError on a query error", async () => {
+    const builder = makeQueryBuilder({
+      data: null,
+      error: { message: "connection string leaked here" },
+    });
+    fromMock.mockReturnValue(builder);
+
+    const { getPaymentAttemptById, DemoMerchantRepositoryError } =
+      await import("@/lib/demo-merchant/repository");
+    await expect(getPaymentAttemptById("x")).rejects.toThrow(
+      DemoMerchantRepositoryError,
+    );
+  });
+});
+
+describe("markPaymentAttemptCheckoutInProgress", () => {
+  it("updates status to CHECKOUT_IN_PROGRESS only", async () => {
+    const updatedRow = { id: "attempt-1", status: "CHECKOUT_IN_PROGRESS" };
+    const builder = makeQueryBuilder({ data: updatedRow, error: null });
+    fromMock.mockReturnValue(builder);
+
+    const { markPaymentAttemptCheckoutInProgress } =
+      await import("@/lib/demo-merchant/repository");
+    const result = await markPaymentAttemptCheckoutInProgress("attempt-1");
+
+    expect(fromMock).toHaveBeenCalledWith("payment_attempts");
+    expect(builder.update).toHaveBeenCalledWith({
+      status: "CHECKOUT_IN_PROGRESS",
+    });
+    expect(builder.eq).toHaveBeenCalledWith("id", "attempt-1");
+    expect(result).toEqual(updatedRow);
+  });
+});
+
+describe("getPaymentByRazorpayPaymentId", () => {
+  it("looks up by razorpay_payment_id and returns the row", async () => {
+    const paymentRow = {
+      id: "payment-1",
+      payment_attempt_id: "attempt-1",
+      razorpay_payment_id: "pay_fake_id",
+    };
+    const builder = makeQueryBuilder({ data: paymentRow, error: null });
+    fromMock.mockReturnValue(builder);
+
+    const { getPaymentByRazorpayPaymentId } =
+      await import("@/lib/demo-merchant/repository");
+    const result = await getPaymentByRazorpayPaymentId("pay_fake_id");
+
+    expect(fromMock).toHaveBeenCalledWith("payments");
+    expect(builder.eq).toHaveBeenCalledWith(
+      "razorpay_payment_id",
+      "pay_fake_id",
+    );
+    expect(result).toEqual(paymentRow);
+  });
+
+  it("returns null when no payment matches", async () => {
+    const builder = makeQueryBuilder({ data: null, error: null });
+    fromMock.mockReturnValue(builder);
+
+    const { getPaymentByRazorpayPaymentId } =
+      await import("@/lib/demo-merchant/repository");
+    expect(await getPaymentByRazorpayPaymentId("pay_none")).toBeNull();
+  });
+});
+
+describe("listLatestPaymentsForAttemptIds", () => {
+  it("returns an empty map without querying when attemptIds is empty", async () => {
+    const { listLatestPaymentsForAttemptIds } =
+      await import("@/lib/demo-merchant/repository");
+    const result = await listLatestPaymentsForAttemptIds([]);
+    expect(result.size).toBe(0);
+    expect(fromMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps only the newest row per payment_attempt_id (rows arrive created_at-descending)", async () => {
+    const rowA2 = { id: "pa2", payment_attempt_id: "a", created_at: "2" };
+    const rowA1 = { id: "pa1", payment_attempt_id: "a", created_at: "1" };
+    const rowB1 = { id: "pb1", payment_attempt_id: "b", created_at: "1" };
+    const builder = makeQueryBuilder({
+      data: [rowA2, rowA1, rowB1],
+      error: null,
+    });
+    fromMock.mockReturnValue(builder);
+
+    const { listLatestPaymentsForAttemptIds } =
+      await import("@/lib/demo-merchant/repository");
+    const result = await listLatestPaymentsForAttemptIds(["a", "b", "c"]);
+
+    expect(fromMock).toHaveBeenCalledWith("payments");
+    expect(builder.order).toHaveBeenCalledWith("created_at", {
+      ascending: false,
+    });
+    expect(result.get("a")).toEqual(rowA2);
+    expect(result.get("b")).toEqual(rowB1);
+    expect(result.get("c")).toBeUndefined();
+  });
+});
+
+describe("insertVerifiedPayment", () => {
+  it("inserts using exactly the trusted fields, with checkout_signature_verified true and a non-null checkout_verified_at", async () => {
+    const persistedRow = {
+      id: "payment-1",
+      payment_attempt_id: "attempt-1",
+      razorpay_payment_id: "pay_fake_id",
+      razorpay_payment_status: null,
+      amount_subunits: 50000,
+      currency: "INR",
+      checkout_signature_verified: true,
+      checkout_verified_at: "2026-01-01T00:00:00.000Z",
+      captured_at: null,
+      failed_at: null,
+    };
+    const builder = makeQueryBuilder({ data: persistedRow, error: null });
+    fromMock.mockReturnValue(builder);
+
+    const { insertVerifiedPayment } =
+      await import("@/lib/demo-merchant/repository");
+    const result = await insertVerifiedPayment({
+      paymentAttemptId: "attempt-1",
+      razorpayPaymentId: "pay_fake_id",
+      amountSubunits: 50000,
+      currency: "INR",
+    });
+
+    expect(fromMock).toHaveBeenCalledWith("payments");
+    const insertPayload = builder.insert.mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(insertPayload).toMatchObject({
+      payment_attempt_id: "attempt-1",
+      razorpay_payment_id: "pay_fake_id",
+      amount_subunits: 50000,
+      currency: "INR",
+      checkout_signature_verified: true,
+    });
+    expect(insertPayload.checkout_verified_at).toEqual(expect.any(String));
+    // Must never set razorpay_payment_status/captured_at/failed_at at
+    // insert time — a verified signature does not establish captured-state
+    // truth (docs/MONEY_INVARIANTS.md Section 5).
+    expect(Object.keys(insertPayload).sort()).toEqual([
+      "amount_subunits",
+      "checkout_signature_verified",
+      "checkout_verified_at",
+      "currency",
+      "payment_attempt_id",
+      "razorpay_payment_id",
+    ]);
+    expect(result).toEqual(persistedRow);
+  });
+
+  it("returns null (not a throw) on a unique-constraint violation (Postgres code 23505) — concurrent-insert race", async () => {
+    const builder = makeQueryBuilder({
+      data: null,
+      error: { code: "23505", message: "duplicate key value" },
+    });
+    fromMock.mockReturnValue(builder);
+
+    const { insertVerifiedPayment } =
+      await import("@/lib/demo-merchant/repository");
+    const result = await insertVerifiedPayment({
+      paymentAttemptId: "attempt-1",
+      razorpayPaymentId: "pay_fake_id",
+      amountSubunits: 50000,
+      currency: "INR",
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("throws DemoMerchantRepositoryError (never leaks the raw Supabase error) on any other insert failure", async () => {
+    const builder = makeQueryBuilder({
+      data: null,
+      error: { code: "XX000", message: "connection string leaked here" },
+    });
+    fromMock.mockReturnValue(builder);
+
+    const { insertVerifiedPayment, DemoMerchantRepositoryError } =
+      await import("@/lib/demo-merchant/repository");
+    await expect(
+      insertVerifiedPayment({
+        paymentAttemptId: "attempt-1",
+        razorpayPaymentId: "pay_fake_id",
+        amountSubunits: 50000,
+        currency: "INR",
+      }),
+    ).rejects.toThrow(DemoMerchantRepositoryError);
+  });
+});
+
 describe("lib/demo-merchant/repository.ts — structural server-only boundary", () => {
   const source = fs.readFileSync(
     path.resolve(

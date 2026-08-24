@@ -1,21 +1,24 @@
 /**
- * Phase 1C-A/2B — minimal Supabase `Database` type.
+ * Phase 1C-A/2B/2C — minimal Supabase `Database` type.
  *
- * Scoped EXACTLY to the three tables the approved Phase 1 migration creates
- * (`orders`, `payment_attempts`, `fulfilments` — see docs/DATABASE.md
- * Sections 9/10/12 and supabase/migrations/20260823000000_phase1_foundation_schema.sql),
- * plus the Phase 2B additive `payment_attempts.razorpay_order_id` /
+ * Scoped EXACTLY to the tables that exist after the approved Phase 1
+ * migration (`orders`, `payment_attempts`, `fulfilments` — see
+ * docs/DATABASE.md Sections 9/10/12 and
+ * supabase/migrations/20260823000000_phase1_foundation_schema.sql), the
+ * Phase 2B additive `payment_attempts.razorpay_order_id` /
  * `razorpay_order_status` columns
- * (supabase/migrations/20260824000000_phase2b_payment_attempts_razorpay_correlation.sql).
+ * (supabase/migrations/20260824000000_phase2b_payment_attempts_razorpay_correlation.sql),
+ * and the Phase 2C additive `payments` table
+ * (supabase/migrations/20260825000000_phase2c_payments.sql).
  *
- * Do NOT add Phase 2+ tables here (`payments`, `webhook_events`,
+ * Do NOT add Phase 2D+ tables here (`webhook_events`,
  * `event_processing_attempts`, `chaos_runs`, `invariant_results`,
  * `findings`, `regression_runs`) — those are created and typed by the
  * phases that own them.
  *
  * `fulfilments` intentionally has no `payment_id` /
  * `trigger_processing_attempt_id` fields here — those columns do not exist
- * until Phase 2 additive migrations (docs/DATABASE.md "Column Phasing
+ * until a later additive migration (docs/DATABASE.md "Column Phasing
  * Note" on the `fulfilments` table).
  *
  * This type only describes shape for `createClient<Database>()`. It is not
@@ -114,6 +117,80 @@ export interface Database {
             columns: ["order_id"];
             isOneToOne: false;
             referencedRelation: "orders";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      payments: {
+        Row: {
+          id: string;
+          payment_attempt_id: string;
+          razorpay_payment_id: string;
+          razorpay_payment_status: string | null;
+          amount_subunits: number;
+          currency: string;
+          checkout_signature_verified: boolean;
+          checkout_verified_at: string | null;
+          first_observed_at: string;
+          last_observed_at: string;
+          captured_at: string | null;
+          failed_at: string | null;
+          error_code: string | null;
+          error_description_redacted: string | null;
+          error_source: string | null;
+          error_step: string | null;
+          error_reason: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          payment_attempt_id: string;
+          razorpay_payment_id: string;
+          razorpay_payment_status?: string | null;
+          amount_subunits: number;
+          currency?: string;
+          checkout_signature_verified?: boolean;
+          checkout_verified_at?: string | null;
+          first_observed_at?: string;
+          last_observed_at?: string;
+          captured_at?: string | null;
+          failed_at?: string | null;
+          error_code?: string | null;
+          error_description_redacted?: string | null;
+          error_source?: string | null;
+          error_step?: string | null;
+          error_reason?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          payment_attempt_id?: string;
+          razorpay_payment_id?: string;
+          razorpay_payment_status?: string | null;
+          amount_subunits?: number;
+          currency?: string;
+          checkout_signature_verified?: boolean;
+          checkout_verified_at?: string | null;
+          first_observed_at?: string;
+          last_observed_at?: string;
+          captured_at?: string | null;
+          failed_at?: string | null;
+          error_code?: string | null;
+          error_description_redacted?: string | null;
+          error_source?: string | null;
+          error_step?: string | null;
+          error_reason?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "payments_payment_attempt_id_fkey";
+            columns: ["payment_attempt_id"];
+            isOneToOne: false;
+            referencedRelation: "payment_attempts";
             referencedColumns: ["id"];
           },
         ];

@@ -102,32 +102,66 @@ test("Demo Merchant: fixed product, create internal order, persisted UNPAID/OPEN
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
     );
 
+    // Phase 2C correction: scope every remaining per-order assertion to
+    // THIS test's own order card, identified by the stable
+    // data-order-id attribute — never by list position (`.first()`) and
+    // never by a page-wide search. "Recent Internal Orders" is expected to
+    // legitimately contain historical orders — including a real manual-
+    // verification order with an eligible ORDER_CREATED payment attempt,
+    // which correctly DOES render its own "Pay with Razorpay" button. A
+    // page-wide assertion that no such button exists anywhere would be
+    // wrong; only THIS test's freshly-created, attempt-less order must not
+    // show one.
+    const orderCard = page.locator(
+      `[data-testid="demo-merchant-order"][data-order-id="${createdOrderId}"]`,
+    );
+    await expect(orderCard).toBeVisible();
+
     // The PERSISTED order's own `currency` field is rendered (not merely
     // re-derived from the fixed product card's separate "INR" text above).
-    await expect(page.getByTestId("order-currency").first()).toHaveText("INR");
+    await expect(orderCard.getByTestId("order-currency")).toHaveText("INR");
 
-    await expect(page.getByTestId("order-payment-status").first()).toHaveText(
+    await expect(orderCard.getByTestId("order-payment-status")).toHaveText(
       "UNPAID",
     );
-    await expect(page.getByTestId("order-business-status").first()).toHaveText(
+    await expect(orderCard.getByTestId("order-business-status")).toHaveText(
       "OPEN",
     );
-    await expect(page.getByTestId("order-fulfilment-count").first()).toHaveText(
+    await expect(orderCard.getByTestId("order-fulfilment-count")).toHaveText(
       /0 effect/,
     );
-    await expect(page.getByTestId("order-conceptual-state").first()).toHaveText(
+    await expect(orderCard.getByTestId("order-conceptual-state")).toHaveText(
       "Created",
     );
 
+    // This order was created via "Create Internal Test Order" only — no
+    // Razorpay Order attempt exists for it yet, so no "Pay with Razorpay"
+    // button may appear WITHIN THIS ORDER'S OWN CARD. A legitimate
+    // historical order elsewhere on the page may correctly show one — that
+    // is not asserted against here. Deliberately network-free: this test
+    // never calls the real Razorpay API (that requires real Test Mode
+    // credentials and is manual-verification-only per docs/TESTING.md
+    // "PLAYWRIGHT RULE").
+    await expect(orderCard.getByTestId("pay-with-razorpay-button")).toHaveCount(
+      0,
+    );
+    // No Checkout signature (or any secret-shaped value) is ever rendered
+    // anywhere on the page, historical orders included.
+    await expect(page.locator("body")).not.toContainText("razorpay_signature");
+
     // Refresh: durable persisted order is still visible (server-side read
-    // on every render, not React state/localStorage).
+    // on every render, not React state/localStorage). Re-locate by the
+    // same stable data-order-id after reload — never by list position.
     await page.reload();
-    await expect(page.getByTestId("order-id").first()).toHaveText(
+    const orderCardAfterReload = page.locator(
+      `[data-testid="demo-merchant-order"][data-order-id="${createdOrderId}"]`,
+    );
+    await expect(orderCardAfterReload.getByTestId("order-id")).toHaveText(
       createdOrderId,
     );
-    await expect(page.getByTestId("order-payment-status").first()).toHaveText(
-      "UNPAID",
-    );
+    await expect(
+      orderCardAfterReload.getByTestId("order-payment-status"),
+    ).toHaveText("UNPAID");
   } finally {
     // Cleanup deletes ONLY the exact captured order id. If no order was ever
     // created (e.g. the test failed before creation), createdOrderId stays

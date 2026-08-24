@@ -6,10 +6,10 @@
 - **Current branch:** `phase-2-razorpay`
 - **Phase 2 starting HEAD:** `47cb275cd2d200b879f80a331ca4848ee2b709b3`
 - **Overall Phase 2 status: IN PROGRESS — NOT APPROVED**
-- **Completed checkpoints documented in this file: Phase 2A — Razorpay Test Configuration; Phase 2B — Razorpay Order Creation**
-- **Phase 2C through Phase 2G: NOT IMPLEMENTED**
+- **Completed checkpoints documented in this file: Phase 2A — Razorpay Test Configuration; Phase 2B — Razorpay Order Creation; Phase 2C — Checkout Integration (candidate — see Section 65)**
+- **Phase 2D through Phase 2G: NOT IMPLEMENTED**
 
-Phase 2 as a whole is not implemented, not tested, not manually verified, not documented, and not approved. Only the Phase 2A and Phase 2B slices described below have any of those properties, and only for their own narrow scope.
+Phase 2 as a whole is not implemented, not tested, not manually verified, not documented, and not approved. Only the Phase 2A, Phase 2B and Phase 2C slices described below have any of those properties, and only for their own narrow scope. **Update (Section 101-111): the developer has since completed a real Razorpay Test Mode Standard Checkout payment and independently-confirmed Supabase correlation evidence.** Phase 2C is now IMPLEMENTED, TESTED, MANUALLY VERIFIED, and DOCUMENTED; it awaits architect review before APPROVED.
 
 **Phase 2B correction applied, then re-verified against the real provider:** the first real Razorpay Test Mode manual verification (performed by the developer) found a confirmed implementation defect (over-length receipt) — see "PHASE 2B CORRECTION" below. The defect was fixed and unit-tested against a mocked provider. Two confirmed test-harness defects (not product defects) were then found and corrected during test-gate verification — see "Phase 2B Test-Gate Correction #2" (Section 48). **The developer has since completed a successful real Razorpay Test Mode re-test — see Section 59.** Phase 2B is now IMPLEMENTED, TESTED, MANUALLY VERIFIED, and DOCUMENTED; it awaits architect review before APPROVED.
 
@@ -17,17 +17,19 @@ Phase 2 as a whole is not implemented, not tested, not manually verified, not do
 
 ## 1. Phase identity and current status
 
-| Sub-phase                                        | Status                                                                                                  |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| Phase 2A — Razorpay Test Configuration           | IMPLEMENTED, TESTED, MANUALLY VERIFIED (see Section 19)                                                 |
-| Phase 2B — Razorpay Order Creation               | IMPLEMENTED, TESTED, MANUALLY VERIFIED, DOCUMENTED — APPROVED PENDING ARCHITECT REVIEW (see Section 62) |
-| Phase 2C — Checkout Integration                  | NOT IMPLEMENTED                                                                                         |
-| Phase 2D — Webhook Ingestion                     | NOT IMPLEMENTED                                                                                         |
-| Phase 2E — Event Deduplication and Normalization | NOT IMPLEMENTED                                                                                         |
-| Phase 2F — Merchant Processing and Idempotency   | NOT IMPLEMENTED                                                                                         |
-| Phase 2G — Real Test Mode Verification           | NOT IMPLEMENTED                                                                                         |
+| Sub-phase                                        | Status                                                                                                   |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| Phase 2A — Razorpay Test Configuration           | IMPLEMENTED, TESTED, MANUALLY VERIFIED (see Section 19)                                                  |
+| Phase 2B — Razorpay Order Creation               | IMPLEMENTED, TESTED, MANUALLY VERIFIED, DOCUMENTED — APPROVED PENDING ARCHITECT REVIEW (see Section 62)  |
+| Phase 2C — Checkout Integration                  | IMPLEMENTED, TESTED, MANUALLY VERIFIED, DOCUMENTED — APPROVED PENDING ARCHITECT REVIEW (see Section 111) |
+| Phase 2D — Webhook Ingestion                     | NOT IMPLEMENTED                                                                                          |
+| Phase 2E — Event Deduplication and Normalization | NOT IMPLEMENTED                                                                                          |
+| Phase 2F — Merchant Processing and Idempotency   | NOT IMPLEMENTED                                                                                          |
+| Phase 2G — Real Test Mode Verification           | NOT IMPLEMENTED                                                                                          |
 
-**Update (Section 59):** one real Razorpay Test Mode Order (`order_TTYzkTb1oMiRwP`) has since been created by PayChaos and confirmed in the Razorpay Test Mode Dashboard — this superseded the sentence below, which described the state as of the original Phase 2B implementation round. No real Razorpay **payment** has been made (the Dashboard confirms 0 attempts, no payments). No webhook has been received. Phase 2C–2G remain not implemented.
+**Update (Section 59):** one real Razorpay Test Mode Order (`order_TTYzkTb1oMiRwP`) has since been created by PayChaos and confirmed in the Razorpay Test Mode Dashboard — this superseded the sentence below, which described the state as of the original Phase 2B implementation round.
+
+**Update (Section 101-111):** one real Razorpay Test Mode **payment** (`pay_TTcbVd43PMN79M`) has since been made against that Order via real Standard Checkout, and confirmed Captured in the Razorpay Dashboard — this supersedes the "No real Razorpay payment has been made" statement below, which described the state as of the original Phase 2B round. **PayChaos's own database deliberately still shows this payment as `UNPAID`/`razorpay_payment_status = NULL`/`captured_at = NULL`** — this is intentional Phase 2C scope (Section 106), not a defect: Phase 2C only authenticates the Checkout handler response; it does not ingest authoritative captured-state evidence. No webhook has been received. Phase 2D–2G remain not implemented.
 
 <details><summary>Original Phase 2B-round statement (preserved for history)</summary>
 
@@ -854,3 +856,445 @@ Phase 2A: APPROVED PENDING ARCHITECT REVIEW (Section 19, unchanged). Phase 2B: a
 ## 64. Status
 
 Phase 2B is now IMPLEMENTED, TESTED, MANUALLY VERIFIED, and DOCUMENTED, with real Razorpay Test Mode provider evidence independently cross-checked against Supabase. It is **not self-approved** — APPROVED remains PENDING ARCHITECT REVIEW, per this project's standing rule that only architect/project review grants final approval. Phase 2 overall remains IN PROGRESS / NOT APPROVED; Phase 2C–2G remain fully deferred and unimplemented.
+
+---
+
+# PHASE 2C — RAZORPAY STANDARD CHECKOUT INTEGRATION (candidate)
+
+Started from the exact approved Phase 2B checkpoint, HEAD `d42d9a3694b127383d91452b7d913c8861b3cf28` ("Phase 2B: create Razorpay Test Mode orders"), confirmed clean before any edit. HEAD remains exactly that commit — nothing in this round was committed.
+
+## 65. Objective
+
+Implement, for one existing `ORDER_CREATED`/`CHECKOUT_IN_PROGRESS` payment attempt: a Checkout-safe server projection; real Razorpay Standard Checkout launch; server-side verification of the Checkout success response against the trusted database Razorpay Order ID; and persistence of canonical, signature-verified payment evidence — stopping there. No CAPTURED transition, no merchant PAID transition, no fulfilment, no webhook handling (Phase 2D+).
+
+## 66. Official Razorpay documentation verified
+
+Before implementation, the current official Razorpay Standard Checkout contract was independently verified (2026-08-24) against `razorpay/razorpay-node`'s `paymentVerfication.md` and Razorpay's own "Verify payment signature" guidance. Confirmed, with no conflict against `docs/RAZORPAY_GUIDE.md`:
+
+- checkout.js URL: `https://checkout.razorpay.com/v1/checkout.js`;
+- handler success response fields: `razorpay_payment_id`, `razorpay_order_id`, `razorpay_signature`;
+- verification formula: `generated_signature = HMAC-SHA256(order_id + "|" + razorpay_payment_id, key_secret)`;
+- explicit instruction to use the **server's own** `order_id`, never the one Checkout returns to the browser.
+
+No architectural conflict was found; implementation proceeded per `docs/RAZORPAY_GUIDE.md` Section 26 / `docs/ARCHITECTURE.md` ADR-A06 as already written.
+
+## 67. Checkout-safe server projection
+
+`prepareCheckoutForPaymentAttempt(paymentAttemptId)` (`lib/demo-merchant/service.ts`) accepts ONLY the internal payment attempt ID. It independently loads the trusted attempt and its order, re-validates Test Mode configuration (`getRazorpayEnv()`, fails closed), requires `razorpay_order_id` to already exist and the attempt status to be `ORDER_CREATED` or `CHECKOUT_IN_PROGRESS`, and returns exactly: Key ID, trusted Razorpay Order ID, trusted amount/currency, the attempt/order IDs, and safe display text. Never the Key Secret, webhook secret, or service-role key — structurally impossible, since none of those values are ever read into this function's return path.
+
+## 68. Checkout launch design
+
+`app/demo-merchant/pay-with-razorpay-button.tsx` (Client Component) loads the official hosted `checkout.js` (never self-hosted) exactly once per page, then constructs `new window.Razorpay({...})` using only the server's Checkout-safe projection. No card/payment entry form exists anywhere in PayChaos — Razorpay Checkout itself owns sensitive payment entry. The `handler` callback forwards Checkout's response verbatim to the server for verification; it never itself treats the response as trusted.
+
+## 69. Checkout success-response contract
+
+Client → `verifyCheckoutAction` → `verifyCheckoutAndPersistPayment`, carrying `paymentAttemptId`, `razorpayPaymentId`, `razorpayOrderId`, `razorpaySignature` — all four UNTRUSTED until independently verified server-side.
+
+## 70. Signature verification implementation
+
+`lib/razorpay/checkout-verification.ts` (new, server-only): `verifyCheckoutSignature()` computes `HMAC-SHA256(trustedRazorpayOrderId + "|" + razorpayPaymentId, RAZORPAY_KEY_SECRET)` using Node's built-in `crypto` (no new dependency), compares with `crypto.timingSafeEqual`, validates input shape/length before any cryptographic work, and never throws for malformed input — it returns `false`. Never logs the secret, the generated digest, or the received signature.
+
+## 71. Trusted order-ID enforcement
+
+`verifyCheckoutAndPersistPayment` (`lib/demo-merchant/service.ts`) loads the trusted attempt, then requires `input.razorpayOrderId === attempt.razorpay_order_id` **before** calling the signature verifier at all — a mismatch throws `RazorpayCheckoutOrderMismatchError` immediately, and `verifyCheckoutSignature` is never invoked with the trusted order ID's identity therefore never validated against anything the browser could have substituted. Confirmed by a dedicated unit test asserting `verifyCheckoutSignatureMock` is not called on mismatch.
+
+## 72. Invalid-signature behavior
+
+An invalid signature throws `RazorpayCheckoutSignatureInvalidError` before any database write. Confirmed by unit tests: zero calls to `insertVerifiedPayment`/`getPaymentByRazorpayPaymentId` on an invalid signature, and — structurally — no order/business/fulfilment mutation function is even exposed by the mocked repository module in that test file, so none could have been called.
+
+## 73. Payments persistence / idempotency design
+
+New `payments` table (Section 76). `insertVerifiedPayment` sets `checkout_signature_verified = true` and a non-null `checkout_verified_at`, and deliberately excludes `razorpay_payment_status`/`captured_at`/`failed_at` (remain `NULL` — signature verification authenticates the response, it does not establish captured-state truth, per `docs/MONEY_INVARIANTS.md` Section 5). The Checkout signature itself is never a parameter to persistence and is never stored.
+
+Idempotency: before inserting, the service checks for an existing row by `razorpay_payment_id`. Same ID + same attempt → returns the existing row (no duplicate insert). Same ID + a **different** attempt → `RazorpayPaymentIdentityConflictError` (never silently reassigned). A concurrent-insert race (`insertVerifiedPayment` receiving Postgres `23505`) returns `null` from the repository rather than throwing; the service re-reads the now-existing row and returns it — the database's `UNIQUE(razorpay_payment_id)` constraint is the final race-safety boundary, exactly as required.
+
+## 74. Payment-attempt status behavior
+
+`ORDER_CREATED → CHECKOUT_IN_PROGRESS` on first Checkout preparation (`markPaymentAttemptCheckoutInProgress`). Re-launching Checkout for an attempt already `CHECKOUT_IN_PROGRESS` is a safe no-op reuse — no re-transition, no new attempt created. Verification success never transitions the attempt to `CAPTURED` — no such repository call exists anywhere in this round's code.
+
+## 75. Merchant authority boundary
+
+Neither `prepareCheckoutForPaymentAttempt` nor `verifyCheckoutAndPersistPayment` calls any order-mutation or fulfilment-insert function — structurally proven in the unit tests (the mocked repository module exposes no such function, so none could have been called regardless of code path). `orders.payment_status` remains `UNPAID`, `orders.business_status` remains `OPEN`, and fulfilment count remains `0` after even a fully successful Checkout verification. The UI (`pay-with-razorpay-button.tsx`, `page.tsx`) displays "Checkout response verified — awaiting webhook confirmation" and never "Paid"/"Complete"/"Captured"/"Fulfilled".
+
+## 76. Files added
+
+- `supabase/migrations/20260825000000_phase2c_payments.sql` — additive migration creating `public.payments` (Section 77).
+- `lib/razorpay/checkout-verification.ts` — server-only HMAC signature verification.
+- `app/demo-merchant/pay-with-razorpay-button.tsx` — Client Component launching real Checkout; no card form; no self-hosted checkout.js.
+- `tests/unit/razorpay/checkout-verification.test.ts` — 11 focused tests.
+- `tests/integration/supabase/047-payments-checkout.integration.test.ts` — real-DB tests for the `payments` table/constraints/repository functions (Section 79).
+
+## 77. Files modified
+
+- `lib/supabase/types.ts` — added the `payments` table Row/Insert/Update/Relationships type.
+- `lib/demo-merchant/repository.ts` — added `getPaymentAttemptById`, `markPaymentAttemptCheckoutInProgress`, `getPaymentByRazorpayPaymentId`, `listLatestPaymentsForAttemptIds`, `insertVerifiedPayment`.
+- `lib/demo-merchant/service.ts` — added `prepareCheckoutForPaymentAttempt`, `verifyCheckoutAndPersistPayment`, and the five new Phase 2C error classes; `listDemoMerchantOrders` now also resolves each order's latest verified payment.
+- `lib/demo-merchant/view-model.ts` — added `PaymentViewModel`/`toPaymentViewModel`, `CheckoutConfigViewModel`; `DemoMerchantOrderViewModel` gained a `latestPayment` field.
+- `app/demo-merchant/actions.ts` — added `prepareCheckoutAction(paymentAttemptId)`, `verifyCheckoutAction(input)`.
+- `app/demo-merchant/page.tsx` — renders `PayWithRazorpayButton` only when eligible (`razorpay_order_id` present, status `ORDER_CREATED`/`CHECKOUT_IN_PROGRESS`), and renders persisted verified-payment evidence when present. Never displays the signature.
+- `tests/unit/demo-merchant/{repository,service,view-model,actions}.test.ts` — extended with the corresponding new-function/new-flow coverage.
+- `tests/e2e/demo-merchant.spec.ts` — added a network-free assertion that no "Pay with Razorpay" button/signature text renders for an order with no payment attempt yet.
+- `tests/unit/supabase/migration.test.ts`, `tests/unit/supabase/server.test.ts` — updated two Phase-1-era structural guard tests that correctly forbade a `payments` table/type key _before_ this phase; now correctly require it while still forbidding every genuine Phase 2D+ table (`webhook_events`, `chaos_runs`, etc., unchanged). One assertion (`fulfilments` has no `payment_id`-shaped field) was re-scoped to only the `fulfilments` block, since the new `payments.payment_attempt_id` column legitimately contains the substring "payment_id" and was producing a false positive against the old whole-file check.
+
+## 78. Migration added
+
+`supabase/migrations/20260825000000_phase2c_payments.sql` — purely additive: creates `public.payments` with the exact `docs/DATABASE.md` Section 11 field set, `UNIQUE(razorpay_payment_id)`, a `CHECK` enforcing `checkout_signature_verified = false OR checkout_verified_at IS NOT NULL`, `FK payment_attempt_id → payment_attempts(id) ON DELETE RESTRICT`, RLS enabled with zero policies, `anon`/`authenticated` explicitly revoked, `service_role` explicitly granted CRUD — the identical model already used by the Phase 1 and Phase 2B migrations. Does not edit, rewrite, or squash either prior migration. Does not create `webhook_events`/`event_processing_attempts`. Does not add `fulfilments.payment_id`.
+
+**NOT APPLIED YET** — prepared for later developer-driven application against the real Supabase project, per the established Phase 1C-A → Phase 2B protocol.
+
+## 79. Database changes
+
+One new table (`payments`, 19 columns), one new FK, one new unique index, one new CHECK constraint, three new indexes. No existing table's schema was altered.
+
+## 80. RLS / security changes
+
+`payments` RLS enabled with zero policies (deny-all default); `anon`/`authenticated` explicitly revoked; `service_role` explicitly granted CRUD. Identical model to every other P0 table — no new security pattern introduced. No credential column exists on `payments` (confirmed by an exhaustive key-set assertion in both the unit and the real-DB integration test).
+
+## 81. Dependencies added/changed
+
+None. Signature verification uses Node's built-in `crypto`; Checkout uses Razorpay's own hosted `checkout.js` script loaded at runtime, not an npm package. `package.json`/lockfile unchanged.
+
+## 82. Tests added/changed
+
+- `tests/unit/razorpay/checkout-verification.test.ts` (11 tests) — valid/invalid signature, trusted-vs-attacker order id, wrong payment id, malformed/missing input, secret never leaked via return value, fails closed on a fake Live key.
+- `tests/unit/demo-merchant/repository.test.ts` (+11 tests) — `getPaymentAttemptById`, `markPaymentAttemptCheckoutInProgress`, `getPaymentByRazorpayPaymentId`, `listLatestPaymentsForAttemptIds`, `insertVerifiedPayment` (exact trusted-field insert payload, `23505` → `null`, other errors → `DemoMerchantRepositoryError`).
+- `tests/unit/demo-merchant/service.test.ts` (+20 tests) — full `prepareCheckoutForPaymentAttempt` and `verifyCheckoutAndPersistPayment` coverage per this task's required test list A-F: Checkout-safe projection exactness, launch/status transitions, trusted-order-id enforcement (with proof the signature verifier is never called on mismatch), invalid-signature zero-mutation, exact trusted-field persistence, idempotent same-attempt reuse, cross-attempt conflict rejection, concurrent-race resolution.
+- `tests/unit/demo-merchant/{view-model,actions}.test.ts` (+7 tests) — `toPaymentViewModel` mapping (never a signature field), `prepareCheckoutAction`/`verifyCheckoutAction` safe-projection/safe-error/logging behavior.
+- `tests/integration/supabase/047-payments-checkout.integration.test.ts` (11 tests) — real-DB `payments` insert/FK/uniqueness/CHECK-constraint/anon-RLS-denial tests (Section 79's automated result below explains their current failure mode).
+- `tests/e2e/demo-merchant.spec.ts` (+1 assertion) — no Checkout button/signature text renders for an attempt-less order; deliberately network-free (docs/TESTING.md "PLAYWRIGHT RULE" — real Checkout stays manual verification).
+- `tests/unit/supabase/migration.test.ts`, `tests/unit/supabase/server.test.ts` — 2 stale Phase-1-era structural guards corrected (Section 77).
+
+## 83. Commands actually run
+
+`npm run typecheck`, `npm run lint`, `npx prettier --check/--write` (per changed file), `npm run test`, `npm run test:integration:supabase`, `npm run build`, `npm run e2e`.
+
+## 84. Automated results
+
+| Command                             | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run typecheck`                 | exit 0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `npm run lint`                      | exit 0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Prettier                            | all changed files clean                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `npm run test` (full unit suite)    | **21/21 files, 343/343 tests, exit 0** (one clean run, no worker-timeout this round)                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `npm run test:integration:supabase` | **6/8 files, 45/52 tests pass, exit 1.** The 2 failing files/7 failing tests are the new `047-payments-checkout...` file (all its `payments`-table-dependent cases) and the pre-existing, already-approved `045-demo-merchant-service...` file — both fail with the identical real Postgres error `PGRST205: Could not find the table 'public.payments' in the schema cache`, because the Section 78 migration is genuinely **not yet applied** to the real project. This is not a code defect — see Section 85 for the severity assessment. |
+| `npm run build`                     | exit 0 (build never touches the real database)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `npm run e2e`                       | **1/2 tests pass, exit 1.** `app-shell.spec.ts` passes. `demo-merchant.spec.ts` fails: the real, already-existing manual-verification order in this project has a real payment attempt, so `listDemoMerchantOrders` (now unconditionally resolving each attempt's latest payment) throws the identical `PGRST205` error the moment the page renders — confirmed directly from the dev-server error log.                                                                                                                                      |
+
+## 85. Elevated-severity known issue — apply the migration before further local use
+
+Unlike the Phase 2A→2B migration gap (which only affected new, opt-in functionality), this gap affects the **already-approved, currently-working Demo Merchant page itself**: `listDemoMerchantOrders` now unconditionally resolves each listed order's latest payment, and this project's own real manual-verification order already has a payment attempt. Until `20260825000000_phase2c_payments.sql` is applied, **the live `/demo-merchant` page will throw a server error on every render**, not just new Phase 2C tests.
+
+This was deliberately NOT worked around with error-swallowing/try-catch masking: doing so would contradict this codebase's established fail-closed convention (the sibling `Promise.all` calls for fulfilment counts and payment attempts have never swallowed errors either), and could hide a genuine future problem (e.g. an RLS misconfiguration) behind a silently-degraded UI. The correct fix is the one already in place: apply the migration.
+
+**Recommended immediate developer action, before any other local verification: apply `supabase/migrations/20260825000000_phase2c_payments.sql` to the real Supabase project.** Once applied, both `045-...` and the full `047-...` suite are expected to pass, and `npm run e2e` is expected to return to 2/2 — none of their assertions were weakened or changed to accommodate this gap; they were left exactly as correct code + a real, temporarily-missing table.
+
+## 86. Security review
+
+- `.env.local` not modified, not printed.
+- No real credential in the diff — only the same established fake placeholders (`rzp_test_fake_key_id_not_real`, etc.) already used throughout Phase 2A/2B tests.
+- Client bundle scan (`.next/static/**/*.js`, fresh build) for `RAZORPAY_KEY_SECRET` / `SUPABASE_SERVICE_ROLE_KEY` / `supabaseServiceRoleKey` / `razorpayKeySecret`: **no matches**.
+- `pay-with-razorpay-button.tsx` passes only the Key ID (never the Key Secret) to `window.Razorpay(...)`.
+- The Checkout signature is never logged and never persisted (confirmed by both unit and real-DB integration assertions on the exact insert payload / exact returned-object key set).
+- No card/CVV/PIN/OTP data is ever received or stored — Razorpay Checkout itself owns payment entry; this codebase has no card-entry form of any kind.
+- No Live Mode support introduced; `getRazorpayEnv()` (already fail-closed) is re-validated inside `prepareCheckoutForPaymentAttempt` before any Checkout-safe data is returned.
+- `payments` RLS/grants match the established deny-by-default + explicit `service_role`-only model.
+- No new environment variable was introduced; `RAZORPAY_WEBHOOK_SECRET` is not required or referenced anywhere in this round's code.
+
+## 87. Scope audit — no Phase 2D+ implementation
+
+No `/api/webhooks/razorpay` route, no webhook secret handling, no raw-body signature verification, no `webhook_events`/`event_processing_attempts` table, no event deduplication, no merchant PAID transition, no `CAPTURED` transition, no fulfilment, no chaos/invariant/diagnosis/scoring code. `payment_attempts.status` never becomes anything beyond `CHECKOUT_IN_PROGRESS` in this round. Confirmed both by direct code review and by the structural "no such repository call exists" unit-test assertions.
+
+## 88. Phase 2C acceptance criteria (2C-AC-01 through 2C-AC-38)
+
+| #        | Criterion                                                                        | Result                                                      |
+| -------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| 2C-AC-01 | Started from exact approved Phase 2B checkpoint                                  | PASS — HEAD verified `d42d9a3694b1...` before and after     |
+| 2C-AC-02 | Razorpay remains Test Mode-only                                                  | PASS — `getRazorpayEnv()` re-validated; no Live path exists |
+| 2C-AC-03 | Checkout-safe projection contains only required safe values                      | PASS — Section 67, exhaustive key-set unit test             |
+| 2C-AC-04 | Key ID may reach Checkout; Key Secret never reaches browser                      | PASS — Section 86                                           |
+| 2C-AC-05 | Checkout uses the persisted server-created Razorpay Order ID                     | PASS — Section 67                                           |
+| 2C-AC-06 | Checkout uses trusted persisted amount and currency                              | PASS — Section 67                                           |
+| 2C-AC-07 | Standard Checkout integrated per current official Razorpay contract              | PASS — Section 66                                           |
+| 2C-AC-08 | Successful handler result forwarded to trusted server                            | PASS — Section 68/69                                        |
+| 2C-AC-09 | Server loads trusted payment attempt / Razorpay Order relationship               | PASS — Section 71                                           |
+| 2C-AC-10 | Browser-returned Razorpay order ID cannot override trusted DB order ID           | PASS — Section 71, dedicated unit test                      |
+| 2C-AC-11 | Signature uses HMAC-SHA256 with trusted DB order id + payment id + server secret | PASS — Section 70                                           |
+| 2C-AC-12 | Invalid signature fails closed                                                   | PASS — Section 72                                           |
+| 2C-AC-13 | Order-ID mismatch fails closed                                                   | PASS — Section 71                                           |
+| 2C-AC-14 | Invalid verification creates zero trusted payment evidence                       | PASS — Section 72                                           |
+| 2C-AC-15 | Canonical `payments` table exists per `docs/DATABASE.md`                         | PASS (schema) / PENDING (not yet applied — Section 85)      |
+| 2C-AC-16 | `razorpay_payment_id` has database uniqueness                                    | PASS — migration + real-DB test (once applied)              |
+| 2C-AC-17 | Verified Checkout evidence persists on the `payments` row                        | PASS — Section 73                                           |
+| 2C-AC-18 | Checkout signature itself not unnecessarily persisted                            | PASS — never a parameter to persistence                     |
+| 2C-AC-19 | Repeated same verified callback is idempotent                                    | PASS — Section 73                                           |
+| 2C-AC-20 | A payment ID cannot be silently reassigned to another attempt                    | PASS — Section 73                                           |
+| 2C-AC-21 | Payment attempt can enter `CHECKOUT_IN_PROGRESS`                                 | PASS — Section 74                                           |
+| 2C-AC-22 | Checkout success does not mark payment attempt `CAPTURED`                        | PASS — Section 74/75                                        |
+| 2C-AC-23 | Checkout success does not mark merchant order `PAID`                             | PASS — Section 75                                           |
+| 2C-AC-24 | Checkout success does not mark business `FULFILLED`                              | PASS — Section 75                                           |
+| 2C-AC-25 | Checkout success creates zero fulfilments                                        | PASS — Section 75                                           |
+| 2C-AC-26 | No card/CVV/PIN/OTP/payment credentials stored                                   | PASS — Section 86                                           |
+| 2C-AC-27 | RLS/server authority enforced for `payments`                                     | PASS (schema) / PENDING real-DB confirmation (Section 85)   |
+| 2C-AC-28 | No Phase 2D webhook implementation introduced                                    | PASS — Section 87                                           |
+| 2C-AC-29 | No Phase 2E–2G functionality introduced                                          | PASS — Section 87                                           |
+| 2C-AC-30 | Focused tests pass                                                               | PASS                                                        |
+| 2C-AC-31 | Full unit regression passes                                                      | PASS — 343/343                                              |
+| 2C-AC-32 | Full Supabase integration passes                                                 | **FAIL — pending migration application (Section 85)**       |
+| 2C-AC-33 | Playwright regression passes                                                     | **FAIL — pending migration application (Section 85)**       |
+| 2C-AC-34 | lint passes                                                                      | PASS                                                        |
+| 2C-AC-35 | typecheck passes                                                                 | PASS                                                        |
+| 2C-AC-36 | production build passes                                                          | PASS                                                        |
+| 2C-AC-37 | No secrets in Git diff/client bundle/logs                                        | PASS — Section 86                                           |
+| 2C-AC-38 | HEAD remains exactly `d42d9a3694b127383d91452b7d913c8861b3cf28`                  | PASS                                                        |
+
+## 89. Phase 2C lifecycle state
+
+```
+IMPLEMENTED          PASS
+TESTED               PASS
+MANUALLY VERIFIED    PENDING
+DOCUMENTED           CANDIDATE
+APPROVED             PENDING ARCHITECT REVIEW
+```
+
+Phase 2 overall remains:
+
+```
+IN PROGRESS
+NOT APPROVED
+```
+
+Phase 2C is **not** claimed as MANUALLY VERIFIED or APPROVED. Two acceptance criteria (2C-AC-32, 2C-AC-33) are currently FAIL, both attributable to the single, clearly-documented, not-yet-applied migration (Section 85) — not to any code defect. Real Razorpay Test Mode Checkout completion is manual-verification-only per `docs/TESTING.md`, and remains entirely undone in this round.
+
+## 90. Known issues / blockers
+
+1. **Elevated-severity: migration not yet applied** (Section 85) — blocks 2C-AC-32/33 and currently breaks the live Demo Merchant page whenever a listed order already has a payment attempt.
+2. No P1/P2 issues identified this round.
+
+## 91. Manual verification still required
+
+None of the following has been performed by Claude:
+
+1. Apply `supabase/migrations/20260825000000_phase2c_payments.sql` to the real Supabase project (developer action) — see Section 85 for why this is now higher-priority than the equivalent Phase 2B step.
+2. Re-run `npm run test:integration:supabase` and `npm run e2e` to confirm both return to fully green.
+3. With the migration applied, click "Pay with Razorpay" on the existing real `ORDER_CREATED`/`CHECKOUT_IN_PROGRESS` attempt, complete a real Razorpay Test Mode payment.
+4. Confirm the real `razorpay_payment_id`/`razorpay_signature` Checkout returns, and that server verification succeeds.
+5. Confirm a `payments` row appears in Supabase with `checkout_signature_verified = true` and a non-null `checkout_verified_at`.
+6. Confirm the merchant order is still `UNPAID`/`OPEN` and fulfilment is still 0 after this real payment.
+7. Confirm the UI shows "Checkout response verified — awaiting webhook confirmation", never "Paid"/"Complete".
+
+This will be performed by the developer, not by Claude.
+
+## 92. Deferred Phase 2D–2G work
+
+Unchanged from Section 35 — fully deferred: Phase 2D (webhook endpoint, raw-body/HMAC verification, `RAZORPAY_WEBHOOK_SECRET`), Phase 2E (event dedup/normalization), Phase 2F (merchant PAID/`CAPTURED`/fulfilment/business idempotency), Phase 2G (real payment + real webhook end-to-end approval).
+
+---
+
+# PHASE 2C — MIGRATION APPLIED + PLAYWRIGHT SCOPING CORRECTION
+
+## 93. Migration applied
+
+The developer manually applied `supabase/migrations/20260825000000_phase2c_payments.sql` to the real Supabase project. Reported result: "Success. No rows returned." This resolves the Section 85 elevated-severity gap.
+
+## 94. Supabase integration suite — now fully green
+
+`npm run test:integration:supabase` — independently re-run by Claude, not merely trusted from the developer's report: **8/8 files, 52/52 tests, exit 0.** This includes the previously-blocked `047-payments-checkout-...` (all `payments`-table cases) and `045-demo-merchant-service...` (Section 84's two failing files), both now passing exactly as predicted in Section 85, with zero test-code changes — the code was already correct; only the missing table was blocking it.
+
+## 95. Initial post-migration Playwright run — a genuine, deterministic test-scoping defect (preserved as history)
+
+First post-migration `npm run e2e` result: **1 passed, 1 failed.**
+
+Failing assertion:
+
+```
+expect(page.getByTestId("pay-with-razorpay-button")).toHaveCount(0)
+Expected: 0
+Received: 1
+```
+
+**Root cause (not an application defect):** the real historical merchant order from Phase 2B manual verification (`eabed2c4-5d48-4f20-8cc9-67248564648a`, Attempt #2, `status = ORDER_CREATED`, a real `razorpay_order_id`) now legitimately meets the Section 67/`page.tsx` eligibility rule for showing "Pay with Razorpay" — and correctly does. `tests/e2e/demo-merchant.spec.ts`'s Section 82 assertion, however, queried the entire page (`page.getByTestId(...)`) rather than scoping to the specific order the test itself had just created, incorrectly assuming zero eligible orders exist anywhere on the page. This is the same class of historical-data page-wide-assertion defect already corrected once before in the Phase 2B Test-Gate Correction (Section 48-52) — here it recurred against a different element (the new Phase 2C Pay button) because that button did not exist yet when the earlier correction was made.
+
+This was diagnosed as a deterministic test defect, not treated as an environmental flake, consistent with this project's standing instruction that assertion failures are never flakes.
+
+## 96. Playwright scoping correction
+
+Two minimal, additive changes — no application/product behavior was changed:
+
+1. `app/demo-merchant/page.tsx` — added `data-testid="demo-merchant-order"` and `data-order-id={order.id}` to each order's `<li>` card. Purely a test hook; no rendering/behavior change.
+2. `tests/e2e/demo-merchant.spec.ts` — after capturing `createdOrderId`, the test now builds `const orderCard = page.locator('[data-testid="demo-merchant-order"][data-order-id="${createdOrderId}"]')` and scopes every remaining per-order assertion (currency, payment status, business status, fulfilment count, conceptual state, the Pay-button-count-must-be-zero check, and both post-reload checks) to `orderCard`, replacing every prior `.first()` positional assumption. The page-wide "no `razorpay_signature` text anywhere" security assertion was deliberately left page-wide — that check is correctly page-scoped by design, unrelated to this defect.
+
+No `.first()`/`.last()`, no global text-count assumption, and no timing-based "newest position" assumption remains anywhere in this test's per-order assertions.
+
+## 97. Confirmation: the legitimate historical Pay button still renders
+
+Independently verified by a direct, read-only query against the real Supabase project (not merely inferred from the passing test): the historical attempt (`eabed2c4-...`, Attempt #2, `status = ORDER_CREATED`, `razorpay_order_id = order_TTYzkTb1oMiRwP`) is unchanged and still satisfies `page.tsx`'s exact eligibility condition — its "Pay with Razorpay" button therefore still renders on the real page, unsuppressed. The corrected test does not assert anything about it; it only asserts about its own order's card.
+
+## 98. Final results after correction
+
+| Command                                            | Result                                                                                                                                                                                                                                          |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npx prettier --check` (changed files)             | clean (after one `--write` pass on the test file)                                                                                                                                                                                               |
+| `npm run typecheck`                                | exit 0                                                                                                                                                                                                                                          |
+| `npm run lint`                                     | exit 0                                                                                                                                                                                                                                          |
+| `npm run e2e`                                      | **2/2 tests pass, exit 0 — confirmed twice in a row**                                                                                                                                                                                           |
+| `npm run test:integration:supabase` (re-confirmed) | 8/8 files, 52/52 tests, exit 0                                                                                                                                                                                                                  |
+| `npm run test` (full unit suite)                   | 21/21 files, 343/343 tests, exit 0 (one retry needed for a total Vitest worker-startup timeout under this machine's already-documented severe memory pressure — 0 tests ran on the first attempt; no config changed; the retry was fully clean) |
+
+## 99. Files changed this round
+
+- `app/demo-merchant/page.tsx` — additive test hook only (`data-testid`/`data-order-id` on the order `<li>`).
+- `tests/e2e/demo-merchant.spec.ts` — per-order assertions rescoped to the exact order card.
+- `handoffs/PHASE-2-HANDOFF.md` — this section.
+
+No Razorpay Checkout cryptography, `payments` migration/schema, payment-authority logic, merchant PAID/fulfilment logic, or any Phase 2D+ code was touched.
+
+## 100. Updated Phase 2C lifecycle state
+
+```
+IMPLEMENTED          PASS
+TESTED               PASS  (now fully — both automated gates green: unit, Supabase integration, Playwright)
+MANUALLY VERIFIED    PENDING  (a real Razorpay Test Mode Checkout payment has not yet been completed — Section 91 items 3-7 remain outstanding)
+DOCUMENTED           CANDIDATE
+APPROVED             PENDING ARCHITECT REVIEW
+```
+
+Phase 2 overall remains:
+
+```
+IN PROGRESS
+NOT APPROVED
+```
+
+All previously-FAIL acceptance criteria are now resolved: **2C-AC-32 (full Supabase integration passes) and 2C-AC-33 (Playwright regression passes) are now PASS.** Every other 2C-AC-01–38 criterion from Section 88 is unchanged (already PASS). Phase 2C remains **not** MANUALLY VERIFIED and **not** APPROVED — real Checkout completion (Section 91) is still entirely outstanding developer work.
+
+---
+
+# PHASE 2C — REAL RAZORPAY TEST MODE MANUAL VERIFICATION
+
+## 101. Automated evidence at the time of this manual verification
+
+Carried forward from Sections 94/98, re-stated for completeness of this final record — not re-run in this documentation-only round:
+
+| Command                             | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run test` (full unit suite)    | 21/21 files, 343/343 tests, PASS                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `npm run test:integration:supabase` | 8/8 files, 52/52 tests, PASS                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `npm run e2e`                       | 2/2 tests, PASS (confirmed twice consecutively)                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `npm run lint`                      | PASS                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `npm run typecheck`                 | PASS                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `npm run build`                     | PASS. Initially hit the already-documented, previously-recurring Windows/OneDrive stale-artifact error (`EPERM: unlink .next/server/app/demo-merchant`) — this is a known local filesystem-lock artifact, not an application defect (see Sections 43/54 of this handoff for the identical pattern recurring in earlier rounds). The developer removed only the gitignored `.next/` directory and rebuilt; the unchanged source tree then compiled, type-checked, and statically generated successfully. |
+
+## 102. Real Checkout starting state (developer-observed)
+
+The developer opened the real, locally-running Demo Merchant. The historical merchant order `eabed2c4-5d48-4f20-8cc9-67248564648a` displayed: ₹500.00 / INR, payment state UNPAID, business state OPEN, fulfilment 0 effects — with its Attempt #2 shown as `ORDER_CREATED`, Razorpay Order ID `order_TTYzkTb1oMiRwP`, Razorpay Order Status `created`. A "Pay with Razorpay" button was visible, matching the Section 67/97 eligibility rule exactly.
+
+## 103. Razorpay Test Mode confirmation (developer-attested)
+
+Before Checkout, the developer manually opened the Razorpay Dashboard and confirmed TEST/Test Mode visibly enabled, with the exact Order present: `order_TTYzkTb1oMiRwP`, ₹500.00, 0 attempts at that point. Developer-attested, not independently verifiable by Claude (no Dashboard access) — same convention as Section 13/59-C.
+
+## 104. Real Standard Checkout (developer-observed)
+
+The developer clicked "Pay with Razorpay". Real Razorpay Standard Checkout opened, visibly showing Test Mode and ₹500. At Checkout preparation, PayChaos transitioned Attempt #2 `ORDER_CREATED → CHECKOUT_IN_PROGRESS`, with the trusted Razorpay Order correlation (`order_TTYzkTb1oMiRwP`) unchanged — independently confirmed in Section 107 below. The developer used Razorpay's Test Mode demo Netbanking flow, which explicitly identified itself as a demo bank page offering "Success"/"Failure", and selected Success. No real money and no production Razorpay system was used at any point.
+
+## 105. PayChaos Checkout result (developer-observed)
+
+After Razorpay returned control to PayChaos, the UI showed Attempt #2 as `CHECKOUT_IN_PROGRESS`, "Checkout Signature Verified: Yes", "Provider Payment Status: Awaiting webhook evidence", and the message "Checkout response verified — awaiting webhook confirmation." A real Razorpay Payment ID (`pay_TTcbVd43PMN79M`) was shown. Critically, PayChaos still showed merchant payment state `UNPAID`, business state `OPEN`, fulfilment `0 effects` — browser Checkout success did not become merchant payment or business authority, exactly as Section 75's merchant-authority-boundary design requires.
+
+## 106. Direct Supabase correlation — independently verified by Claude
+
+Unlike Section 103 (Dashboard-only, developer-attested), the following was independently re-queried by Claude directly against the real Supabase project via a read-only script, not merely transcribed from the developer's report:
+
+```json
+// orders (eabed2c4-5d48-4f20-8cc9-67248564648a)
+{"amount_subunits":50000,"currency":"INR","payment_status":"UNPAID","business_status":"OPEN"}
+
+// payment_attempts, ordered by attempt_no
+{"attempt_no":1,"status":"FAILED_OBSERVED","razorpay_order_id":null,"razorpay_order_status":null}
+{"attempt_no":2,"status":"CHECKOUT_IN_PROGRESS","razorpay_order_id":"order_TTYzkTb1oMiRwP","razorpay_order_status":"created"}
+
+// fulfilments
+fulfilment_count = 0
+
+// payments (for Attempt #2's id)
+{
+  "razorpay_payment_id": "pay_TTcbVd43PMN79M",
+  "razorpay_payment_status": null,
+  "amount_subunits": 50000,
+  "currency": "INR",
+  "checkout_signature_verified": true,
+  "checkout_verified_at": "2026-08-24T13:25:00.265+00:00",
+  "captured_at": null,
+  "failed_at": null
+}
+```
+
+Every field matches the developer's report exactly. Attempt #1 remains untouched historical evidence (`FAILED_OBSERVED`, no Razorpay correlation) — never mutated, never reused. `razorpay_payment_id`/`razorpay_payment_status` are correctly `NULL` on Attempt #1 (no `payments` row exists for it at all).
+
+## 107. Direct authority-boundary check — independently confirmed
+
+The same query (Section 106) independently confirms every value required by Section 75's merchant-authority boundary: `razorpay_payment_status = NULL`, `checkout_signature_verified = true`, `checkout_verified_at` non-null, `captured_at = NULL`, `failed_at = NULL`, `orders.payment_status = UNPAID`, `orders.business_status = OPEN`, `fulfilment_count = 0`. **This is intentional and correct — these values are deliberately NOT updated to match the Razorpay Dashboard's `Captured` status, because Phase 2C authenticates only the Checkout handler response; it does not ingest authoritative captured-payment evidence.**
+
+## 108. Razorpay payment details verification (developer-attested)
+
+The developer manually opened the exact payment in the Razorpay Dashboard, confirmed TEST Mode visibly enabled, and observed: Payment ID `pay_TTcbVd43PMN79M`, Order ID `order_TTYzkTb1oMiRwP`, Amount ₹500.00, provider status **Captured**, method Net banking, with a timeline showing Payment created → Payment authorized → Payment captured. Developer-attested, not independently verifiable by Claude. Customer phone/email information visible in the developer's own Dashboard view is deliberately not reproduced here.
+
+## 109. Important authority distinction
+
+Razorpay's own system now authoritatively knows this payment is Captured. **PayChaos's database deliberately does not yet reflect that** — no `razorpay_payment_status = captured`, no `captured_at`, no `payment_attempts.status = CAPTURED`, no `orders.payment_status = PAID`, no fulfilment. This divergence is a **successful safety property of this architecture, not missing Phase 2C functionality**: Phase 2C's scope is authenticated Checkout-response evidence only; captured-state authority for PayChaos is deliberately deferred to verified webhook/provider processing, which is explicitly out of scope until Phase 2D+ (docs/MONEY_INVARIANTS.md Section 5; docs/ARCHITECTURE.md ADR-A06). The system correctly refused to treat browser-adjacent Checkout success as final money truth, exactly as the architecture requires.
+
+## 110. Phase 2C acceptance criteria — final update
+
+All items already PASS in Section 88/98 remain PASS. Newly confirmed by this round's real-provider evidence:
+
+| Criterion                                              | Result                    | Evidence                                                                                                                |
+| ------------------------------------------------------ | ------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Exact approved Phase 2B baseline used                  | PASS                      | HEAD verified `d42d9a3694b1...` throughout every round of this phase                                                    |
+| Test Mode only                                         | PASS                      | Dashboard visibly TEST Mode (Section 103/108); no Live path exists in code                                              |
+| Checkout-safe projection used trusted persisted values | PASS                      | Section 67, unit tests                                                                                                  |
+| Key Secret remained server-only                        | PASS                      | Section 86 client-bundle scan; never transmitted to Checkout                                                            |
+| Official Standard Checkout opened                      | PASS                      | Section 104                                                                                                             |
+| Trusted persisted Razorpay Order ID used               | PASS                      | Section 106 — `order_TTYzkTb1oMiRwP` unchanged throughout                                                               |
+| `ORDER_CREATED` → `CHECKOUT_IN_PROGRESS`               | PASS                      | Section 104/106                                                                                                         |
+| Successful real Checkout response received             | PASS                      | Section 105                                                                                                             |
+| Signature verified server-side                         | PASS                      | `checkout_signature_verified = true`, Section 106                                                                       |
+| Canonical `payments` row created                       | PASS                      | Section 106                                                                                                             |
+| Real Razorpay payment ID persisted                     | PASS                      | `pay_TTcbVd43PMN79M`, Section 106                                                                                       |
+| Payment evidence correlated to correct attempt/order   | PASS                      | Section 106 — `payment_attempt_id` matches Attempt #2                                                                   |
+| Payment callback idempotent by design/tests            | PASS                      | Section 73/82 (unit-tested; not re-exercised with a second real click in this round — see Section 111 known-issue note) |
+| Provider status NOT fabricated                         | PASS                      | `razorpay_payment_status = NULL`, Section 107                                                                           |
+| `captured_at` remained NULL                            | PASS                      | Section 106/107                                                                                                         |
+| Merchant remained UNPAID                               | PASS                      | Section 105/106                                                                                                         |
+| Business remained OPEN                                 | PASS                      | Section 105/106                                                                                                         |
+| Fulfilment remained zero                               | PASS                      | Section 106                                                                                                             |
+| Real Razorpay Dashboard showed the same payment/order  | PASS (developer-attested) | Section 108                                                                                                             |
+| Provider Dashboard showed Captured                     | PASS (developer-attested) | Section 108                                                                                                             |
+| PayChaos correctly waited for webhook authority        | PASS                      | Section 109                                                                                                             |
+| Migration applied                                      | PASS                      | Section 93                                                                                                              |
+| 52/52 integration                                      | PASS                      | Section 94/101                                                                                                          |
+| 343/343 unit                                           | PASS                      | Section 101                                                                                                             |
+| Playwright 2/2 twice                                   | PASS                      | Section 98/101                                                                                                          |
+| lint/typecheck/build passed                            | PASS                      | Section 101                                                                                                             |
+| No secrets exposed                                     | PASS                      | Section 86, unchanged this round                                                                                        |
+| No Phase 2D implementation                             | PASS                      | Section 87, unchanged this round                                                                                        |
+
+## 111. Final Phase 2C lifecycle state
+
+```
+IMPLEMENTED          PASS
+TESTED               PASS
+MANUALLY VERIFIED    PASS
+DOCUMENTED           PASS
+APPROVED             PENDING ARCHITECT REVIEW
+```
+
+Phase 2 overall remains:
+
+```
+IN PROGRESS
+NOT APPROVED
+```
+
+Phase 2C is **not self-approved** — APPROVED remains PENDING ARCHITECT REVIEW, per this project's standing rule that only architect/project review grants final approval. Phase 2D (webhook endpoint, raw-body/HMAC verification, `RAZORPAY_WEBHOOK_SECRET`, real captured-state ingestion) through Phase 2G remain fully deferred and unimplemented — this is the natural next-phase dependency: PayChaos now holds one real, signature-verified, uncaptured payment (`pay_TTcbVd43PMN79M`) whose authoritative Captured evidence Phase 2D's webhook ingestion is specifically designed to receive and process idempotently.
+
+One minor known-issue note for the next review: the idempotent-callback path (Section 73/82) was proven only by mocked unit tests in this phase, not exercised a second time against this same real payment in this manual-verification round (doing so was out of this documentation-only task's scope, and the task explicitly instructed not to create another payment). This does not block MANUALLY VERIFIED status — the idempotency guarantee is unit-tested and does not depend on real-provider behavior — but is noted for completeness.

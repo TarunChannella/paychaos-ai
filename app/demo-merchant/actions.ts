@@ -31,6 +31,8 @@ import { revalidatePath } from "next/cache";
 import {
   createDemoMerchantOrder,
   createRazorpayOrderForMerchantOrder,
+  prepareCheckoutForPaymentAttempt,
+  verifyCheckoutAndPersistPayment,
 } from "@/lib/demo-merchant/service";
 import { logEvent } from "@/lib/security/logger";
 
@@ -106,5 +108,110 @@ export async function createRazorpayOrderAction(
     // which should still be reflected on next render.
     revalidatePath("/demo-merchant");
     return { ok: false, error: SAFE_RAZORPAY_ORDER_ERROR_MESSAGE };
+  }
+}
+
+// ============================================================================
+// Phase 2C — Razorpay Standard Checkout integration
+// ============================================================================
+
+export interface PrepareCheckoutActionResult {
+  readonly ok: boolean;
+  readonly error?: string;
+  readonly checkout?: {
+    readonly razorpayKeyId: string;
+    readonly razorpayOrderId: string;
+    readonly amountSubunits: number;
+    readonly currency: string;
+    readonly paymentAttemptId: string;
+    readonly orderId: string;
+    readonly name: string;
+    readonly description: string;
+  };
+}
+
+const SAFE_CHECKOUT_PREPARE_ERROR_MESSAGE =
+  "Could not prepare Razorpay Checkout. Please try again.";
+
+/**
+ * Accepts ONLY `paymentAttemptId`. Returns the Checkout-safe server
+ * projection (Key ID, trusted Order ID, amount, currency, safe display
+ * data) — never the Key Secret, webhook secret, or service-role key. See
+ * `lib/demo-merchant/service.ts`'s `prepareCheckoutForPaymentAttempt` doc
+ * comment for the full trust boundary.
+ */
+export async function prepareCheckoutAction(
+  paymentAttemptId: string,
+): Promise<PrepareCheckoutActionResult> {
+  if (
+    typeof paymentAttemptId !== "string" ||
+    paymentAttemptId.trim().length === 0
+  ) {
+    return { ok: false, error: SAFE_CHECKOUT_PREPARE_ERROR_MESSAGE };
+  }
+
+  try {
+    const checkout = await prepareCheckoutForPaymentAttempt(paymentAttemptId);
+    revalidatePath("/demo-merchant");
+    return { ok: true, checkout };
+  } catch (err) {
+    logEvent("checkout_prepare_failed", {
+      error_name: err instanceof Error ? err.name : "UnknownError",
+    });
+    return { ok: false, error: SAFE_CHECKOUT_PREPARE_ERROR_MESSAGE };
+  }
+}
+
+export interface VerifyCheckoutActionInput {
+  readonly paymentAttemptId: string;
+  readonly razorpayPaymentId: string;
+  readonly razorpayOrderId: string;
+  readonly razorpaySignature: string;
+}
+
+export interface VerifyCheckoutActionResult {
+  readonly ok: boolean;
+  readonly error?: string;
+  readonly payment?: {
+    readonly razorpayPaymentId: string;
+    readonly checkoutSignatureVerified: boolean;
+    readonly checkoutVerifiedAt: string | null;
+    readonly razorpayPaymentStatus: string | null;
+  };
+}
+
+const SAFE_CHECKOUT_VERIFY_ERROR_MESSAGE =
+  "Could not verify the Checkout response. Please try again.";
+
+/**
+ * Accepts the browser's full Checkout success response
+ * (`paymentAttemptId`, `razorpayPaymentId`, `razorpayOrderId`,
+ * `razorpaySignature`) — ALL untrusted until
+ * `verifyCheckoutAndPersistPayment` independently verifies them against
+ * this server's own trusted `payment_attempts` row. The returned
+ * signature-verification status is genuine server-computed evidence, never
+ * an echo of client input. The signature value itself is never returned to
+ * the browser and never logged.
+ */
+export async function verifyCheckoutAction(
+  input: VerifyCheckoutActionInput,
+): Promise<VerifyCheckoutActionResult> {
+  try {
+    const payment = await verifyCheckoutAndPersistPayment(input);
+    revalidatePath("/demo-merchant");
+    return {
+      ok: true,
+      payment: {
+        razorpayPaymentId: payment.razorpayPaymentId,
+        checkoutSignatureVerified: payment.checkoutSignatureVerified,
+        checkoutVerifiedAt: payment.checkoutVerifiedAt,
+        razorpayPaymentStatus: payment.razorpayPaymentStatus,
+      },
+    };
+  } catch (err) {
+    logEvent("checkout_verify_failed", {
+      error_name: err instanceof Error ? err.name : "UnknownError",
+    });
+    return { ok: false, error: SAFE_CHECKOUT_VERIFY_ERROR_MESSAGE };
   }
 }

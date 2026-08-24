@@ -6,10 +6,28 @@ import { listDemoMerchantOrders } from "@/lib/demo-merchant/service";
 import {
   formatAmountForDisplay,
   formatConceptualState,
+  type PaymentAttemptViewModel,
 } from "@/lib/demo-merchant/view-model";
 
 import { CreateOrderButton } from "./create-order-button";
 import { CreateRazorpayOrderButton } from "./create-razorpay-order-button";
+import { PayWithRazorpayButton } from "./pay-with-razorpay-button";
+
+// Phase 2C — a payment attempt is eligible for Checkout launch only once a
+// trusted Razorpay Order correlation exists and the attempt is in an
+// appropriate launch state (docs instructions Section 14: do not show the
+// button for a FAILED_OBSERVED attempt without a valid order, a CAPTURED
+// attempt, or missing/invalid Razorpay Order correlation).
+function isEligibleForCheckout(
+  attempt: PaymentAttemptViewModel | null,
+): attempt is PaymentAttemptViewModel & { razorpayOrderId: string } {
+  return (
+    attempt !== null &&
+    attempt.razorpayOrderId !== null &&
+    (attempt.status === "ORDER_CREATED" ||
+      attempt.status === "CHECKOUT_IN_PROGRESS")
+  );
+}
 
 // Phase 1E/2B Demo Merchant screen.
 //
@@ -81,6 +99,8 @@ export default async function DemoMerchantPage() {
             {orders.map((order) => (
               <li
                 key={order.id}
+                data-testid="demo-merchant-order"
+                data-order-id={order.id}
                 className="rounded-lg border border-border bg-card p-4 text-sm"
               >
                 <p
@@ -180,7 +200,51 @@ export default async function DemoMerchantPage() {
                   </dl>
                 )}
 
+                {order.latestPayment && (
+                  <dl
+                    className="mt-2 grid grid-cols-1 gap-x-4 gap-y-1 border-t border-border pt-2 text-xs text-muted-foreground sm:grid-cols-2"
+                    data-testid="persisted-checkout-evidence"
+                  >
+                    <div>
+                      <dt className="inline font-medium">
+                        Razorpay Payment ID:{" "}
+                      </dt>
+                      <dd className="inline break-all">
+                        {order.latestPayment.razorpayPaymentId}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="inline font-medium">
+                        Checkout Signature Verified:{" "}
+                      </dt>
+                      <dd className="inline">
+                        {order.latestPayment.checkoutSignatureVerified
+                          ? "Yes"
+                          : "No"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="inline font-medium">
+                        Provider Payment Status:{" "}
+                      </dt>
+                      <dd className="inline">
+                        {order.latestPayment.razorpayPaymentStatus ??
+                          "Awaiting webhook evidence"}
+                      </dd>
+                    </div>
+                    <p className="col-span-full mt-1 font-medium text-card-foreground">
+                      Checkout response verified — awaiting webhook
+                      confirmation.
+                    </p>
+                  </dl>
+                )}
+
                 <CreateRazorpayOrderButton orderId={order.id} />
+                {isEligibleForCheckout(order.latestPaymentAttempt) && (
+                  <PayWithRazorpayButton
+                    paymentAttemptId={order.latestPaymentAttempt.id}
+                  />
+                )}
               </li>
             ))}
           </ul>

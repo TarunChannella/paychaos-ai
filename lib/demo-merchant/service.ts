@@ -42,11 +42,13 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 
+import { getRazorpayEnv } from "@/lib/config/razorpay-env";
 import {
   createRazorpayOrder,
   RazorpayOrderAmbiguousError,
   RazorpayOrderRejectedError,
 } from "@/lib/razorpay/adapter";
+import { verifyCheckoutSignature } from "@/lib/razorpay/checkout-verification";
 import { logEvent } from "@/lib/security/logger";
 
 import {
@@ -58,10 +60,15 @@ import {
   countFulfilmentsForOrderIds,
   getLatestPaymentAttemptForOrder,
   getOrderById,
+  getPaymentAttemptById,
+  getPaymentByRazorpayPaymentId,
   insertOrder,
   insertPaymentAttempt,
+  insertVerifiedPayment,
   listLatestPaymentAttemptsForOrderIds,
+  listLatestPaymentsForAttemptIds,
   listRecentOrders,
+  markPaymentAttemptCheckoutInProgress,
   markPaymentAttemptFailedObserved,
   markPaymentAttemptOrderCreated,
   type PaymentAttemptRow,
@@ -69,8 +76,11 @@ import {
 import {
   toDemoMerchantOrderViewModel,
   toPaymentAttemptViewModel,
+  toPaymentViewModel,
+  type CheckoutConfigViewModel,
   type DemoMerchantOrderViewModel,
   type PaymentAttemptViewModel,
+  type PaymentViewModel,
 } from "./view-model";
 
 const DEFAULT_RECENT_ORDER_LIMIT = 10;
@@ -162,13 +172,22 @@ export async function listDemoMerchantOrders(
     countFulfilmentsForOrderIds(orderIds),
     listLatestPaymentAttemptsForOrderIds(orderIds),
   ]);
-  return rows.map((row) =>
-    toDemoMerchantOrderViewModel(
+
+  const attemptIds = [...latestAttempts.values()].map((attempt) => attempt.id);
+  const latestPayments = await listLatestPaymentsForAttemptIds(attemptIds);
+
+  return rows.map((row) => {
+    const latestAttempt = latestAttempts.get(row.id) ?? null;
+    const latestPayment = latestAttempt
+      ? (latestPayments.get(latestAttempt.id) ?? null)
+      : null;
+    return toDemoMerchantOrderViewModel(
       row,
       counts.get(row.id) ?? 0,
-      latestAttempts.get(row.id) ?? null,
-    ),
-  );
+      latestAttempt,
+      latestPayment,
+    );
+  });
 }
 
 /**
@@ -251,6 +270,294 @@ export async function createRazorpayOrderForMerchantOrder(
     }
     throw err;
   }
+}
+
+// ============================================================================
+// Phase 2C — Razorpay Standard Checkout integration
+// ============================================================================
+
+/** Thrown when the caller-supplied payment attempt ID does not match an existing attempt. */
+export class DemoMerchantPaymentAttemptNotFoundError extends Error {
+  constructor(paymentAttemptId: string) {
+    super(`No payment attempt exists for id "${paymentAttemptId}".`);
+    this.name = "DemoMerchantPaymentAttemptNotFoundError";
+  }
+}
+
+/** Thrown when Checkout cannot be prepared for the attempt's current state (missing Razorpay Order correlation, or an ineligible status). */
+export class DemoMerchantCheckoutNotEligibleError extends Error {
+  constructor(reason: string) {
+    super(`Checkout cannot be prepared for this payment attempt: ${reason}`);
+    this.name = "DemoMerchantCheckoutNotEligibleError";
+  }
+}
+
+/**
+ * Thrown when the Razorpay Order ID returned by Checkout to the browser
+ * does NOT match this attempt's trusted database
+ * `razorpay_order_id` — a security failure, never silently corrected
+ * (docs/RAZORPAY_GUIDE.md "Mistake 3", SR-RZP-006).
+ */
+export class RazorpayCheckoutOrderMismatchError extends Error {
+  constructor() {
+    super(
+      "The Razorpay Order ID returned by Checkout does not match the trusted server record.",
+    );
+    this.name = "RazorpayCheckoutOrderMismatchError";
+  }
+}
+
+/** Thrown when the Checkout HMAC signature does not verify against the trusted server order ID. */
+export class RazorpayCheckoutSignatureInvalidError extends Error {
+  constructor() {
+    super("The Razorpay Checkout signature could not be verified.");
+    this.name = "RazorpayCheckoutSignatureInvalidError";
+  }
+}
+
+/**
+ * Thrown when a `razorpay_payment_id` already exists in `payments` but is
+ * associated with a DIFFERENT payment attempt than the one this call is
+ * verifying against — an integrity error. A payment identity is never
+ * silently reassigned (this task's "Idempotent Success Callback"
+ * requirement).
+ */
+export class RazorpayPaymentIdentityConflictError extends Error {
+  constructor() {
+    super(
+      "This Razorpay Payment ID is already associated with a different payment attempt.",
+    );
+    this.name = "RazorpayPaymentIdentityConflictError";
+  }
+}
+
+const ELIGIBLE_CHECKOUT_STATUSES = new Set<PaymentAttemptRow["status"]>([
+  "ORDER_CREATED",
+  "CHECKOUT_IN_PROGRESS",
+]);
+
+/**
+ * Checkout-safe server projection for ONE existing payment attempt (Phase
+ * 2C). The browser supplies only `paymentAttemptId` — every value in the
+ * returned `CheckoutConfigViewModel` (Key ID, trusted Razorpay Order ID,
+ * amount, currency) is loaded/derived server-side from persisted state,
+ * never from the caller.
+ *
+ * Independently establishes, before returning anything:
+ *   - the payment attempt exists;
+ *   - its associated merchant order exists;
+ *   - it already has a trusted `razorpay_order_id` (Phase 2B must have
+ *     succeeded first);
+ *   - Test Mode configuration remains valid (`getRazorpayEnv()` fails
+ *     closed on Live/missing configuration);
+ *   - the attempt is in an appropriate Checkout-launch state
+ *     (`ORDER_CREATED` or `CHECKOUT_IN_PROGRESS`).
+ *
+ * Transitions `ORDER_CREATED` -> `CHECKOUT_IN_PROGRESS` on first launch. A
+ * repeated launch for an attempt already `CHECKOUT_IN_PROGRESS` is a safe
+ * no-op re-use — it does NOT create a new payment attempt and does NOT
+ * re-run the transition.
+ */
+export async function prepareCheckoutForPaymentAttempt(
+  paymentAttemptId: string,
+): Promise<CheckoutConfigViewModel> {
+  if (
+    typeof paymentAttemptId !== "string" ||
+    !UUID_FORMAT.test(paymentAttemptId)
+  ) {
+    throw new DemoMerchantPaymentAttemptNotFoundError(paymentAttemptId);
+  }
+
+  const attempt = await getPaymentAttemptById(paymentAttemptId);
+  if (!attempt) {
+    throw new DemoMerchantPaymentAttemptNotFoundError(paymentAttemptId);
+  }
+
+  if (!attempt.razorpay_order_id) {
+    throw new DemoMerchantCheckoutNotEligibleError(
+      "no trusted Razorpay Order correlation exists yet",
+    );
+  }
+
+  if (!ELIGIBLE_CHECKOUT_STATUSES.has(attempt.status)) {
+    throw new DemoMerchantCheckoutNotEligibleError(
+      `attempt status "${attempt.status}" is not eligible for Checkout launch`,
+    );
+  }
+
+  const order = await getOrderById(attempt.order_id);
+  if (!order) {
+    throw new DemoMerchantOrderNotFoundError(attempt.order_id);
+  }
+
+  // Re-validates Test Mode configuration before exposing anything
+  // Checkout-related to the browser (docs/SECURITY.md Section 19 Control
+  // 4) — fails closed on a Live/missing Key ID or Key Secret.
+  const { keyId } = getRazorpayEnv();
+
+  const finalAttempt =
+    attempt.status === "ORDER_CREATED"
+      ? await markPaymentAttemptCheckoutInProgress(attempt.id)
+      : attempt;
+
+  logEvent("razorpay_checkout_prepared", {
+    merchant_order_id: order.id,
+    payment_attempt_id: finalAttempt.id,
+    razorpay_order_id: finalAttempt.razorpay_order_id,
+  });
+
+  return {
+    razorpayKeyId: keyId,
+    // Narrowed by the `!attempt.razorpay_order_id` check above — TypeScript
+    // cannot see that `finalAttempt` (a possibly-different object identity
+    // after the transition) still satisfies it, so this is asserted, not
+    // re-derived from an untrusted source.
+    razorpayOrderId: finalAttempt.razorpay_order_id as string,
+    amountSubunits: finalAttempt.amount_subunits,
+    currency: finalAttempt.currency,
+    paymentAttemptId: finalAttempt.id,
+    orderId: order.id,
+    name: DEMO_MERCHANT_PRODUCT.name,
+    description: `PayChaos AI Demo Merchant — ${DEMO_MERCHANT_PRODUCT.name}`,
+  };
+}
+
+export interface VerifyCheckoutInput {
+  /** Internal payment attempt ID — the only PayChaos-trusted identifier the browser supplies. */
+  readonly paymentAttemptId: string;
+  /** UNTRUSTED until verified below. */
+  readonly razorpayPaymentId: string;
+  /** UNTRUSTED — corroborating input only; compared against, never authoritative over, the trusted DB value. */
+  readonly razorpayOrderId: string;
+  /** UNTRUSTED until verified below. */
+  readonly razorpaySignature: string;
+}
+
+/**
+ * Trusted server-side verification of one Razorpay Standard Checkout
+ * success response (Phase 2C), and — only on success — persistence of the
+ * canonical `payments` evidence row.
+ *
+ * Enforces, in order:
+ *   1. `paymentAttemptId` resolves to a real, trusted attempt with an
+ *      existing `razorpay_order_id`;
+ *   2. the browser-supplied `razorpayOrderId` EQUALS the trusted database
+ *      `razorpay_order_id` — a mismatch is rejected before any
+ *      cryptographic work, never "corrected" to the trusted value
+ *      (docs/RAZORPAY_GUIDE.md "Mistake 3");
+ *   3. the HMAC signature verifies against that trusted order ID (never
+ *      the browser's), per `lib/razorpay/checkout-verification.ts`;
+ *   4. idempotent persistence: the same `razorpay_payment_id` submitted
+ *      again for the SAME attempt returns the already-verified row rather
+ *      than inserting a duplicate; the same ID already tied to a
+ *      DIFFERENT attempt is rejected as an integrity error, never silently
+ *      reassigned.
+ *
+ * On ANY failure of steps 1-3, this function throws before touching the
+ * database at all — zero trusted payment evidence, zero order/business
+ * mutation (this task's "Invalid / Tampered Response Behavior" section).
+ * This function never mutates `orders` or `fulfilments`, and never
+ * transitions `payment_attempts.status` to `CAPTURED` — a verified
+ * Checkout signature authenticates the response; it does not establish
+ * captured-state truth (docs/MONEY_INVARIANTS.md Section 5).
+ */
+export async function verifyCheckoutAndPersistPayment(
+  input: VerifyCheckoutInput,
+): Promise<PaymentViewModel> {
+  if (
+    typeof input.paymentAttemptId !== "string" ||
+    !UUID_FORMAT.test(input.paymentAttemptId)
+  ) {
+    throw new DemoMerchantPaymentAttemptNotFoundError(
+      String(input.paymentAttemptId),
+    );
+  }
+
+  if (
+    typeof input.razorpayPaymentId !== "string" ||
+    input.razorpayPaymentId.trim().length === 0 ||
+    typeof input.razorpayOrderId !== "string" ||
+    input.razorpayOrderId.trim().length === 0 ||
+    typeof input.razorpaySignature !== "string" ||
+    input.razorpaySignature.trim().length === 0
+  ) {
+    throw new RazorpayCheckoutSignatureInvalidError();
+  }
+
+  const attempt = await getPaymentAttemptById(input.paymentAttemptId);
+  if (!attempt) {
+    throw new DemoMerchantPaymentAttemptNotFoundError(input.paymentAttemptId);
+  }
+
+  if (!attempt.razorpay_order_id) {
+    throw new DemoMerchantCheckoutNotEligibleError(
+      "no trusted Razorpay Order correlation exists yet",
+    );
+  }
+
+  // CRITICAL: the browser-returned order id is only corroborating input.
+  // Reject a mismatch outright — never use it as verification authority
+  // (docs/RAZORPAY_GUIDE.md "Mistake 3", SR-RZP-006).
+  if (input.razorpayOrderId !== attempt.razorpay_order_id) {
+    logEvent("razorpay_checkout_order_mismatch", {
+      merchant_order_id: attempt.order_id,
+      payment_attempt_id: attempt.id,
+    });
+    throw new RazorpayCheckoutOrderMismatchError();
+  }
+
+  const signatureVerified = verifyCheckoutSignature({
+    trustedRazorpayOrderId: attempt.razorpay_order_id,
+    razorpayPaymentId: input.razorpayPaymentId,
+    razorpaySignature: input.razorpaySignature,
+  });
+
+  if (!signatureVerified) {
+    logEvent("razorpay_checkout_signature_invalid", {
+      merchant_order_id: attempt.order_id,
+      payment_attempt_id: attempt.id,
+    });
+    throw new RazorpayCheckoutSignatureInvalidError();
+  }
+
+  const existing = await getPaymentByRazorpayPaymentId(input.razorpayPaymentId);
+  if (existing) {
+    if (existing.payment_attempt_id !== attempt.id) {
+      throw new RazorpayPaymentIdentityConflictError();
+    }
+    // Idempotent: the same verified Checkout response reached the server
+    // again (browser retry/re-render). Return the already-verified
+    // canonical row rather than inserting a duplicate.
+    return toPaymentViewModel(existing);
+  }
+
+  const inserted = await insertVerifiedPayment({
+    paymentAttemptId: attempt.id,
+    razorpayPaymentId: input.razorpayPaymentId,
+    amountSubunits: attempt.amount_subunits,
+    currency: attempt.currency,
+  });
+
+  // `inserted` is `null` only when a concurrent request won a race on the
+  // database's UNIQUE(razorpay_payment_id) constraint between our read
+  // above and this insert — re-read the now-existing row rather than
+  // treating that as a failure.
+  const payment =
+    inserted ?? (await getPaymentByRazorpayPaymentId(input.razorpayPaymentId));
+  if (!payment) {
+    throw new DemoMerchantOrderNotFoundError(attempt.order_id);
+  }
+  if (payment.payment_attempt_id !== attempt.id) {
+    throw new RazorpayPaymentIdentityConflictError();
+  }
+
+  logEvent("razorpay_checkout_verified", {
+    merchant_order_id: attempt.order_id,
+    payment_attempt_id: attempt.id,
+    razorpay_payment_id: input.razorpayPaymentId,
+  });
+
+  return toPaymentViewModel(payment);
 }
 
 async function createNextPaymentAttempt(

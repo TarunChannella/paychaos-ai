@@ -15,6 +15,7 @@ import type { Database } from "@/lib/supabase/types";
 type OrderRow = Database["public"]["Tables"]["orders"]["Row"];
 type PaymentAttemptRow =
   Database["public"]["Tables"]["payment_attempts"]["Row"];
+type PaymentRow = Database["public"]["Tables"]["payments"]["Row"];
 
 /**
  * The safe, UI-facing shape of one payment attempt. Every field here is
@@ -54,12 +55,63 @@ export function toPaymentAttemptViewModel(
 }
 
 /**
+ * The safe, UI-facing shape of one canonical Razorpay Payment (Phase 2C).
+ * Every field here is server-derived from the persisted `payments` row.
+ * Deliberately excludes the Checkout signature — it is never persisted
+ * (docs/DATABASE.md Section 11) and must never be displayed
+ * (this task's UI instructions: "Do NOT display the signature value").
+ */
+export interface PaymentViewModel {
+  readonly id: string;
+  readonly paymentAttemptId: string;
+  readonly razorpayPaymentId: string;
+  readonly razorpayPaymentStatus: string | null;
+  readonly checkoutSignatureVerified: boolean;
+  readonly checkoutVerifiedAt: string | null;
+  readonly capturedAt: string | null;
+  readonly failedAt: string | null;
+}
+
+export function toPaymentViewModel(row: PaymentRow): PaymentViewModel {
+  return {
+    id: row.id,
+    paymentAttemptId: row.payment_attempt_id,
+    razorpayPaymentId: row.razorpay_payment_id,
+    razorpayPaymentStatus: row.razorpay_payment_status,
+    checkoutSignatureVerified: row.checkout_signature_verified,
+    checkoutVerifiedAt: row.checkout_verified_at,
+    capturedAt: row.captured_at,
+    failedAt: row.failed_at,
+  };
+}
+
+/**
+ * The Checkout-safe server projection for one payment attempt (Phase 2C).
+ * Contains ONLY values required by Razorpay Standard Checkout plus safe
+ * application correlation/display data — never `RAZORPAY_KEY_SECRET`,
+ * never `RAZORPAY_WEBHOOK_SECRET`, never `SUPABASE_SERVICE_ROLE_KEY`
+ * (docs/RAZORPAY_GUIDE.md Section 9, this task's Section 1).
+ */
+export interface CheckoutConfigViewModel {
+  readonly razorpayKeyId: string;
+  readonly razorpayOrderId: string;
+  readonly amountSubunits: number;
+  readonly currency: string;
+  readonly paymentAttemptId: string;
+  readonly orderId: string;
+  readonly name: string;
+  readonly description: string;
+}
+
+/**
  * The safe, UI-facing shape of one Demo Merchant order. Every field here is
  * server-derived (read back from the persisted `orders` row plus a real
  * `fulfilments` count) — nothing here is browser-supplied.
  *
  * `latestPaymentAttempt` is `null` until a Phase 2B Razorpay Order-creation
  * attempt has been made for this order — most orders will have none.
+ * `latestPayment` (Phase 2C) is `null` until a Checkout response has been
+ * verified for that attempt.
  */
 export interface DemoMerchantOrderViewModel {
   readonly id: string;
@@ -71,19 +123,21 @@ export interface DemoMerchantOrderViewModel {
   readonly conceptualState: ConceptualOrderState;
   readonly createdAt: string;
   readonly latestPaymentAttempt: PaymentAttemptViewModel | null;
+  readonly latestPayment: PaymentViewModel | null;
 }
 
 /**
- * Maps a persisted `orders` row plus its real fulfilment count (and, if one
- * exists, its latest payment attempt) onto the safe view model, deriving
- * `conceptualState` via the approved Phase 1D projection (which itself
- * rejects impossible combinations rather than silently presenting
- * misleading state).
+ * Maps a persisted `orders` row plus its real fulfilment count (and, if
+ * they exist, its latest payment attempt and latest verified payment) onto
+ * the safe view model, deriving `conceptualState` via the approved Phase 1D
+ * projection (which itself rejects impossible combinations rather than
+ * silently presenting misleading state).
  */
 export function toDemoMerchantOrderViewModel(
   row: OrderRow,
   fulfilmentCount: number,
   latestPaymentAttemptRow: PaymentAttemptRow | null = null,
+  latestPaymentRow: PaymentRow | null = null,
 ): DemoMerchantOrderViewModel {
   const conceptualState = projectConceptualOrderState({
     paymentStatus: row.payment_status,
@@ -102,6 +156,9 @@ export function toDemoMerchantOrderViewModel(
     createdAt: row.created_at,
     latestPaymentAttempt: latestPaymentAttemptRow
       ? toPaymentAttemptViewModel(latestPaymentAttemptRow)
+      : null,
+    latestPayment: latestPaymentRow
+      ? toPaymentViewModel(latestPaymentRow)
       : null,
   };
 }

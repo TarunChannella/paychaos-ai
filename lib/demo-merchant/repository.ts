@@ -335,3 +335,185 @@ export async function markPaymentAttemptFailedObserved(
 
   return data;
 }
+
+/**
+ * Reads one `payment_attempts` row by ID, or `null` if none exists. Phase
+ * 2C uses this to independently load the trusted attempt/Razorpay Order
+ * relationship for Checkout preparation and Checkout-response verification
+ * — the browser supplies only the attempt ID, never any of its persisted
+ * fields.
+ */
+export async function getPaymentAttemptById(
+  attemptId: string,
+): Promise<PaymentAttemptRow | null> {
+  const client = getSupabaseServerClient();
+
+  const { data, error } = await client
+    .from("payment_attempts")
+    .select("*")
+    .eq("id", attemptId)
+    .maybeSingle();
+
+  if (error) {
+    throw new DemoMerchantRepositoryError(
+      "PAYMENT_ATTEMPT_LOOKUP_FAILED",
+      "Failed to load the payment attempt.",
+    );
+  }
+
+  return data;
+}
+
+/**
+ * Transitions an attempt to `CHECKOUT_IN_PROGRESS` (Phase 2C,
+ * docs/MONEY_INVARIANTS.md Section 13). Unconditional, like
+ * `markPaymentAttemptOrderCreated` — the caller
+ * (`lib/demo-merchant/service.ts`) has already resolved that this is the
+ * right attempt and that the transition is appropriate (only called when
+ * the attempt is currently `ORDER_CREATED`; an already-`CHECKOUT_IN_PROGRESS`
+ * attempt is left untouched by the caller instead of calling this again).
+ */
+export async function markPaymentAttemptCheckoutInProgress(
+  attemptId: string,
+): Promise<PaymentAttemptRow> {
+  const client = getSupabaseServerClient();
+
+  const { data, error } = await client
+    .from("payment_attempts")
+    .update({ status: "CHECKOUT_IN_PROGRESS" })
+    .eq("id", attemptId)
+    .select()
+    .single();
+
+  if (error || !data) {
+    throw new DemoMerchantRepositoryError(
+      "PAYMENT_ATTEMPT_UPDATE_FAILED",
+      "Failed to transition the payment attempt to CHECKOUT_IN_PROGRESS.",
+    );
+  }
+
+  return data;
+}
+
+export type PaymentRow = Database["public"]["Tables"]["payments"]["Row"];
+
+/** Reads one canonical `payments` row by its Razorpay Payment ID, or `null` if none exists. */
+export async function getPaymentByRazorpayPaymentId(
+  razorpayPaymentId: string,
+): Promise<PaymentRow | null> {
+  const client = getSupabaseServerClient();
+
+  const { data, error } = await client
+    .from("payments")
+    .select("*")
+    .eq("razorpay_payment_id", razorpayPaymentId)
+    .maybeSingle();
+
+  if (error) {
+    throw new DemoMerchantRepositoryError(
+      "PAYMENT_LOOKUP_FAILED",
+      "Failed to load the payment.",
+    );
+  }
+
+  return data;
+}
+
+/**
+ * Real server-side lookup of each payment attempt's most recent `payments`
+ * row, grouped by `payment_attempt_id` — never hardcoded, never guessed.
+ * Mirrors `listLatestPaymentAttemptsForOrderIds`'s batch-lookup shape.
+ */
+export async function listLatestPaymentsForAttemptIds(
+  attemptIds: readonly string[],
+): Promise<Map<string, PaymentRow>> {
+  const latestByAttemptId = new Map<string, PaymentRow>();
+  if (attemptIds.length === 0) return latestByAttemptId;
+
+  const client = getSupabaseServerClient();
+
+  const { data, error } = await client
+    .from("payments")
+    .select("*")
+    .in("payment_attempt_id", [...attemptIds])
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    throw new DemoMerchantRepositoryError(
+      "PAYMENT_LOOKUP_FAILED",
+      "Failed to load payments for these payment attempts.",
+    );
+  }
+
+  for (const row of data ?? []) {
+    if (!latestByAttemptId.has(row.payment_attempt_id)) {
+      latestByAttemptId.set(row.payment_attempt_id, row);
+    }
+  }
+
+  return latestByAttemptId;
+}
+
+export interface InsertVerifiedPaymentInput {
+  readonly paymentAttemptId: string;
+  readonly razorpayPaymentId: string;
+  readonly amountSubunits: number;
+  readonly currency: string;
+}
+
+/**
+ * Inserts one canonical `payments` row for a Checkout response this caller
+ * has ALREADY signature-verified — this function performs no verification
+ * itself, only persistence. Deliberately accepts no
+ * `razorpay_payment_status`, `captured_at`, or `failed_at`: signature
+ * verification authenticates the Checkout response, it does not establish
+ * captured-state truth (docs/MONEY_INVARIANTS.md Section 5). The Checkout
+ * signature itself is never a parameter here and is therefore never
+ * persisted (docs/DATABASE.md Section 11 "Checkout Verification
+ * Constraint").
+ *
+ * Returns `null` instead of throwing on a `razorpay_payment_id` unique-
+ * constraint violation (Postgres error code `23505`) — the database's
+ * `UNIQUE(razorpay_payment_id)` constraint is the final race-safety
+ * boundary against two concurrent identical Checkout callbacks both
+ * observing "no existing row" before either inserts (this task's
+ * "Idempotent Success Callback" requirement). The caller re-reads the
+ * now-existing row via `getPaymentByRazorpayPaymentId` instead of treating
+ * this as a failure.
+ */
+export async function insertVerifiedPayment(
+  input: InsertVerifiedPaymentInput,
+): Promise<PaymentRow | null> {
+  const client = getSupabaseServerClient();
+
+  const { data, error } = await client
+    .from("payments")
+    .insert({
+      payment_attempt_id: input.paymentAttemptId,
+      razorpay_payment_id: input.razorpayPaymentId,
+      amount_subunits: input.amountSubunits,
+      currency: input.currency,
+      checkout_signature_verified: true,
+      checkout_verified_at: new Date().toISOString(),
+    })
+    .select()
+    .single();
+
+  if (error) {
+    if (error.code === "23505") {
+      return null;
+    }
+    throw new DemoMerchantRepositoryError(
+      "PAYMENT_INSERT_FAILED",
+      "Failed to persist the verified payment.",
+    );
+  }
+  if (!data) {
+    throw new DemoMerchantRepositoryError(
+      "PAYMENT_INSERT_FAILED",
+      "Failed to persist the verified payment.",
+    );
+  }
+
+  return data;
+}

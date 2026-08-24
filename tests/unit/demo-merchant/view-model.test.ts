@@ -5,15 +5,17 @@ import {
   formatConceptualState,
   toDemoMerchantOrderViewModel,
   toPaymentAttemptViewModel,
+  toPaymentViewModel,
 } from "@/lib/demo-merchant/view-model";
 import type { Database } from "@/lib/supabase/types";
 
-// Phase 1E/2B: pure DB-row -> view-model mapping and display formatting —
+// Phase 1E/2B/2C: pure DB-row -> view-model mapping and display formatting —
 // no Supabase/network — fully offline.
 
 type OrderRow = Database["public"]["Tables"]["orders"]["Row"];
 type PaymentAttemptRow =
   Database["public"]["Tables"]["payment_attempts"]["Row"];
+type PaymentRow = Database["public"]["Tables"]["payments"]["Row"];
 
 function row(overrides: Partial<OrderRow> = {}): OrderRow {
   return {
@@ -47,6 +49,31 @@ function attemptRow(
   };
 }
 
+function paymentRow(overrides: Partial<PaymentRow> = {}): PaymentRow {
+  return {
+    id: "payment-1",
+    payment_attempt_id: "attempt-1",
+    razorpay_payment_id: "pay_fake_id",
+    razorpay_payment_status: null,
+    amount_subunits: 50000,
+    currency: "INR",
+    checkout_signature_verified: true,
+    checkout_verified_at: "2026-01-01T00:00:00.000Z",
+    first_observed_at: "2026-01-01T00:00:00.000Z",
+    last_observed_at: "2026-01-01T00:00:00.000Z",
+    captured_at: null,
+    failed_at: null,
+    error_code: null,
+    error_description_redacted: null,
+    error_source: null,
+    error_step: null,
+    error_reason: null,
+    created_at: "2026-01-01T00:00:00.000Z",
+    updated_at: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
 describe("formatAmountForDisplay", () => {
   it("formats INR subunits as a rupee amount with 2 decimals", () => {
     expect(formatAmountForDisplay(50000, "INR")).toBe("₹500.00");
@@ -62,7 +89,7 @@ describe("formatAmountForDisplay", () => {
 });
 
 describe("toDemoMerchantOrderViewModel", () => {
-  it("maps a fresh UNPAID/OPEN row with 0 fulfilments to conceptualState=CREATED, latestPaymentAttempt=null by default", () => {
+  it("maps a fresh UNPAID/OPEN row with 0 fulfilments to conceptualState=CREATED, latestPaymentAttempt=null and latestPayment=null by default", () => {
     const vm = toDemoMerchantOrderViewModel(row(), 0);
 
     expect(vm).toEqual({
@@ -75,6 +102,26 @@ describe("toDemoMerchantOrderViewModel", () => {
       conceptualState: "CREATED",
       createdAt: "2026-01-01T00:00:00.000Z",
       latestPaymentAttempt: null,
+      latestPayment: null,
+    });
+  });
+
+  it("maps the latest verified payment row when one is supplied", () => {
+    const vm = toDemoMerchantOrderViewModel(
+      row(),
+      0,
+      attemptRow(),
+      paymentRow({ razorpay_payment_status: "authorized" }),
+    );
+    expect(vm.latestPayment).toEqual({
+      id: "payment-1",
+      paymentAttemptId: "attempt-1",
+      razorpayPaymentId: "pay_fake_id",
+      razorpayPaymentStatus: "authorized",
+      checkoutSignatureVerified: true,
+      checkoutVerifiedAt: "2026-01-01T00:00:00.000Z",
+      capturedAt: null,
+      failedAt: null,
     });
   });
 
@@ -136,6 +183,32 @@ describe("toPaymentAttemptViewModel", () => {
     const vm = toPaymentAttemptViewModel(attemptRow());
     expect(vm.razorpayOrderId).toBeNull();
     expect(vm.razorpayOrderStatus).toBeNull();
+  });
+});
+
+describe("toPaymentViewModel", () => {
+  it("maps every field, never including the Checkout signature (it is never part of the row at all)", () => {
+    const vm = toPaymentViewModel(paymentRow());
+    expect(vm).toEqual({
+      id: "payment-1",
+      paymentAttemptId: "attempt-1",
+      razorpayPaymentId: "pay_fake_id",
+      razorpayPaymentStatus: null,
+      checkoutSignatureVerified: true,
+      checkoutVerifiedAt: "2026-01-01T00:00:00.000Z",
+      capturedAt: null,
+      failedAt: null,
+    });
+    // Structural: PaymentRow itself has no signature-shaped field, so the
+    // view model cannot leak one even by accident.
+    expect(Object.keys(paymentRow())).not.toContain("razorpay_signature");
+  });
+
+  it("maps null razorpay_payment_status/captured_at/failed_at as null (never fabricated)", () => {
+    const vm = toPaymentViewModel(paymentRow());
+    expect(vm.razorpayPaymentStatus).toBeNull();
+    expect(vm.capturedAt).toBeNull();
+    expect(vm.failedAt).toBeNull();
   });
 });
 

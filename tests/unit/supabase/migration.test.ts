@@ -51,19 +51,22 @@ describe("Phase 1C-A migration file exists (#4)", () => {
   });
 });
 
-describe("Phase 1C-A migration creates exactly the approved Phase 1 tables (#5, #6, #7)", () => {
+describe("Migration set creates exactly the approved Phase 1 + Phase 2B + Phase 2C tables (#5, #6, #7)", () => {
   const tableNames = extractCreateTableNames(combinedSql);
 
-  it("creates orders, payment_attempts, fulfilments and nothing else", () => {
+  // Phase 1 created orders/payment_attempts/fulfilments (#5-#7). Phase 2B
+  // was purely additive-columns (no new CREATE TABLE). Phase 2C legitimately
+  // adds `payments` via its own additive migration
+  // (supabase/migrations/20260825000000_phase2c_payments.sql,
+  // docs/DATABASE.md Section 11) — this is the current approved cumulative
+  // table set, not a Phase 1 boundary violation.
+  it("creates orders, payment_attempts, payments, fulfilments and nothing else", () => {
     expect([...tableNames].sort()).toEqual([
       "fulfilments",
       "orders",
       "payment_attempts",
+      "payments",
     ]);
-  });
-
-  it("does not create payments", () => {
-    expect(tableNames).not.toContain("payments");
   });
 
   it("does not create webhook_events", () => {
@@ -192,8 +195,13 @@ describe("Phase 1C-A required foreign keys (#12)", () => {
   });
 });
 
-describe("Phase 1C-A RLS is explicitly enabled on all 3 tables (#13)", () => {
-  for (const table of ["orders", "payment_attempts", "fulfilments"]) {
+describe("Phase 1C-A/2C RLS is explicitly enabled on all 4 tables (#13)", () => {
+  for (const table of [
+    "orders",
+    "payment_attempts",
+    "payments",
+    "fulfilments",
+  ]) {
     it(`ALTER TABLE public.${table} ENABLE ROW LEVEL SECURITY is present`, () => {
       const re = new RegExp(
         `alter table public\\.${table} enable row level security`,
@@ -214,14 +222,16 @@ describe("Phase 1C-A no permissive anon/authenticated policy (#14)", () => {
     expect(combinedSql).not.toMatch(/grant[^;]*\bto\s+authenticated\b/i);
   });
 
-  it("every GRANT targets only service_role, and only the 3 approved tables", () => {
+  it("every GRANT targets only service_role, and only the 4 approved tables", () => {
     const grantLines = combinedSql
       .split("\n")
       .filter((line) => /^\s*grant\s/i.test(line));
     expect(grantLines.length).toBeGreaterThan(0);
     for (const line of grantLines) {
       expect(line).toMatch(/to service_role/i);
-      expect(line).toMatch(/public\.(orders|payment_attempts|fulfilments)/i);
+      expect(line).toMatch(
+        /public\.(orders|payment_attempts|payments|fulfilments)/i,
+      );
     }
   });
 });
@@ -256,13 +266,13 @@ describe("Phase 1C-A correction — no unnecessary pgcrypto extension", () => {
     expect(combinedSql).not.toMatch(/create extension[^;]*pgcrypto/i);
   });
 
-  it("gen_random_uuid() remains the UUID default for all three tables", () => {
+  it("gen_random_uuid() remains the UUID default for all four tables", () => {
     const occurrences = [
       ...combinedSql.matchAll(
         /id uuid primary key default gen_random_uuid\(\)/gi,
       ),
     ];
-    expect(occurrences.length).toBe(3);
+    expect(occurrences.length).toBe(4);
   });
 });
 
@@ -293,20 +303,27 @@ describe("Phase 1C-A correction — explicit browser-role revocation", () => {
     expect(combinedSql).not.toMatch(/grant[^;]*\bto\s+authenticated\b/i);
   });
 
-  it("service_role retains explicit CRUD grants on exactly the three tables", () => {
+  it("service_role retains explicit CRUD grants on exactly the four tables", () => {
     const grantLines = combinedSql
       .split("\n")
       .filter((line) => /^\s*grant\s/i.test(line));
-    expect(grantLines.length).toBe(3);
+    expect(grantLines.length).toBe(4);
     for (const line of grantLines) {
       expect(line).toMatch(/select,\s*insert,\s*update,\s*delete/i);
       expect(line).toMatch(/to service_role/i);
-      expect(line).toMatch(/public\.(orders|payment_attempts|fulfilments)/i);
+      expect(line).toMatch(
+        /public\.(orders|payment_attempts|payments|fulfilments)/i,
+      );
     }
   });
 
-  it("RLS remains enabled on all three tables", () => {
-    for (const table of ["orders", "payment_attempts", "fulfilments"]) {
+  it("RLS remains enabled on all four tables", () => {
+    for (const table of [
+      "orders",
+      "payment_attempts",
+      "payments",
+      "fulfilments",
+    ]) {
       const re = new RegExp(
         `alter table public\\.${table} enable row level security`,
         "i",

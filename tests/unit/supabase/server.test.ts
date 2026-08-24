@@ -236,21 +236,21 @@ describe("Phase 1C-A: no service-role name leaks into client-importable code (#3
   });
 });
 
-describe("Phase 1C-A: Database type is scoped to exactly the 3 Phase 1 tables", () => {
+describe("Phase 1C-A/2C: Database type is scoped to exactly the 4 approved tables", () => {
   const typesSource = fs.readFileSync(
     path.join(repoRoot, "lib", "supabase", "types.ts"),
     "utf-8",
   );
 
-  it("declares the 3 approved Phase 1 table keys", () => {
+  it("declares the 4 approved table keys (Phase 1: orders/payment_attempts/fulfilments; Phase 2C: payments)", () => {
     expect(typesSource).toMatch(/\borders:\s*{/);
     expect(typesSource).toMatch(/\bpayment_attempts:\s*{/);
+    expect(typesSource).toMatch(/\bpayments:\s*{/);
     expect(typesSource).toMatch(/\bfulfilments:\s*{/);
   });
 
-  it("declares no Phase 2+ table", () => {
+  it("declares no Phase 2D+ table", () => {
     const forbidden = [
-      "payments",
       "webhook_events",
       "event_processing_attempts",
       "chaos_runs",
@@ -264,16 +264,16 @@ describe("Phase 1C-A: Database type is scoped to exactly the 3 Phase 1 tables", 
   });
 
   it("fulfilments has no payment_id or trigger_processing_attempt_id field", () => {
-    // The file's leading doc comment deliberately names `payment_id` /
-    // `trigger_processing_attempt_id` to explain why they're absent (Phase
-    // 2 additive columns). Check only the actual TypeScript code after
-    // that comment block, not the prose explaining the omission.
-    const codeAfterLeadingComment = typesSource.slice(
-      typesSource.indexOf("*/") + 2,
+    // Scoped to ONLY the `fulfilments:` table block — the Phase 2C
+    // `payments` table legitimately declares an unrelated
+    // `payment_attempt_id` column, which contains the substring
+    // "payment_id" and would false-positive against a whole-file check.
+    const fulfilmentsMatch = typesSource.match(
+      /\bfulfilments:\s*\{[\s\S]*?\n {6}\};/,
     );
-    expect(codeAfterLeadingComment).not.toMatch(/payment_id/);
-    expect(codeAfterLeadingComment).not.toMatch(
-      /trigger_processing_attempt_id/,
-    );
+    expect(fulfilmentsMatch).not.toBeNull();
+    const fulfilmentsBlock = fulfilmentsMatch![0]!;
+    expect(fulfilmentsBlock).not.toMatch(/\bpayment_id\b/);
+    expect(fulfilmentsBlock).not.toMatch(/\btrigger_processing_attempt_id\b/);
   });
 });
