@@ -3,10 +3,11 @@ import path from "node:path";
 
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
-// Phase 1E: `lib/demo-merchant/repository.ts` behavior is exercised here
+// Phase 1E/2B: `lib/demo-merchant/repository.ts` behavior is exercised here
 // against a MOCKED Supabase client (no network) — real-Supabase behavior is
 // separately proven by
-// tests/integration/supabase/045-demo-merchant-service.integration.test.ts.
+// tests/integration/supabase/045-demo-merchant-service.integration.test.ts
+// and tests/integration/supabase/046-payment-attempt-razorpay-correlation.integration.test.ts.
 vi.mock("server-only", () => ({}));
 
 interface MockResult {
@@ -17,36 +18,56 @@ interface MockResult {
 type InsertFn = (payload: Record<string, unknown>) => FakeQueryBuilder;
 type SelectFn = () => FakeQueryBuilder;
 type SingleFn = () => Promise<MockResult>;
+type MaybeSingleFn = () => Promise<MockResult>;
 type OrderFn = () => FakeQueryBuilder;
-type LimitFn = (limit: number) => Promise<MockResult>;
-type InFn = (column: string, values: readonly string[]) => Promise<MockResult>;
+type LimitFn = (limit: number) => FakeQueryBuilder;
+type InFn = (column: string, values: readonly string[]) => FakeQueryBuilder;
+type EqFn = (column: string, value: unknown) => FakeQueryBuilder;
+type UpdateFn = (payload: Record<string, unknown>) => FakeQueryBuilder;
 
-interface FakeQueryBuilder {
+/**
+ * Mirrors the real `@supabase/supabase-js` `PostgrestFilterBuilder`: every
+ * chainable method (`insert`/`select`/`order`/`limit`/`in`/`eq`/`update`)
+ * returns the SAME builder instance, and the builder itself is thenable
+ * (`PromiseLike<MockResult>`) so a caller may `await` the chain directly
+ * (e.g. `listRecentOrders`'s `.select().order().limit(10)`, never calling
+ * `.single()`/`.maybeSingle()`) OR call a terminal `.single()`/
+ * `.maybeSingle()` after any number of chained calls (e.g.
+ * `getLatestPaymentAttemptForOrder`'s `.select().eq().order().limit(1).maybeSingle()`).
+ */
+interface FakeQueryBuilder extends PromiseLike<MockResult> {
   insert: Mock<InsertFn>;
   select: Mock<SelectFn>;
   single: Mock<SingleFn>;
+  maybeSingle: Mock<MaybeSingleFn>;
   order: Mock<OrderFn>;
   limit: Mock<LimitFn>;
   in: Mock<InFn>;
+  eq: Mock<EqFn>;
+  update: Mock<UpdateFn>;
 }
 
 /**
- * Minimal chainable fake matching the exact call shapes this repository
- * uses. Each mock's call signature is set via `vi.fn`'s explicit type
- * parameter (rather than named implementation parameters) — the same
- * pattern already established in tests/unit/supabase/server.test.ts's
- * `createClientMock` fix — so call-shape assertions (e.g.
- * `builder.insert.mock.calls[0]?.[0]`) keep type-checking without
- * declaring any unused parameter names in the implementation body.
+ * Each mock's call signature is set via `vi.fn`'s explicit type parameter
+ * (rather than named implementation parameters) — the same pattern already
+ * established in tests/unit/supabase/server.test.ts's `createClientMock`
+ * fix — so call-shape assertions (e.g. `builder.insert.mock.calls[0]?.[0]`)
+ * keep type-checking without declaring any unused parameter names in the
+ * implementation body.
  */
 function makeQueryBuilder(result: MockResult): FakeQueryBuilder {
   const builder: FakeQueryBuilder = {
     insert: vi.fn<InsertFn>(() => builder),
     select: vi.fn<SelectFn>(() => builder),
     single: vi.fn<SingleFn>(async () => result),
+    maybeSingle: vi.fn<MaybeSingleFn>(async () => result),
     order: vi.fn<OrderFn>(() => builder),
-    limit: vi.fn<LimitFn>(async () => result),
-    in: vi.fn<InFn>(async () => result),
+    limit: vi.fn<LimitFn>(() => builder),
+    in: vi.fn<InFn>(() => builder),
+    eq: vi.fn<EqFn>(() => builder),
+    update: vi.fn<UpdateFn>(() => builder),
+    then: (onfulfilled, onrejected) =>
+      Promise.resolve(result).then(onfulfilled, onrejected),
   };
   return builder;
 }
@@ -172,6 +193,229 @@ describe("countFulfilmentsForOrderIds", () => {
   });
 });
 
+describe("getOrderById", () => {
+  it("looks up by id and returns the row", async () => {
+    const orderRow = {
+      id: "11111111-1111-1111-1111-111111111111",
+      amount_subunits: 50000,
+      currency: "INR",
+      payment_status: "UNPAID",
+      business_status: "OPEN",
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    };
+    const builder = makeQueryBuilder({ data: orderRow, error: null });
+    fromMock.mockReturnValue(builder);
+
+    const { getOrderById } = await import("@/lib/demo-merchant/repository");
+    const result = await getOrderById(orderRow.id);
+
+    expect(fromMock).toHaveBeenCalledWith("orders");
+    expect(builder.eq).toHaveBeenCalledWith("id", orderRow.id);
+    expect(result).toEqual(orderRow);
+  });
+
+  it("returns null when no order matches", async () => {
+    const builder = makeQueryBuilder({ data: null, error: null });
+    fromMock.mockReturnValue(builder);
+
+    const { getOrderById } = await import("@/lib/demo-merchant/repository");
+    expect(await getOrderById("does-not-exist")).toBeNull();
+  });
+
+  it("throws DemoMerchantRepositoryError on a query error", async () => {
+    const builder = makeQueryBuilder({
+      data: null,
+      error: { message: "connection string leaked here" },
+    });
+    fromMock.mockReturnValue(builder);
+
+    const { getOrderById, DemoMerchantRepositoryError } =
+      await import("@/lib/demo-merchant/repository");
+    await expect(getOrderById("x")).rejects.toThrow(
+      DemoMerchantRepositoryError,
+    );
+  });
+});
+
+describe("getLatestPaymentAttemptForOrder", () => {
+  it("orders by attempt_no descending and limits to 1", async () => {
+    const builder = makeQueryBuilder({ data: null, error: null });
+    fromMock.mockReturnValue(builder);
+
+    const { getLatestPaymentAttemptForOrder } =
+      await import("@/lib/demo-merchant/repository");
+    await getLatestPaymentAttemptForOrder("order-1");
+
+    expect(fromMock).toHaveBeenCalledWith("payment_attempts");
+    expect(builder.eq).toHaveBeenCalledWith("order_id", "order-1");
+    expect(builder.order).toHaveBeenCalledWith("attempt_no", {
+      ascending: false,
+    });
+    expect(builder.limit).toHaveBeenCalledWith(1);
+  });
+
+  it("returns null when the order has no attempts yet", async () => {
+    const builder = makeQueryBuilder({ data: null, error: null });
+    fromMock.mockReturnValue(builder);
+
+    const { getLatestPaymentAttemptForOrder } =
+      await import("@/lib/demo-merchant/repository");
+    expect(await getLatestPaymentAttemptForOrder("order-1")).toBeNull();
+  });
+});
+
+describe("listLatestPaymentAttemptsForOrderIds", () => {
+  it("returns an empty map without querying when orderIds is empty", async () => {
+    const { listLatestPaymentAttemptsForOrderIds } =
+      await import("@/lib/demo-merchant/repository");
+    const result = await listLatestPaymentAttemptsForOrderIds([]);
+    expect(result.size).toBe(0);
+    expect(fromMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps only the highest attempt_no row per order_id (rows arrive attempt_no-descending)", async () => {
+    const rowA2 = { id: "a2", order_id: "a", attempt_no: 2 };
+    const rowA1 = { id: "a1", order_id: "a", attempt_no: 1 };
+    const rowB1 = { id: "b1", order_id: "b", attempt_no: 1 };
+    const builder = makeQueryBuilder({
+      data: [rowA2, rowA1, rowB1],
+      error: null,
+    });
+    fromMock.mockReturnValue(builder);
+
+    const { listLatestPaymentAttemptsForOrderIds } =
+      await import("@/lib/demo-merchant/repository");
+    const result = await listLatestPaymentAttemptsForOrderIds(["a", "b", "c"]);
+
+    expect(fromMock).toHaveBeenCalledWith("payment_attempts");
+    expect(builder.order).toHaveBeenCalledWith("attempt_no", {
+      ascending: false,
+    });
+    expect(result.get("a")).toEqual(rowA2);
+    expect(result.get("b")).toEqual(rowB1);
+    expect(result.get("c")).toBeUndefined();
+  });
+});
+
+describe("insertPaymentAttempt", () => {
+  it("inserts using exactly orderId/attemptNo/amountSubunits/currency/razorpayReceipt", async () => {
+    const persistedRow = {
+      id: "attempt-1",
+      order_id: "order-1",
+      attempt_no: 1,
+      amount_subunits: 50000,
+      currency: "INR",
+      status: "CREATED",
+      razorpay_receipt: "receipt-1",
+      razorpay_order_id: null,
+      razorpay_order_status: null,
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    };
+    const builder = makeQueryBuilder({ data: persistedRow, error: null });
+    fromMock.mockReturnValue(builder);
+
+    const { insertPaymentAttempt } =
+      await import("@/lib/demo-merchant/repository");
+    const result = await insertPaymentAttempt({
+      orderId: "order-1",
+      attemptNo: 1,
+      amountSubunits: 50000,
+      currency: "INR",
+      razorpayReceipt: "receipt-1",
+    });
+
+    expect(fromMock).toHaveBeenCalledWith("payment_attempts");
+    expect(builder.insert).toHaveBeenCalledWith({
+      order_id: "order-1",
+      attempt_no: 1,
+      amount_subunits: 50000,
+      currency: "INR",
+      razorpay_receipt: "receipt-1",
+    });
+    // The insert payload must never include status/razorpay_order_id/
+    // razorpay_order_status — those are never set at creation time.
+    const insertPayload = builder.insert.mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(Object.keys(insertPayload).sort()).toEqual([
+      "amount_subunits",
+      "attempt_no",
+      "currency",
+      "order_id",
+      "razorpay_receipt",
+    ]);
+    expect(result).toEqual(persistedRow);
+  });
+
+  it("throws DemoMerchantRepositoryError (never leaks the raw Supabase error) when the insert fails", async () => {
+    const builder = makeQueryBuilder({
+      data: null,
+      error: { message: "connection string leaked here" },
+    });
+    fromMock.mockReturnValue(builder);
+
+    const { insertPaymentAttempt, DemoMerchantRepositoryError } =
+      await import("@/lib/demo-merchant/repository");
+    await expect(
+      insertPaymentAttempt({
+        orderId: "order-1",
+        attemptNo: 1,
+        amountSubunits: 50000,
+        currency: "INR",
+        razorpayReceipt: "receipt-1",
+      }),
+    ).rejects.toThrow(DemoMerchantRepositoryError);
+  });
+});
+
+describe("markPaymentAttemptOrderCreated", () => {
+  it("updates status to ORDER_CREATED with exactly the trusted Razorpay correlation fields", async () => {
+    const updatedRow = {
+      id: "attempt-1",
+      status: "ORDER_CREATED",
+      razorpay_order_id: "order_fake_id",
+      razorpay_order_status: "created",
+    };
+    const builder = makeQueryBuilder({ data: updatedRow, error: null });
+    fromMock.mockReturnValue(builder);
+
+    const { markPaymentAttemptOrderCreated } =
+      await import("@/lib/demo-merchant/repository");
+    const result = await markPaymentAttemptOrderCreated("attempt-1", {
+      razorpayOrderId: "order_fake_id",
+      razorpayOrderStatus: "created",
+    });
+
+    expect(fromMock).toHaveBeenCalledWith("payment_attempts");
+    expect(builder.update).toHaveBeenCalledWith({
+      status: "ORDER_CREATED",
+      razorpay_order_id: "order_fake_id",
+      razorpay_order_status: "created",
+    });
+    expect(builder.eq).toHaveBeenCalledWith("id", "attempt-1");
+    expect(result).toEqual(updatedRow);
+  });
+});
+
+describe("markPaymentAttemptFailedObserved", () => {
+  it("updates status to FAILED_OBSERVED only — never touches the Razorpay correlation fields", async () => {
+    const updatedRow = { id: "attempt-1", status: "FAILED_OBSERVED" };
+    const builder = makeQueryBuilder({ data: updatedRow, error: null });
+    fromMock.mockReturnValue(builder);
+
+    const { markPaymentAttemptFailedObserved } =
+      await import("@/lib/demo-merchant/repository");
+    const result = await markPaymentAttemptFailedObserved("attempt-1");
+
+    expect(builder.update).toHaveBeenCalledWith({ status: "FAILED_OBSERVED" });
+    expect(builder.eq).toHaveBeenCalledWith("id", "attempt-1");
+    expect(result).toEqual(updatedRow);
+  });
+});
+
 describe("lib/demo-merchant/repository.ts — structural server-only boundary", () => {
   const source = fs.readFileSync(
     path.resolve(
@@ -201,6 +445,26 @@ describe("lib/demo-merchant/repository.ts — structural server-only boundary", 
       "\\bid\\b",
       "createdAt",
       "updatedAt",
+    ]) {
+      expect(body).not.toMatch(new RegExp(forbidden));
+    }
+  });
+
+  it("InsertPaymentAttemptInput contains no status/razorpayOrderId/razorpayOrderStatus field", () => {
+    const match = source.match(
+      /export interface InsertPaymentAttemptInput\s*\{([\s\S]*?)\}/,
+    );
+    expect(match).not.toBeNull();
+    const body = match![1]!;
+    expect(body).toMatch(/orderId/);
+    expect(body).toMatch(/attemptNo/);
+    expect(body).toMatch(/amountSubunits/);
+    expect(body).toMatch(/currency/);
+    expect(body).toMatch(/razorpayReceipt/);
+    for (const forbidden of [
+      "status",
+      "razorpayOrderId",
+      "razorpayOrderStatus",
     ]) {
       expect(body).not.toMatch(new RegExp(forbidden));
     }

@@ -1,5 +1,5 @@
 /**
- * Phase 1E — DB row -> safe UI view-model mapping, and display-formatting
+ * Phase 1E/2B — DB row -> safe UI view-model mapping, and display-formatting
  * helpers.
  *
  * Pure domain/presentation logic. No Supabase import, no `process.env`
@@ -13,11 +13,53 @@ import type { ConceptualOrderState } from "./types";
 import type { Database } from "@/lib/supabase/types";
 
 type OrderRow = Database["public"]["Tables"]["orders"]["Row"];
+type PaymentAttemptRow =
+  Database["public"]["Tables"]["payment_attempts"]["Row"];
+
+/**
+ * The safe, UI-facing shape of one payment attempt. Every field here is
+ * server-derived from the persisted `payment_attempts` row — the Key
+ * Secret never appears anywhere in this module, and `razorpay_order_id`/
+ * `razorpay_order_status` are correlation evidence, not secrets
+ * (docs/RAZORPAY_GUIDE.md Section 50).
+ */
+export interface PaymentAttemptViewModel {
+  readonly id: string;
+  readonly orderId: string;
+  readonly attemptNo: number;
+  readonly amountSubunits: number;
+  readonly currency: string;
+  readonly status: PaymentAttemptRow["status"];
+  readonly razorpayReceipt: string;
+  readonly razorpayOrderId: string | null;
+  readonly razorpayOrderStatus: string | null;
+  readonly createdAt: string;
+}
+
+export function toPaymentAttemptViewModel(
+  row: PaymentAttemptRow,
+): PaymentAttemptViewModel {
+  return {
+    id: row.id,
+    orderId: row.order_id,
+    attemptNo: row.attempt_no,
+    amountSubunits: row.amount_subunits,
+    currency: row.currency,
+    status: row.status,
+    razorpayReceipt: row.razorpay_receipt,
+    razorpayOrderId: row.razorpay_order_id,
+    razorpayOrderStatus: row.razorpay_order_status,
+    createdAt: row.created_at,
+  };
+}
 
 /**
  * The safe, UI-facing shape of one Demo Merchant order. Every field here is
  * server-derived (read back from the persisted `orders` row plus a real
  * `fulfilments` count) — nothing here is browser-supplied.
+ *
+ * `latestPaymentAttempt` is `null` until a Phase 2B Razorpay Order-creation
+ * attempt has been made for this order — most orders will have none.
  */
 export interface DemoMerchantOrderViewModel {
   readonly id: string;
@@ -28,17 +70,20 @@ export interface DemoMerchantOrderViewModel {
   readonly fulfilmentCount: number;
   readonly conceptualState: ConceptualOrderState;
   readonly createdAt: string;
+  readonly latestPaymentAttempt: PaymentAttemptViewModel | null;
 }
 
 /**
- * Maps a persisted `orders` row plus its real fulfilment count onto the
- * safe view model, deriving `conceptualState` via the approved Phase 1D
- * projection (which itself rejects impossible combinations rather than
- * silently presenting misleading state).
+ * Maps a persisted `orders` row plus its real fulfilment count (and, if one
+ * exists, its latest payment attempt) onto the safe view model, deriving
+ * `conceptualState` via the approved Phase 1D projection (which itself
+ * rejects impossible combinations rather than silently presenting
+ * misleading state).
  */
 export function toDemoMerchantOrderViewModel(
   row: OrderRow,
   fulfilmentCount: number,
+  latestPaymentAttemptRow: PaymentAttemptRow | null = null,
 ): DemoMerchantOrderViewModel {
   const conceptualState = projectConceptualOrderState({
     paymentStatus: row.payment_status,
@@ -55,6 +100,9 @@ export function toDemoMerchantOrderViewModel(
     fulfilmentCount,
     conceptualState,
     createdAt: row.created_at,
+    latestPaymentAttempt: latestPaymentAttemptRow
+      ? toPaymentAttemptViewModel(latestPaymentAttemptRow)
+      : null,
   };
 }
 

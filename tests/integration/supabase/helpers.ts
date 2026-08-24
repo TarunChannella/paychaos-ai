@@ -31,11 +31,24 @@ import { getClientEnv } from "@/lib/config/client-env";
 import type { Database } from "@/lib/supabase/types";
 
 /**
+ * Stable prefix shared by every value `taggedValue()` has ever produced,
+ * across every run of this suite — NOT specific to the current process
+ * (that's `TEST_RUN_TAG` below, which is this same prefix plus a per-run
+ * UUID). Used by the final-state suite (Phase 2B test-gate correction) to
+ * detect a `payment_attempts` leak from ANY past run, not merely the
+ * current one, while never matching real application data: no receipt
+ * this application's own Razorpay integration generates can start with
+ * this prefix — `lib/demo-merchant/service.ts`'s `generateRazorpayReceipt`
+ * always produces a `pc_...`-prefixed value, a disjoint namespace.
+ */
+export const TEST_DATA_RECEIPT_PREFIX = "integration-test-";
+
+/**
  * One unique tag for this entire suite run/process. Never printed/logged
  * beyond being embedded in ordinary non-secret identifiers (receipts,
  * idempotency keys) that are themselves safe to log.
  */
-export const TEST_RUN_TAG = `integration-test-${randomUUID()}`;
+export const TEST_RUN_TAG = `${TEST_DATA_RECEIPT_PREFIX}${randomUUID()}`;
 
 /** Builds a unique, tagged `razorpay_receipt` / `idempotency_key` value. */
 export function taggedValue(label: string): string {

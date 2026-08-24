@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 import {
-  TEST_RUN_TAG,
+  TEST_DATA_RECEIPT_PREFIX,
   allCreatedAttemptIds,
   allCreatedOrderIds,
 } from "./helpers";
@@ -15,19 +15,40 @@ import {
  * sequential and share `tests/integration/supabase/helpers.ts` module
  * state across every file).
  *
- * This does not perform cleanup itself — every earlier file cleans up its
- * own rows via try/finally (with an afterAll defensive fallback). This
- * file independently RE-VERIFIES, via real service-role SELECTs, that:
- *   - every order/payment_attempt ID this run ever created (the
- *     append-only ledgers in helpers.ts) is actually gone;
- *   - no payment_attempts row tagged with this run's receipt prefix
- *     remains, independent of the local ID ledger;
- *   - the orders and payment_attempts tables are fully empty (the
- *     developer-confirmed pre-existing baseline for this project was 0
- *     rows in all three Phase 1 tables, and nothing else should be
- *     writing to this project concurrently);
- *   - fulfilments count is exactly 0 (Phase 1 must never persist a
- *     fulfilments row, regardless of this run).
+ * **Phase 2B test-gate correction**: this file previously asserted that
+ * the entire `orders`/`payment_attempts` tables were globally empty after
+ * the suite. That assumption broke as soon as the developer's first real
+ * Razorpay Test Mode manual-verification order and its real failed
+ * Attempt #1 began to legitimately persist in the same Supabase project —
+ * by explicit instruction, that row must never be deleted, mutated, or
+ * otherwise treated as test data by any automated test. This file now
+ * proves only that TEST-OWNED data does not leak, never that the tables
+ * are empty:
+ *
+ *   - every order/payment_attempt ID this run's own append-only ledger
+ *     tracked is actually gone (`allCreatedOrderIds`/`allCreatedAttemptIds`
+ *     — a real service-role SELECT, not just trusting each file's own
+ *     cleanup). This is the achievable precision for `orders`: that table
+ *     has no test-tagging column of its own, so a ledger of this run's own
+ *     IDs is the strongest ownership check available without a schema
+ *     change;
+ *   - no `payment_attempts` row anywhere carries the stable
+ *     `integration-test-` receipt prefix any run of this suite has ever
+ *     used (`TEST_DATA_RECEIPT_PREFIX`) — stronger than a ledger check
+ *     alone, since it also catches a leak from a *previous* run, not just
+ *     this one. This can never false-positive against real application
+ *     data: `lib/demo-merchant/service.ts`'s real Razorpay receipt
+ *     generator always produces a `pc_...`-prefixed value, a disjoint
+ *     namespace from `integration-test-...`;
+ *   - `fulfilments` count is exactly 0 — unaffected by this correction.
+ *     No Phase 1/2B code path ever inserts a fulfilments row, real or
+ *     test, so this remains a true global invariant, not a stale
+ *     assumption tied to the absence of manual data.
+ *
+ * Legitimate non-test application data (e.g. the developer's real manual
+ * Razorpay order/attempt) is explicitly NOT required to be absent by any
+ * assertion in this file, and this file never reads, deletes, updates, or
+ * otherwise touches it.
  *
  * No destructive/broad operation (no TRUNCATE, no unscoped DELETE, no
  * migration/reset) is ever performed by this suite.
@@ -63,32 +84,16 @@ describe("Task 8/12 — final end-state verification for this integration run", 
     expect(data).toEqual([]);
   });
 
-  it("no payment_attempts row tagged with this run's receipt prefix remains", async () => {
+  it("no payment_attempts row carrying the stable integration-test receipt prefix remains, from this run or any prior run", async () => {
     const { data, error } = await client
       .from("payment_attempts")
       .select("id")
-      .like("razorpay_receipt", `${TEST_RUN_TAG}%`);
+      .like("razorpay_receipt", `${TEST_DATA_RECEIPT_PREFIX}%`);
     expect(error).toBeNull();
     expect(data).toEqual([]);
   });
 
-  it("orders table is fully empty after this suite", async () => {
-    const { count, error } = await client
-      .from("orders")
-      .select("id", { count: "exact", head: true });
-    expect(error).toBeNull();
-    expect(count).toBe(0);
-  });
-
-  it("payment_attempts table is fully empty after this suite", async () => {
-    const { count, error } = await client
-      .from("payment_attempts")
-      .select("id", { count: "exact", head: true });
-    expect(error).toBeNull();
-    expect(count).toBe(0);
-  });
-
-  it("fulfilments count is exactly 0 (Phase 1 must never persist a fulfilment row)", async () => {
+  it("fulfilments count is exactly 0 (Phase 1/2B must never persist a fulfilment row, real or test)", async () => {
     const { count, error } = await client
       .from("fulfilments")
       .select("id", { count: "exact", head: true });

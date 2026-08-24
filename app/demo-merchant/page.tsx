@@ -9,8 +9,9 @@ import {
 } from "@/lib/demo-merchant/view-model";
 
 import { CreateOrderButton } from "./create-order-button";
+import { CreateRazorpayOrderButton } from "./create-razorpay-order-button";
 
-// Phase 1E Demo Merchant screen.
+// Phase 1E/2B Demo Merchant screen.
 //
 // `force-dynamic` ensures this page always renders server-side against the
 // real, current Supabase state on every request — never a cached/static
@@ -40,7 +41,10 @@ export default async function DemoMerchantPage() {
         <h2 className="text-lg font-semibold text-card-foreground">
           {DEMO_MERCHANT_PRODUCT.name}
         </h2>
-        <p className="mt-1 text-2xl font-semibold text-card-foreground">
+        <p
+          className="mt-1 text-2xl font-semibold text-card-foreground"
+          data-testid="fixed-product-price"
+        >
           {formatAmountForDisplay(
             DEMO_MERCHANT_PRODUCT.amountSubunits,
             DEMO_MERCHANT_PRODUCT.currency,
@@ -124,6 +128,59 @@ export default async function DemoMerchantPage() {
                 <p className="mt-2 text-xs text-muted-foreground">
                   Created: {new Date(order.createdAt).toLocaleString()}
                 </p>
+
+                {order.latestPaymentAttempt && (
+                  <dl className="mt-2 grid grid-cols-1 gap-x-4 gap-y-1 border-t border-border pt-2 text-xs text-muted-foreground sm:grid-cols-2">
+                    <div>
+                      <dt className="inline font-medium">Attempt #: </dt>
+                      <dd className="inline" data-testid="payment-attempt-no">
+                        {order.latestPaymentAttempt.attemptNo}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="inline font-medium">Attempt Status: </dt>
+                      <dd
+                        className="inline"
+                        data-testid="payment-attempt-status"
+                      >
+                        {order.latestPaymentAttempt.status}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="inline font-medium">Razorpay Receipt: </dt>
+                      <dd
+                        className="inline break-all"
+                        data-testid="payment-attempt-receipt"
+                      >
+                        {order.latestPaymentAttempt.razorpayReceipt}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="inline font-medium">
+                        Razorpay Order ID:{" "}
+                      </dt>
+                      <dd
+                        className="inline break-all"
+                        data-testid="payment-attempt-razorpay-order-id"
+                      >
+                        {order.latestPaymentAttempt.razorpayOrderId ?? "—"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="inline font-medium">
+                        Razorpay Order Status:{" "}
+                      </dt>
+                      <dd
+                        className="inline"
+                        data-testid="payment-attempt-razorpay-order-status"
+                      >
+                        {order.latestPaymentAttempt.razorpayOrderStatus ?? "—"}
+                      </dd>
+                    </div>
+                  </dl>
+                )}
+
+                <CreateRazorpayOrderButton orderId={order.id} />
               </li>
             ))}
           </ul>

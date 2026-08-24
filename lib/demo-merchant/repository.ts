@@ -1,17 +1,17 @@
 /**
- * Phase 1E — Demo Merchant server-only persistence boundary.
+ * Phase 1E/2B — Demo Merchant server-only persistence boundary.
  *
  * Structural guarantee: `import "server-only"` (same pattern as
  * `lib/supabase/server.ts` / `lib/config/server-env.ts`) makes a
  * client-bundle import of this module fail at build time rather than
  * relying on review discipline alone.
  *
- * This module is the ONLY place Phase 1E writes/reads `orders` and reads
- * `fulfilments`. It never writes to `payment_attempts` or `fulfilments` —
- * Phase 1 must not insert into either table (docs/DATABASE.md Sections 10,
- * 12). It builds strictly on the existing `getSupabaseServerClient()`
- * helper; it does not create its own Supabase client and does not read
- * `process.env`.
+ * This module is the ONLY place `orders` is written/read and `fulfilments`
+ * is read. Phase 2B adds `payment_attempts` reads/writes here too — Phase 1
+ * never wrote to `payment_attempts`, but Phase 2B's Order-creation flow
+ * legitimately requires it (docs/DATABASE.md Section 10). It builds
+ * strictly on the existing `getSupabaseServerClient()` helper; it does not
+ * create its own Supabase client and does not read `process.env`.
  */
 import "server-only";
 
@@ -77,6 +77,31 @@ export async function insertOrder(input: InsertOrderInput): Promise<OrderRow> {
   return data;
 }
 
+/**
+ * Reads one `orders` row by ID, or `null` if no such order exists. Used by
+ * Phase 2B to load the trusted, authoritative amount/currency for an
+ * existing order before creating a payment attempt against it — the
+ * browser supplies only the order ID, never the money terms.
+ */
+export async function getOrderById(orderId: string): Promise<OrderRow | null> {
+  const client = getSupabaseServerClient();
+
+  const { data, error } = await client
+    .from("orders")
+    .select("*")
+    .eq("id", orderId)
+    .maybeSingle();
+
+  if (error) {
+    throw new DemoMerchantRepositoryError(
+      "ORDER_LOOKUP_FAILED",
+      "Failed to load the Demo Merchant order.",
+    );
+  }
+
+  return data;
+}
+
 /** Reads the most recent `orders` rows, newest first, up to `limit`. */
 export async function listRecentOrders(limit: number): Promise<OrderRow[]> {
   const client = getSupabaseServerClient();
@@ -131,4 +156,182 @@ export async function countFulfilmentsForOrderIds(
   }
 
   return counts;
+}
+
+export type PaymentAttemptRow =
+  Database["public"]["Tables"]["payment_attempts"]["Row"];
+
+/**
+ * Reads the payment attempt with the highest `attempt_no` for an order, or
+ * `null` if the order has none yet. Phase 2B uses this to decide whether an
+ * existing unresolved attempt (status `CREATED`/`FAILED_OBSERVED`) should be
+ * reused — reusing preserves its stable `razorpay_receipt` rather than
+ * generating a new one merely to retry (PAYATT-003/PAYATT-004).
+ */
+export async function getLatestPaymentAttemptForOrder(
+  orderId: string,
+): Promise<PaymentAttemptRow | null> {
+  const client = getSupabaseServerClient();
+
+  const { data, error } = await client
+    .from("payment_attempts")
+    .select("*")
+    .eq("order_id", orderId)
+    .order("attempt_no", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw new DemoMerchantRepositoryError(
+      "PAYMENT_ATTEMPT_LOOKUP_FAILED",
+      "Failed to load payment attempts for this order.",
+    );
+  }
+
+  return data;
+}
+
+/**
+ * Real server-side lookup of each order's most recent `payment_attempts`
+ * row, grouped by `order_id` — never hardcoded, never guessed. Mirrors
+ * `countFulfilmentsForOrderIds`'s batch-lookup shape.
+ */
+export async function listLatestPaymentAttemptsForOrderIds(
+  orderIds: readonly string[],
+): Promise<Map<string, PaymentAttemptRow>> {
+  const latestByOrderId = new Map<string, PaymentAttemptRow>();
+  if (orderIds.length === 0) return latestByOrderId;
+
+  const client = getSupabaseServerClient();
+
+  const { data, error } = await client
+    .from("payment_attempts")
+    .select("*")
+    .in("order_id", [...orderIds])
+    .order("attempt_no", { ascending: false });
+
+  if (error) {
+    throw new DemoMerchantRepositoryError(
+      "PAYMENT_ATTEMPT_LOOKUP_FAILED",
+      "Failed to load payment attempts for these orders.",
+    );
+  }
+
+  // Rows arrive ordered by attempt_no descending, so the first row seen for
+  // a given order_id is that order's latest attempt.
+  for (const row of data ?? []) {
+    if (!latestByOrderId.has(row.order_id)) {
+      latestByOrderId.set(row.order_id, row);
+    }
+  }
+
+  return latestByOrderId;
+}
+
+export interface InsertPaymentAttemptInput {
+  readonly orderId: string;
+  readonly attemptNo: number;
+  readonly amountSubunits: number;
+  readonly currency: string;
+  readonly razorpayReceipt: string;
+}
+
+/**
+ * Inserts one new `payment_attempts` row. Deliberately accepts no
+ * `razorpay_order_id`/`razorpay_order_status`/`status` field — every new
+ * attempt starts `status = 'CREATED'` (the database default) with both
+ * Razorpay correlation columns `NULL`, exactly like `insertOrder` accepts
+ * only `amountSubunits`/`currency`.
+ */
+export async function insertPaymentAttempt(
+  input: InsertPaymentAttemptInput,
+): Promise<PaymentAttemptRow> {
+  const client = getSupabaseServerClient();
+
+  const { data, error } = await client
+    .from("payment_attempts")
+    .insert({
+      order_id: input.orderId,
+      attempt_no: input.attemptNo,
+      amount_subunits: input.amountSubunits,
+      currency: input.currency,
+      razorpay_receipt: input.razorpayReceipt,
+    })
+    .select()
+    .single();
+
+  if (error || !data) {
+    throw new DemoMerchantRepositoryError(
+      "PAYMENT_ATTEMPT_INSERT_FAILED",
+      "Failed to create the payment attempt.",
+    );
+  }
+
+  return data;
+}
+
+export interface MarkPaymentAttemptOrderCreatedInput {
+  readonly razorpayOrderId: string;
+  readonly razorpayOrderStatus: string;
+}
+
+/**
+ * Persists a successful Razorpay Order-creation result and transitions the
+ * attempt from `CREATED` to `ORDER_CREATED` in the same update — this is
+ * the ONLY place `payment_attempts.status` becomes `ORDER_CREATED`, and it
+ * is only called after the Razorpay adapter has already returned a trusted
+ * result (PAYATT-005).
+ */
+export async function markPaymentAttemptOrderCreated(
+  attemptId: string,
+  input: MarkPaymentAttemptOrderCreatedInput,
+): Promise<PaymentAttemptRow> {
+  const client = getSupabaseServerClient();
+
+  const { data, error } = await client
+    .from("payment_attempts")
+    .update({
+      status: "ORDER_CREATED",
+      razorpay_order_id: input.razorpayOrderId,
+      razorpay_order_status: input.razorpayOrderStatus,
+    })
+    .eq("id", attemptId)
+    .select()
+    .single();
+
+  if (error || !data) {
+    throw new DemoMerchantRepositoryError(
+      "PAYMENT_ATTEMPT_UPDATE_FAILED",
+      "Failed to persist the Razorpay Order correlation.",
+    );
+  }
+
+  return data;
+}
+
+/**
+ * Records a definite Razorpay Order-creation rejection. Leaves
+ * `razorpay_order_id`/`razorpay_order_status` untouched (`NULL`) — a
+ * rejection never fabricates a Razorpay Order ID.
+ */
+export async function markPaymentAttemptFailedObserved(
+  attemptId: string,
+): Promise<PaymentAttemptRow> {
+  const client = getSupabaseServerClient();
+
+  const { data, error } = await client
+    .from("payment_attempts")
+    .update({ status: "FAILED_OBSERVED" })
+    .eq("id", attemptId)
+    .select()
+    .single();
+
+  if (error || !data) {
+    throw new DemoMerchantRepositoryError(
+      "PAYMENT_ATTEMPT_UPDATE_FAILED",
+      "Failed to record the payment attempt failure.",
+    );
+  }
+
+  return data;
 }

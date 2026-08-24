@@ -4,13 +4,16 @@ import {
   formatAmountForDisplay,
   formatConceptualState,
   toDemoMerchantOrderViewModel,
+  toPaymentAttemptViewModel,
 } from "@/lib/demo-merchant/view-model";
 import type { Database } from "@/lib/supabase/types";
 
-// Phase 1E: pure DB-row -> view-model mapping and display formatting — no
-// Supabase/network — fully offline.
+// Phase 1E/2B: pure DB-row -> view-model mapping and display formatting —
+// no Supabase/network — fully offline.
 
 type OrderRow = Database["public"]["Tables"]["orders"]["Row"];
+type PaymentAttemptRow =
+  Database["public"]["Tables"]["payment_attempts"]["Row"];
 
 function row(overrides: Partial<OrderRow> = {}): OrderRow {
   return {
@@ -19,6 +22,25 @@ function row(overrides: Partial<OrderRow> = {}): OrderRow {
     currency: "INR",
     payment_status: "UNPAID",
     business_status: "OPEN",
+    created_at: "2026-01-01T00:00:00.000Z",
+    updated_at: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function attemptRow(
+  overrides: Partial<PaymentAttemptRow> = {},
+): PaymentAttemptRow {
+  return {
+    id: "attempt-1",
+    order_id: "11111111-1111-1111-1111-111111111111",
+    attempt_no: 1,
+    amount_subunits: 50000,
+    currency: "INR",
+    status: "CREATED",
+    razorpay_receipt: "receipt-1",
+    razorpay_order_id: null,
+    razorpay_order_status: null,
     created_at: "2026-01-01T00:00:00.000Z",
     updated_at: "2026-01-01T00:00:00.000Z",
     ...overrides,
@@ -40,7 +62,7 @@ describe("formatAmountForDisplay", () => {
 });
 
 describe("toDemoMerchantOrderViewModel", () => {
-  it("maps a fresh UNPAID/OPEN row with 0 fulfilments to conceptualState=CREATED", () => {
+  it("maps a fresh UNPAID/OPEN row with 0 fulfilments to conceptualState=CREATED, latestPaymentAttempt=null by default", () => {
     const vm = toDemoMerchantOrderViewModel(row(), 0);
 
     expect(vm).toEqual({
@@ -52,6 +74,7 @@ describe("toDemoMerchantOrderViewModel", () => {
       fulfilmentCount: 0,
       conceptualState: "CREATED",
       createdAt: "2026-01-01T00:00:00.000Z",
+      latestPaymentAttempt: null,
     });
   });
 
@@ -67,6 +90,52 @@ describe("toDemoMerchantOrderViewModel", () => {
     expect(() =>
       toDemoMerchantOrderViewModel(row({ business_status: "FULFILLED" }), 1),
     ).toThrow();
+  });
+
+  it("maps the latest payment attempt row when one is supplied", () => {
+    const vm = toDemoMerchantOrderViewModel(row(), 0, attemptRow());
+    expect(vm.latestPaymentAttempt).toEqual({
+      id: "attempt-1",
+      orderId: "11111111-1111-1111-1111-111111111111",
+      attemptNo: 1,
+      amountSubunits: 50000,
+      currency: "INR",
+      status: "CREATED",
+      razorpayReceipt: "receipt-1",
+      razorpayOrderId: null,
+      razorpayOrderStatus: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+  });
+});
+
+describe("toPaymentAttemptViewModel", () => {
+  it("maps every field, including Razorpay correlation fields when present", () => {
+    const vm = toPaymentAttemptViewModel(
+      attemptRow({
+        status: "ORDER_CREATED",
+        razorpay_order_id: "order_fake_id",
+        razorpay_order_status: "created",
+      }),
+    );
+    expect(vm).toEqual({
+      id: "attempt-1",
+      orderId: "11111111-1111-1111-1111-111111111111",
+      attemptNo: 1,
+      amountSubunits: 50000,
+      currency: "INR",
+      status: "ORDER_CREATED",
+      razorpayReceipt: "receipt-1",
+      razorpayOrderId: "order_fake_id",
+      razorpayOrderStatus: "created",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+  });
+
+  it("maps null Razorpay correlation fields as null (never fabricated)", () => {
+    const vm = toPaymentAttemptViewModel(attemptRow());
+    expect(vm.razorpayOrderId).toBeNull();
+    expect(vm.razorpayOrderStatus).toBeNull();
   });
 });
 

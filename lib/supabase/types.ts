@@ -1,9 +1,12 @@
 /**
- * Phase 1C-A — minimal Supabase `Database` type.
+ * Phase 1C-A/2B — minimal Supabase `Database` type.
  *
  * Scoped EXACTLY to the three tables the approved Phase 1 migration creates
  * (`orders`, `payment_attempts`, `fulfilments` — see docs/DATABASE.md
- * Sections 9/10/12 and supabase/migrations/20260823000000_phase1_foundation_schema.sql).
+ * Sections 9/10/12 and supabase/migrations/20260823000000_phase1_foundation_schema.sql),
+ * plus the Phase 2B additive `payment_attempts.razorpay_order_id` /
+ * `razorpay_order_status` columns
+ * (supabase/migrations/20260824000000_phase2b_payment_attempts_razorpay_correlation.sql).
  *
  * Do NOT add Phase 2+ tables here (`payments`, `webhook_events`,
  * `event_processing_attempts`, `chaos_runs`, `invariant_results`,
@@ -74,6 +77,8 @@ export interface Database {
           currency: string;
           status: PaymentAttemptStatus;
           razorpay_receipt: string;
+          razorpay_order_id: string | null;
+          razorpay_order_status: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -85,6 +90,8 @@ export interface Database {
           currency?: string;
           status?: PaymentAttemptStatus;
           razorpay_receipt: string;
+          razorpay_order_id?: string | null;
+          razorpay_order_status?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -96,6 +103,8 @@ export interface Database {
           currency?: string;
           status?: PaymentAttemptStatus;
           razorpay_receipt?: string;
+          razorpay_order_id?: string | null;
+          razorpay_order_status?: string | null;
           created_at?: string;
           updated_at?: string;
         };

@@ -17,16 +17,40 @@ import { getE2ETestServiceRoleClient } from "./support/service-role-client";
 test("Demo Merchant: fixed product, create internal order, persisted UNPAID/OPEN/0/CREATED state, no Razorpay Checkout UI", async ({
   page,
 }) => {
+  // Per-test timeout override only (Phase 2B test-gate correction) — not a
+  // change to playwright.config.ts's global test timeout. This machine's
+  // current, already-documented severe memory pressure has been observed to
+  // push the cold-compile navigation plus the order-creation round trip
+  // beyond the default 30s test budget; 60s gives this specific real-DB,
+  // real-navigation test enough room without loosening any other spec.
+  test.setTimeout(60_000);
+
   let createdOrderId: string | undefined;
 
   try {
     await page.goto("/");
     await page.getByRole("link", { name: /demo merchant/i }).click();
-    await expect(page).toHaveURL(/\/demo-merchant$/);
+    // Extended timeout (Phase 2B test-gate correction): this is the first
+    // ever navigation to /demo-merchant in this webServer process, so
+    // Next.js dev mode must compile that route on demand. Under this
+    // environment's already-documented low-memory conditions that cold
+    // compile can exceed Playwright's default 5000ms assertion timeout even
+    // though the navigation itself is correct — a hidden timing assumption,
+    // not a product defect. No other assertion in this suite waits on a
+    // route's first-ever compile, so this override is scoped to this line
+    // only.
+    await expect(page).toHaveURL(/\/demo-merchant$/, { timeout: 20_000 });
 
-    // Fixed product is shown.
+    // Fixed product is shown. Scoped to the fixed product card's own
+    // testid (Phase 2B test-gate correction): a plain text locator for
+    // "₹500.00" becomes ambiguous once a historical order of the same
+    // fixed amount appears in "Recent Internal Orders" — which the Demo
+    // Merchant is expected to accumulate over time, including real
+    // manual-verification orders that must never be deleted by this test.
     await expect(page.getByText("PayChaos Test Product")).toBeVisible();
-    await expect(page.getByText("₹500.00")).toBeVisible();
+    await expect(page.getByTestId("fixed-product-price")).toContainText(
+      "₹500.00",
+    );
 
     // Test Mode messaging + explicit "not connected yet" statement.
     await expect(page.getByText(/Razorpay Test Mode/i).first()).toBeVisible();
@@ -46,13 +70,33 @@ test("Demo Merchant: fixed product, create internal order, persisted UNPAID/OPEN
       page.getByRole("button", { name: /simulate payment/i }),
     ).toHaveCount(0);
 
-    // Create an internal order.
+    // Create an internal order. Capture whichever order (if any) is
+    // currently first BEFORE clicking (Phase 2B test-gate correction): once
+    // "Recent Internal Orders" is non-empty — which is now the normal,
+    // expected long-term state, not a corner case — `.first()` right after
+    // the click cannot be trusted as "the order I just created" the instant
+    // it becomes visible. The click's server action still has to revalidate
+    // and re-render the list, and under a slow/cold dev-mode compile that
+    // render can briefly still show the previously-first order. Waiting for
+    // the first order-id to actually change (or simply appear, if the list
+    // was empty) is the real signal that the new order has arrived.
+    const orderIdLocator = page.getByTestId("order-id").first();
+    const previousFirstOrderId =
+      (await orderIdLocator.count()) > 0
+        ? (await orderIdLocator.innerText()).trim()
+        : null;
+
     await page
       .getByRole("button", { name: /create internal test order/i })
       .click();
 
-    const orderIdLocator = page.getByTestId("order-id").first();
-    await expect(orderIdLocator).toBeVisible();
+    if (previousFirstOrderId) {
+      await expect(orderIdLocator).not.toHaveText(previousFirstOrderId, {
+        timeout: 40_000,
+      });
+    } else {
+      await expect(orderIdLocator).toBeVisible({ timeout: 40_000 });
+    }
     createdOrderId = (await orderIdLocator.innerText()).trim();
     expect(createdOrderId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
