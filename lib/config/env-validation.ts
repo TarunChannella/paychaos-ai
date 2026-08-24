@@ -83,3 +83,55 @@ export function requireHttpUrl(
 
   return nonEmpty;
 }
+
+/**
+ * Requires a non-empty string that equals `expected` exactly.
+ *
+ * Used for explicit safety-guard flags where any other value must fail
+ * closed rather than silently pass through (e.g. `RAZORPAY_MODE` must
+ * equal `"test"` — Phase 2A, docs/SECURITY.md Section 19 Control 1). The
+ * error message names the required value but never the (rejected) supplied
+ * value.
+ */
+export function requireExactValue(
+  name: string,
+  value: string | undefined,
+  expected: string,
+): string {
+  const nonEmpty = requireNonEmptyString(name, value);
+
+  if (nonEmpty !== expected) {
+    throw new EnvValidationError(
+      name,
+      `Environment variable ${name} must equal "${expected}"`,
+    );
+  }
+
+  return nonEmpty;
+}
+
+/**
+ * Requires a non-empty string that starts with `prefix`.
+ *
+ * Used for Razorpay's Test Mode Key ID contract (`rzp_test_` — Phase 2A,
+ * docs/RAZORPAY_GUIDE.md Step 4, docs/SECURITY.md RZP-CRED-003): any other
+ * prefix, including `rzp_live_`, is rejected fail-closed. The error
+ * message names the required prefix but never the (rejected) supplied
+ * value.
+ */
+export function requirePrefixedString(
+  name: string,
+  value: string | undefined,
+  prefix: string,
+): string {
+  const nonEmpty = requireNonEmptyString(name, value);
+
+  if (!nonEmpty.startsWith(prefix)) {
+    throw new EnvValidationError(
+      name,
+      `Environment variable ${name} must start with "${prefix}"`,
+    );
+  }
+
+  return nonEmpty;
+}

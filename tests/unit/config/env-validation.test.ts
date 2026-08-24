@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   EnvValidationError,
+  requireExactValue,
   requireHttpUrl,
   requireNonEmptyString,
+  requirePrefixedString,
 } from "@/lib/config/env-validation";
 
 // Phase 1B: the shared, value-free validation primitives used by both
@@ -98,6 +100,95 @@ describe("requireHttpUrl", () => {
     } catch (err) {
       expect((err as EnvValidationError).message).toContain("MY_URL_VAR");
       expect((err as EnvValidationError).message).not.toContain(malformed);
+    }
+  });
+});
+
+// Phase 2A: shared validators added for RAZORPAY_MODE / RAZORPAY_KEY_ID.
+// Tested directly with obviously-fake values only.
+describe("requireExactValue", () => {
+  it("returns the value when it exactly matches the expected value", () => {
+    expect(requireExactValue("SOME_FLAG", "test", "test")).toBe("test");
+  });
+
+  it("rejects a missing value", () => {
+    expect(() => requireExactValue("SOME_FLAG", undefined, "test")).toThrow(
+      EnvValidationError,
+    );
+  });
+
+  it("rejects an empty value", () => {
+    expect(() => requireExactValue("SOME_FLAG", "", "test")).toThrow(
+      EnvValidationError,
+    );
+  });
+
+  it("rejects a value that does not exactly match", () => {
+    expect(() => requireExactValue("SOME_FLAG", "live", "test")).toThrow(
+      EnvValidationError,
+    );
+  });
+
+  it("rejects a value that only partially matches (case/whitespace)", () => {
+    expect(() => requireExactValue("SOME_FLAG", "Test", "test")).toThrow(
+      EnvValidationError,
+    );
+    expect(() => requireExactValue("SOME_FLAG", " test", "test")).toThrow(
+      EnvValidationError,
+    );
+  });
+
+  it("error message names the variable but never the rejected value", () => {
+    const rejected = "definitely-not-test-should-not-leak";
+    try {
+      requireExactValue("MY_FLAG_VAR", rejected, "test");
+      throw new Error("expected requireExactValue to throw");
+    } catch (err) {
+      expect((err as EnvValidationError).message).toContain("MY_FLAG_VAR");
+      expect((err as EnvValidationError).message).not.toContain(rejected);
+    }
+  });
+});
+
+describe("requirePrefixedString", () => {
+  it("returns the value when it starts with the required prefix", () => {
+    expect(
+      requirePrefixedString("SOME_ID", "rzp_test_abc123", "rzp_test_"),
+    ).toBe("rzp_test_abc123");
+  });
+
+  it("rejects a missing value", () => {
+    expect(() =>
+      requirePrefixedString("SOME_ID", undefined, "rzp_test_"),
+    ).toThrow(EnvValidationError);
+  });
+
+  it("rejects an empty value", () => {
+    expect(() => requirePrefixedString("SOME_ID", "", "rzp_test_")).toThrow(
+      EnvValidationError,
+    );
+  });
+
+  it("rejects a value with a different prefix (e.g. a Live Mode key)", () => {
+    expect(() =>
+      requirePrefixedString("SOME_ID", "rzp_live_abc123", "rzp_test_"),
+    ).toThrow(EnvValidationError);
+  });
+
+  it("rejects a value with no recognizable prefix at all", () => {
+    expect(() =>
+      requirePrefixedString("SOME_ID", "not-a-razorpay-key", "rzp_test_"),
+    ).toThrow(EnvValidationError);
+  });
+
+  it("error message names the variable but never the rejected value", () => {
+    const rejected = "rzp_live_should-not-leak-987654";
+    try {
+      requirePrefixedString("MY_ID_VAR", rejected, "rzp_test_");
+      throw new Error("expected requirePrefixedString to throw");
+    } catch (err) {
+      expect((err as EnvValidationError).message).toContain("MY_ID_VAR");
+      expect((err as EnvValidationError).message).not.toContain(rejected);
     }
   });
 });

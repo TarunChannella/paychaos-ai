@@ -10,29 +10,32 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // tests/unit/config/server-env.test.ts for the identical rationale.
 vi.mock("server-only", () => ({}));
 
-// Phase 1B ENV-006 verification: proves instrumentation.ts's `register()`
-// actually performs fail-closed startup validation (not just lazy
-// validate-on-call), per docs/SECURITY.md ENV-006/ENV-007.
+// Phase 1B/2A ENV-006 verification: proves instrumentation.ts's
+// `register()` actually performs fail-closed startup validation (not just
+// lazy validate-on-call), per docs/SECURITY.md ENV-006/ENV-007.
 //
 // Next.js invokes `register()` once when a server instance boots; if it
 // throws, the server fails to start. These tests call `register()`
 // directly (the same exported function Next.js calls) against a freshly
 // reset module graph so each case gets its own uncached
-// getClientEnv()/getServerEnv() singleton.
+// getClientEnv()/getServerEnv()/getRazorpayEnv() singleton.
 
-const PHASE_1B_ENV_KEYS = [
+const TRACKED_ENV_KEYS = [
   "NEXT_PUBLIC_SUPABASE_URL",
   "NEXT_PUBLIC_SUPABASE_ANON_KEY",
   "SUPABASE_SERVICE_ROLE_KEY",
+  "RAZORPAY_MODE",
+  "RAZORPAY_KEY_ID",
+  "RAZORPAY_KEY_SECRET",
   "NEXT_RUNTIME",
 ] as const;
 
-type Phase1bEnvKey = (typeof PHASE_1B_ENV_KEYS)[number];
-type EnvSnapshot = Partial<Record<Phase1bEnvKey, string>>;
+type TrackedEnvKey = (typeof TRACKED_ENV_KEYS)[number];
+type EnvSnapshot = Partial<Record<TrackedEnvKey, string>>;
 
 function snapshotEnv(): EnvSnapshot {
   const snapshot: EnvSnapshot = {};
-  for (const key of PHASE_1B_ENV_KEYS) {
+  for (const key of TRACKED_ENV_KEYS) {
     const value = process.env[key];
     if (value !== undefined) {
       snapshot[key] = value;
@@ -41,15 +44,15 @@ function snapshotEnv(): EnvSnapshot {
   return snapshot;
 }
 
-function clearPhase1bEnv(): void {
-  for (const key of PHASE_1B_ENV_KEYS) {
+function clearTrackedEnv(): void {
+  for (const key of TRACKED_ENV_KEYS) {
     delete process.env[key];
   }
 }
 
 function restoreEnv(snapshot: EnvSnapshot): void {
-  clearPhase1bEnv();
-  for (const key of PHASE_1B_ENV_KEYS) {
+  clearTrackedEnv();
+  for (const key of TRACKED_ENV_KEYS) {
     const value = snapshot[key];
     if (value !== undefined) {
       process.env[key] = value;
@@ -57,12 +60,18 @@ function restoreEnv(snapshot: EnvSnapshot): void {
   }
 }
 
+function setFakeValidRazorpayEnv(): void {
+  process.env.RAZORPAY_MODE = "test";
+  process.env.RAZORPAY_KEY_ID = "rzp_test_fake_key_id_not_real";
+  process.env.RAZORPAY_KEY_SECRET = "fake-razorpay-key-secret-not-real";
+}
+
 let originalEnv: EnvSnapshot;
 
 beforeEach(() => {
   originalEnv = snapshotEnv();
-  clearPhase1bEnv();
-  // instrumentation.ts only runs Phase 1B validation on the Node.js
+  clearTrackedEnv();
+  // instrumentation.ts only runs Node-only validation on the Node.js
   // runtime (see its NEXT_RUNTIME guard); the default runtime Next.js
   // uses for this app is "nodejs".
   process.env.NEXT_RUNTIME = "nodejs";
@@ -75,10 +84,11 @@ afterEach(() => {
 });
 
 describe("instrumentation.ts register() — startup validation (ENV-006)", () => {
-  it("A: startup succeeds with fake valid Phase 1B variables", async () => {
+  it("A: startup succeeds with fake valid Phase 1B + Phase 2A variables", async () => {
     process.env.NEXT_PUBLIC_SUPABASE_URL = "https://fake-project.supabase.co";
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "fake-anon-key-not-real";
     process.env.SUPABASE_SERVICE_ROLE_KEY = "fake-service-role-key-not-real";
+    setFakeValidRazorpayEnv();
 
     const { register } = await import("@/instrumentation");
     await expect(register()).resolves.toBeUndefined();
@@ -88,6 +98,7 @@ describe("instrumentation.ts register() — startup validation (ENV-006)", () =>
     process.env.NEXT_PUBLIC_SUPABASE_URL = "https://fake-project.supabase.co";
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "fake-anon-key-not-real";
     // SUPABASE_SERVICE_ROLE_KEY intentionally left unset.
+    setFakeValidRazorpayEnv();
 
     const { register } = await import("@/instrumentation");
     await expect(register()).rejects.toThrow(/SUPABASE_SERVICE_ROLE_KEY/);
@@ -97,6 +108,7 @@ describe("instrumentation.ts register() — startup validation (ENV-006)", () =>
     process.env.NEXT_PUBLIC_SUPABASE_URL = "not-a-valid-url";
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "fake-anon-key-not-real";
     process.env.SUPABASE_SERVICE_ROLE_KEY = "fake-service-role-key-not-real";
+    setFakeValidRazorpayEnv();
 
     const { register } = await import("@/instrumentation");
     await expect(register()).rejects.toThrow(/NEXT_PUBLIC_SUPABASE_URL/);
@@ -107,6 +119,7 @@ describe("instrumentation.ts register() — startup validation (ENV-006)", () =>
     process.env.NEXT_PUBLIC_SUPABASE_URL = malformedValue;
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "fake-anon-key-not-real";
     process.env.SUPABASE_SERVICE_ROLE_KEY = "fake-service-role-key-not-real";
+    setFakeValidRazorpayEnv();
 
     const { register } = await import("@/instrumentation");
     try {
@@ -117,12 +130,68 @@ describe("instrumentation.ts register() — startup validation (ENV-006)", () =>
     }
   });
 
-  it("does not run Node-only Phase 1B validation on a non-Node runtime", async () => {
+  it("does not run Node-only startup validation on a non-Node runtime", async () => {
     process.env.NEXT_RUNTIME = "edge";
-    // All three Phase 1B variables intentionally left unset — if the
-    // NEXT_RUNTIME guard were broken, register() would throw here too.
+    // All tracked variables intentionally left unset — if the NEXT_RUNTIME
+    // guard were broken, register() would throw here too.
 
     const { register } = await import("@/instrumentation");
     await expect(register()).resolves.toBeUndefined();
+  });
+
+  it("E: startup fails closed when RAZORPAY_MODE is missing", async () => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://fake-project.supabase.co";
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "fake-anon-key-not-real";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "fake-service-role-key-not-real";
+    process.env.RAZORPAY_KEY_ID = "rzp_test_fake_key_id_not_real";
+    process.env.RAZORPAY_KEY_SECRET = "fake-razorpay-key-secret-not-real";
+    // RAZORPAY_MODE intentionally left unset.
+
+    const { register } = await import("@/instrumentation");
+    await expect(register()).rejects.toThrow(/RAZORPAY_MODE/);
+  });
+
+  it("F: startup fails closed when RAZORPAY_KEY_ID is a fake Live Mode key", async () => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://fake-project.supabase.co";
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "fake-anon-key-not-real";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "fake-service-role-key-not-real";
+    process.env.RAZORPAY_MODE = "test";
+    process.env.RAZORPAY_KEY_ID = "rzp_live_fake_live_key_not_real";
+    process.env.RAZORPAY_KEY_SECRET = "fake-razorpay-key-secret-not-real";
+
+    const { register } = await import("@/instrumentation");
+    await expect(register()).rejects.toThrow(/RAZORPAY_KEY_ID/);
+  });
+
+  it("G: startup fails closed when RAZORPAY_KEY_SECRET is missing", async () => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://fake-project.supabase.co";
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "fake-anon-key-not-real";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "fake-service-role-key-not-real";
+    process.env.RAZORPAY_MODE = "test";
+    process.env.RAZORPAY_KEY_ID = "rzp_test_fake_key_id_not_real";
+    // RAZORPAY_KEY_SECRET intentionally left unset.
+
+    const { register } = await import("@/instrumentation");
+    await expect(register()).rejects.toThrow(/RAZORPAY_KEY_SECRET/);
+  });
+
+  it("H: the fake Razorpay Key Secret never appears in a resulting error", async () => {
+    const fakeKeySecret = "fake-razorpay-key-secret-leak-check-24680";
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://fake-project.supabase.co";
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "fake-anon-key-not-real";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "fake-service-role-key-not-real";
+    process.env.RAZORPAY_MODE = "test";
+    // An invalid (Live Mode) Key ID trips validation before any log/report
+    // could reflect the Key Secret; this proves it never leaks either way.
+    process.env.RAZORPAY_KEY_ID = "rzp_live_fake_live_key_not_real";
+    process.env.RAZORPAY_KEY_SECRET = fakeKeySecret;
+
+    const { register } = await import("@/instrumentation");
+    try {
+      await register();
+      throw new Error("expected register() to throw");
+    } catch (err) {
+      expect((err as Error).message).not.toContain(fakeKeySecret);
+    }
   });
 });
