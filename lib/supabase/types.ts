@@ -1,5 +1,5 @@
 /**
- * Phase 1C-A/2B/2C — minimal Supabase `Database` type.
+ * Phase 1C-A/2B/2C/2D — minimal Supabase `Database` type.
  *
  * Scoped EXACTLY to the tables that exist after the approved Phase 1
  * migration (`orders`, `payment_attempts`, `fulfilments` — see
@@ -8,13 +8,14 @@
  * Phase 2B additive `payment_attempts.razorpay_order_id` /
  * `razorpay_order_status` columns
  * (supabase/migrations/20260824000000_phase2b_payment_attempts_razorpay_correlation.sql),
- * and the Phase 2C additive `payments` table
- * (supabase/migrations/20260825000000_phase2c_payments.sql).
+ * the Phase 2C additive `payments` table
+ * (supabase/migrations/20260825000000_phase2c_payments.sql), and the
+ * Phase 2D additive `webhook_events` table
+ * (supabase/migrations/20260826000000_phase2d_webhook_events.sql).
  *
- * Do NOT add Phase 2D+ tables here (`webhook_events`,
- * `event_processing_attempts`, `chaos_runs`, `invariant_results`,
- * `findings`, `regression_runs`) — those are created and typed by the
- * phases that own them.
+ * Do NOT add Phase 2E+ tables here (`event_processing_attempts`,
+ * `chaos_runs`, `invariant_results`, `findings`, `regression_runs`) —
+ * those are created and typed by the phases that own them.
  *
  * `fulfilments` intentionally has no `payment_id` /
  * `trigger_processing_attempt_id` fields here — those columns do not exist
@@ -191,6 +192,92 @@ export interface Database {
             columns: ["payment_attempt_id"];
             isOneToOne: false;
             referencedRelation: "payment_attempts";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      webhook_events: {
+        Row: {
+          id: string;
+          razorpay_event_id: string;
+          event_type: string;
+          source_kind: "REAL_RAZORPAY_WEBHOOK";
+          razorpay_order_id: string | null;
+          razorpay_payment_id: string | null;
+          payment_attempt_id: string | null;
+          payment_id: string | null;
+          signature_verified: boolean;
+          received_at: string;
+          provider_created_at: string | null;
+          amount_subunits: number | null;
+          currency: string | null;
+          razorpay_payment_status: string | null;
+          raw_body_sha256: string;
+          raw_payload_redacted: Record<string, unknown>;
+          processing_status: "RECEIVED" | "PROCESSING" | "PROCESSED" | "FAILED";
+          processed_at: string | null;
+          duplicate_delivery_count: number;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          razorpay_event_id: string;
+          event_type: string;
+          source_kind?: "REAL_RAZORPAY_WEBHOOK";
+          razorpay_order_id?: string | null;
+          razorpay_payment_id?: string | null;
+          payment_attempt_id?: string | null;
+          payment_id?: string | null;
+          signature_verified: boolean;
+          received_at?: string;
+          provider_created_at?: string | null;
+          amount_subunits?: number | null;
+          currency?: string | null;
+          razorpay_payment_status?: string | null;
+          raw_body_sha256: string;
+          raw_payload_redacted?: Record<string, unknown>;
+          processing_status?:
+            "RECEIVED" | "PROCESSING" | "PROCESSED" | "FAILED";
+          processed_at?: string | null;
+          duplicate_delivery_count?: number;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          razorpay_event_id?: string;
+          event_type?: string;
+          source_kind?: "REAL_RAZORPAY_WEBHOOK";
+          razorpay_order_id?: string | null;
+          razorpay_payment_id?: string | null;
+          payment_attempt_id?: string | null;
+          payment_id?: string | null;
+          signature_verified?: boolean;
+          received_at?: string;
+          provider_created_at?: string | null;
+          amount_subunits?: number | null;
+          currency?: string | null;
+          razorpay_payment_status?: string | null;
+          raw_body_sha256?: string;
+          raw_payload_redacted?: Record<string, unknown>;
+          processing_status?:
+            "RECEIVED" | "PROCESSING" | "PROCESSED" | "FAILED";
+          processed_at?: string | null;
+          duplicate_delivery_count?: number;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "webhook_events_payment_attempt_id_fkey";
+            columns: ["payment_attempt_id"];
+            isOneToOne: false;
+            referencedRelation: "payment_attempts";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "webhook_events_payment_id_fkey";
+            columns: ["payment_id"];
+            isOneToOne: false;
+            referencedRelation: "payments";
             referencedColumns: ["id"];
           },
         ];

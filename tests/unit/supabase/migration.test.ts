@@ -51,29 +51,29 @@ describe("Phase 1C-A migration file exists (#4)", () => {
   });
 });
 
-describe("Migration set creates exactly the approved Phase 1 + Phase 2B + Phase 2C tables (#5, #6, #7)", () => {
+describe("Migration set creates exactly the approved Phase 1 + Phase 2B + Phase 2C + Phase 2D tables (#5, #6, #7)", () => {
   const tableNames = extractCreateTableNames(combinedSql);
 
   // Phase 1 created orders/payment_attempts/fulfilments (#5-#7). Phase 2B
   // was purely additive-columns (no new CREATE TABLE). Phase 2C legitimately
   // adds `payments` via its own additive migration
   // (supabase/migrations/20260825000000_phase2c_payments.sql,
-  // docs/DATABASE.md Section 11) — this is the current approved cumulative
+  // docs/DATABASE.md Section 11). Phase 2D legitimately adds
+  // `webhook_events` via its own additive migration
+  // (supabase/migrations/20260826000000_phase2d_webhook_events.sql,
+  // docs/DATABASE.md Section 13) — this is the current approved cumulative
   // table set, not a Phase 1 boundary violation.
-  it("creates orders, payment_attempts, payments, fulfilments and nothing else", () => {
+  it("creates orders, payment_attempts, payments, fulfilments, webhook_events and nothing else", () => {
     expect([...tableNames].sort()).toEqual([
       "fulfilments",
       "orders",
       "payment_attempts",
       "payments",
+      "webhook_events",
     ]);
   });
 
-  it("does not create webhook_events", () => {
-    expect(tableNames).not.toContain("webhook_events");
-  });
-
-  it("does not create any other Phase 2+/3+/4+ table", () => {
+  it("does not create any other Phase 2E+/3+/4+ table", () => {
     const forbidden = [
       "event_processing_attempts",
       "chaos_runs",
@@ -195,12 +195,13 @@ describe("Phase 1C-A required foreign keys (#12)", () => {
   });
 });
 
-describe("Phase 1C-A/2C RLS is explicitly enabled on all 4 tables (#13)", () => {
+describe("Phase 1C-A/2C/2D RLS is explicitly enabled on all 5 tables (#13)", () => {
   for (const table of [
     "orders",
     "payment_attempts",
     "payments",
     "fulfilments",
+    "webhook_events",
   ]) {
     it(`ALTER TABLE public.${table} ENABLE ROW LEVEL SECURITY is present`, () => {
       const re = new RegExp(
@@ -222,7 +223,7 @@ describe("Phase 1C-A no permissive anon/authenticated policy (#14)", () => {
     expect(combinedSql).not.toMatch(/grant[^;]*\bto\s+authenticated\b/i);
   });
 
-  it("every GRANT targets only service_role, and only the 4 approved tables", () => {
+  it("every GRANT targets only service_role, and only the 5 approved tables", () => {
     const grantLines = combinedSql
       .split("\n")
       .filter((line) => /^\s*grant\s/i.test(line));
@@ -230,7 +231,7 @@ describe("Phase 1C-A no permissive anon/authenticated policy (#14)", () => {
     for (const line of grantLines) {
       expect(line).toMatch(/to service_role/i);
       expect(line).toMatch(
-        /public\.(orders|payment_attempts|payments|fulfilments)/i,
+        /public\.(orders|payment_attempts|payments|fulfilments|webhook_events)/i,
       );
     }
   });
@@ -266,13 +267,13 @@ describe("Phase 1C-A correction — no unnecessary pgcrypto extension", () => {
     expect(combinedSql).not.toMatch(/create extension[^;]*pgcrypto/i);
   });
 
-  it("gen_random_uuid() remains the UUID default for all four tables", () => {
+  it("gen_random_uuid() remains the UUID default for all five tables", () => {
     const occurrences = [
       ...combinedSql.matchAll(
         /id uuid primary key default gen_random_uuid\(\)/gi,
       ),
     ];
-    expect(occurrences.length).toBe(4);
+    expect(occurrences.length).toBe(5);
   });
 });
 
@@ -295,6 +296,12 @@ describe("Phase 1C-A correction — explicit browser-role revocation", () => {
     );
   });
 
+  it("webhook_events explicitly revokes privileges from anon and authenticated", () => {
+    expect(combinedSql).toMatch(
+      /revoke all privileges on table public\.webhook_events from anon,\s*authenticated;/i,
+    );
+  });
+
   it("contains no GRANT statement for anon anywhere in the file", () => {
     expect(combinedSql).not.toMatch(/grant[^;]*\bto\s+anon\b/i);
   });
@@ -303,26 +310,27 @@ describe("Phase 1C-A correction — explicit browser-role revocation", () => {
     expect(combinedSql).not.toMatch(/grant[^;]*\bto\s+authenticated\b/i);
   });
 
-  it("service_role retains explicit CRUD grants on exactly the four tables", () => {
+  it("service_role retains explicit CRUD grants on exactly the five tables", () => {
     const grantLines = combinedSql
       .split("\n")
       .filter((line) => /^\s*grant\s/i.test(line));
-    expect(grantLines.length).toBe(4);
+    expect(grantLines.length).toBe(5);
     for (const line of grantLines) {
       expect(line).toMatch(/select,\s*insert,\s*update,\s*delete/i);
       expect(line).toMatch(/to service_role/i);
       expect(line).toMatch(
-        /public\.(orders|payment_attempts|payments|fulfilments)/i,
+        /public\.(orders|payment_attempts|payments|fulfilments|webhook_events)/i,
       );
     }
   });
 
-  it("RLS remains enabled on all four tables", () => {
+  it("RLS remains enabled on all five tables", () => {
     for (const table of [
       "orders",
       "payment_attempts",
       "payments",
       "fulfilments",
+      "webhook_events",
     ]) {
       const re = new RegExp(
         `alter table public\\.${table} enable row level security`,
