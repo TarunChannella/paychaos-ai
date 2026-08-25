@@ -335,6 +335,347 @@ describe("Phase 1C-A correction — no unnecessary pgcrypto extension", () => {
   });
 });
 
+describe("Phase 2F migration — fulfilments additive columns (2F structural #21-27)", () => {
+  it("21: does not recreate the fulfilments table (no second CREATE TABLE fulfilments)", () => {
+    const occurrences = [
+      ...combinedSql.matchAll(/create\s+table\s+public\.fulfilments\s*\(/gi),
+    ];
+    expect(occurrences.length).toBe(1);
+  });
+
+  it("22/24: adds payment_id and trigger_processing_attempt_id via ALTER TABLE", () => {
+    expect(combinedSql).toMatch(
+      /alter table public\.fulfilments\s+add column payment_id uuid references public\.payments \(id\) on delete restrict/i,
+    );
+    expect(combinedSql).toMatch(
+      /add column trigger_processing_attempt_id uuid references public\.event_processing_attempts \(id\) on delete restrict/i,
+    );
+  });
+
+  it("22: payment_id is made NOT NULL", () => {
+    expect(combinedSql).toMatch(
+      /alter table public\.fulfilments\s+alter column payment_id set not null/i,
+    );
+  });
+
+  it("23: payment_id FK targets payments(id) ON DELETE RESTRICT", () => {
+    expect(combinedSql).toMatch(
+      /payment_id uuid references public\.payments \(id\) on delete restrict/i,
+    );
+  });
+
+  it("25: trigger_processing_attempt_id FK targets event_processing_attempts(id) ON DELETE RESTRICT, nullable", () => {
+    expect(combinedSql).toMatch(
+      /trigger_processing_attempt_id uuid references public\.event_processing_attempts \(id\) on delete restrict/i,
+    );
+    // Nullable: no "not null" is ever applied to this column anywhere.
+    expect(combinedSql).not.toMatch(
+      /alter column trigger_processing_attempt_id set not null/i,
+    );
+  });
+
+  it("26: required indexes exist", () => {
+    expect(combinedSql).toMatch(
+      /create index fulfilments_payment_id_idx on public\.fulfilments \(payment_id\)/i,
+    );
+    expect(combinedSql).toMatch(
+      /create index fulfilments_trigger_processing_attempt_id_idx on public\.fulfilments \(trigger_processing_attempt_id\)/i,
+    );
+  });
+
+  it("27: UNIQUE(idempotency_key) is preserved (still present exactly once, from the original Phase 1 migration)", () => {
+    const occurrences = [
+      ...combinedSql.matchAll(/unique \(idempotency_key\)/gi),
+    ];
+    expect(occurrences.length).toBe(1);
+  });
+
+  it("28: does not edit the original Phase 1 fulfilments CREATE TABLE block (still excludes payment_id/trigger_processing_attempt_id)", () => {
+    const match = combinedSql.match(
+      /create table\s+public\.fulfilments\s*\(([\s\S]*?)\n\);/i,
+    );
+    expect(match).not.toBeNull();
+    const fulfilmentsCreateBlock = match![1]!;
+    expect(fulfilmentsCreateBlock).not.toMatch(/\bpayment_id\b/i);
+    expect(fulfilmentsCreateBlock).not.toMatch(
+      /\btrigger_processing_attempt_id\b/i,
+    );
+  });
+});
+
+describe("Phase 2F migration — no Phase 3+ schema added (2F structural #29)", () => {
+  it("does not create chaos_runs, invariant_results, findings, or regression_runs", () => {
+    const phase2fMigration = migrations.find((m) => m.name.includes("phase2f"));
+    expect(phase2fMigration).toBeDefined();
+    for (const forbidden of [
+      "chaos_runs",
+      "invariant_results",
+      "findings",
+      "regression_runs",
+    ]) {
+      expect(phase2fMigration!.sql).not.toMatch(
+        new RegExp(`create table\\s+public\\.${forbidden}`, "i"),
+      );
+    }
+  });
+
+  it("does not add any Phase 3-only event_processing_attempts column (ALTER/ADD COLUMN usage, not mere doc-comment mentions)", () => {
+    const phase2fMigration = migrations.find((m) => m.name.includes("phase2f"));
+    expect(phase2fMigration).toBeDefined();
+    for (const forbidden of [
+      "chaos_run_id",
+      "fault_action",
+      "state_before",
+      "state_after",
+    ]) {
+      expect(phase2fMigration!.sql).not.toMatch(
+        new RegExp(`add column\\s+${forbidden}\\b`, "i"),
+      );
+      expect(phase2fMigration!.sql).not.toMatch(
+        new RegExp(`v_${forbidden}\\b`, "i"),
+      );
+    }
+  });
+
+  it("total table set remains exactly the 6 approved tables (no new CREATE TABLE in the Phase 2F migration)", () => {
+    const tableNames = extractCreateTableNames(combinedSql);
+    expect([...tableNames].sort()).toEqual([
+      "event_processing_attempts",
+      "fulfilments",
+      "orders",
+      "payment_attempts",
+      "payments",
+      "webhook_events",
+    ]);
+  });
+});
+
+describe("Phase 2F migration — process_webhook_payment_event RPC security (2F structural #30-35)", () => {
+  // Captures the parameter list (between the parens) separately from the
+  // header (up to "as $$") and the body (between "as $$" and the closing
+  // "$$;") — kept as three distinct regexes rather than one combined
+  // capture, since the parameter list, RETURNS/LANGUAGE/SECURITY/
+  // search_path declarations, and the plpgsql body are three genuinely
+  // different spans of the function definition.
+  const paramsMatch = combinedSql.match(
+    /create function public\.process_webhook_payment_event\(([\s\S]*?)\)\s*\nreturns jsonb/i,
+  );
+  const headerMatch = combinedSql.match(
+    /create function public\.process_webhook_payment_event\([\s\S]*?as \$\$/i,
+  );
+  const bodyMatch = combinedSql.match(
+    /create function public\.process_webhook_payment_event\([\s\S]*?as \$\$([\s\S]*?)\n\$\$;/i,
+  );
+
+  it("the function definition was found", () => {
+    expect(paramsMatch).not.toBeNull();
+    expect(headerMatch).not.toBeNull();
+    expect(bodyMatch).not.toBeNull();
+  });
+
+  const functionHeader = headerMatch ? headerMatch[0]! : "";
+  const functionBody = bodyMatch ? bodyMatch[1]! : "";
+
+  it("30: is SECURITY INVOKER, not SECURITY DEFINER", () => {
+    expect(functionHeader).toMatch(/security invoker/i);
+    expect(functionHeader).not.toMatch(/security definer/i);
+  });
+
+  it("31: search_path is explicitly pinned to public", () => {
+    expect(functionHeader).toMatch(/set search_path = public/i);
+  });
+
+  it("32: PUBLIC execute is explicitly revoked", () => {
+    expect(combinedSql).toMatch(
+      /revoke all on function public\.process_webhook_payment_event\(uuid\) from public;/i,
+    );
+  });
+
+  it("33: anon/authenticated are never granted execute", () => {
+    expect(combinedSql).not.toMatch(
+      /grant execute on function public\.process_webhook_payment_event[^;]*\bto\s+anon\b/i,
+    );
+    expect(combinedSql).not.toMatch(
+      /grant execute on function public\.process_webhook_payment_event[^;]*\bto\s+authenticated\b/i,
+    );
+  });
+
+  it("34: service_role is explicitly granted execute", () => {
+    expect(combinedSql).toMatch(
+      /grant execute on function public\.process_webhook_payment_event\(uuid\) to service_role;/i,
+    );
+  });
+
+  it("35: no dynamic SQL (no EXECUTE statement, no format()/quote_ident() string-building)", () => {
+    expect(functionBody).not.toMatch(/\bexecute\s+(format|'|")/i);
+    expect(functionBody).not.toMatch(/\bformat\s*\(/i);
+    expect(functionBody).not.toMatch(/\bquote_ident\s*\(/i);
+  });
+
+  it("the only function parameter is p_processing_attempt_id uuid (no arbitrary table/column/order/payment/amount/status input)", () => {
+    expect(paramsMatch).not.toBeNull();
+    const paramsBlock = paramsMatch![1]!.trim().replace(/,$/, "");
+    expect(paramsBlock).toBe("p_processing_attempt_id uuid");
+  });
+
+  it("row-locks the target processing attempt with SELECT ... FOR UPDATE before deciding whether it may be processed", () => {
+    expect(functionBody).toMatch(/select \* into v_attempt[\s\S]*?for update/i);
+  });
+
+  it("uses ON CONFLICT (not a bare SELECT-then-INSERT) for the fulfilments idempotency-key race boundary", () => {
+    expect(functionBody).toMatch(/on conflict \(idempotency_key\) do update/i);
+  });
+
+  it("never regresses orders.payment_status away from PAID, or payment_attempts.status away from CAPTURED", () => {
+    // The captured-state UPDATE statements are always guarded so a stale
+    // event cannot regress a stronger already-committed state.
+    expect(functionBody).toMatch(
+      /payment_status = 'PAID'[\s\S]*?where id = v_order\.id\s+and payment_status <> 'PAID'/i,
+    );
+    expect(functionBody).toMatch(
+      /status = 'CAPTURED'[\s\S]*?where id = v_payment_attempt\.id\s+and status <> 'CAPTURED'/i,
+    );
+  });
+
+  it("never regresses webhook_events.processing_status away from PROCESSED", () => {
+    expect(functionBody).toMatch(
+      /processing_status = 'PROCESSED'[\s\S]*?where id = v_webhook\.id\s+and processing_status <> 'PROCESSED'/i,
+    );
+  });
+});
+
+describe("Phase 2F migration — 2026-08-29 architect review correction (Findings A-D)", () => {
+  const bodyMatch = combinedSql.match(
+    /create function public\.process_webhook_payment_event\([\s\S]*?as \$\$([\s\S]*?)\n\$\$;/i,
+  );
+  const functionBody = bodyMatch ? bodyMatch[1]! : "";
+
+  it("found the function body", () => {
+    expect(functionBody.length).toBeGreaterThan(0);
+  });
+
+  describe("Finding A — deterministic FOR UPDATE lock order on every shared mutable correlated row", () => {
+    it("locks event_processing_attempts, webhook_events, payment_attempts, orders, and payments, each with its own FOR UPDATE", () => {
+      const forUpdateCount = (functionBody.match(/for update/gi) ?? []).length;
+      // At least: attempt, webhook, payment_attempt, order, and payment
+      // (captured branch) — payment is locked again in the failed and
+      // order.paid branches too, so this is a lower bound, not an exact
+      // count.
+      expect(forUpdateCount).toBeGreaterThanOrEqual(5);
+    });
+
+    it("locks v_attempt before v_webhook, v_webhook before v_payment_attempt, v_payment_attempt before v_order, and v_order before the first v_payment lock (fixed order, never reordered)", () => {
+      const attemptLockIdx = functionBody.search(
+        /into v_attempt[\s\S]*?for update/i,
+      );
+      const webhookLockIdx = functionBody.search(
+        /into v_webhook from public\.webhook_events[\s\S]*?for update/i,
+      );
+      const paymentAttemptLockIdx = functionBody.search(
+        /into v_payment_attempt from public\.payment_attempts[\s\S]*?for update/i,
+      );
+      const orderLockIdx = functionBody.search(
+        /into v_order from public\.orders[\s\S]*?for update/i,
+      );
+      const firstPaymentLockIdx = functionBody.search(
+        /into v_payment from public\.payments[\s\S]*?for update/i,
+      );
+
+      for (const idx of [
+        attemptLockIdx,
+        webhookLockIdx,
+        paymentAttemptLockIdx,
+        orderLockIdx,
+        firstPaymentLockIdx,
+      ]) {
+        expect(idx).toBeGreaterThanOrEqual(0);
+      }
+      expect(attemptLockIdx).toBeLessThan(webhookLockIdx);
+      expect(webhookLockIdx).toBeLessThan(paymentAttemptLockIdx);
+      expect(paymentAttemptLockIdx).toBeLessThan(orderLockIdx);
+      expect(orderLockIdx).toBeLessThan(firstPaymentLockIdx);
+    });
+
+    it("computes v_already_captured (the payment.failed capture-precedence decision) AFTER locking v_payment with FOR UPDATE, never before", () => {
+      const failedBranchMatch = functionBody.match(
+        /elsif v_kind = 'payment\.failed' then([\s\S]*?)elsif v_kind = 'order\.paid'/i,
+      );
+      expect(failedBranchMatch).not.toBeNull();
+      const failedBranch = failedBranchMatch![1]!;
+      const lockIdx = failedBranch.search(
+        /into v_payment from public\.payments[\s\S]*?for update/i,
+      );
+      const decisionIdx = failedBranch.indexOf("v_already_captured :=");
+      expect(lockIdx).toBeGreaterThanOrEqual(0);
+      expect(decisionIdx).toBeGreaterThan(lockIdx);
+    });
+  });
+
+  describe("Finding B — fail-closed event contract (no catch-all ELSE as order.paid authority)", () => {
+    it("validates normalized sourceKind, eventType, kind, and kind == eventType before any lock beyond the attempt itself", () => {
+      expect(functionBody).toMatch(/PROCESSING_EVENT_INVALID/);
+      expect(functionBody).toMatch(/v_norm_source_kind/);
+      expect(functionBody).toMatch(/v_norm_event_type/);
+      expect(functionBody).toMatch(/v_kind <> v_norm_event_type/);
+    });
+
+    it("uses explicit IF / ELSIF / ELSIF / ELSE branches for payment.captured / payment.failed / order.paid — no bare ELSE treated as order.paid", () => {
+      expect(functionBody).toMatch(/if v_kind = 'payment\.captured' then/i);
+      expect(functionBody).toMatch(/elsif v_kind = 'payment\.failed' then/i);
+      expect(functionBody).toMatch(/elsif v_kind = 'order\.paid' then/i);
+      // The final ELSE must itself raise a fail-closed exception, not
+      // silently fall through to order.paid mutation logic.
+      const finalElseMatch = functionBody.match(
+        /elsif v_kind = 'order\.paid' then[\s\S]*?\n\s*else\s*\n([\s\S]*?)\n\s*end if;/i,
+      );
+      expect(finalElseMatch).not.toBeNull();
+      expect(finalElseMatch![1]!).toMatch(
+        /raise exception 'PROCESSING_EVENT_INVALID/i,
+      );
+    });
+
+    it("cross-checks the canonical webhook_events row's own columns against the normalized event / processing attempt correlation", () => {
+      for (const column of [
+        "v_webhook.source_kind",
+        "v_webhook.signature_verified",
+        "v_webhook.event_type",
+        "v_webhook.razorpay_order_id",
+        "v_webhook.razorpay_payment_id",
+        "v_webhook.payment_attempt_id",
+        "v_webhook.payment_id",
+        "v_webhook.amount_subunits",
+        "v_webhook.currency",
+        "v_webhook.razorpay_payment_status",
+      ]) {
+        expect(functionBody).toContain(column);
+      }
+    });
+  });
+
+  describe("Finding C — PROCESSING attempts are recoverable", () => {
+    it("allows both PENDING and PROCESSING through the status gate (not PENDING alone)", () => {
+      expect(functionBody).toMatch(
+        /status not in \('PENDING', 'PROCESSING'\)/i,
+      );
+    });
+  });
+
+  describe("Finding D — fulfilment conflict check validates effect_type, not only order_id/payment_id", () => {
+    it("the fulfilment ON CONFLICT identity check compares effect_type in addition to order_id and payment_id", () => {
+      const conflictCheckMatch = functionBody.match(
+        /returning \* into v_existing_fulfilment;\s*\n\s*if ([\s\S]*?)then\s*\n[\s\S]*?PROCESSING_FULFILMENT_CONFLICT/i,
+      );
+      expect(conflictCheckMatch).not.toBeNull();
+      const condition = conflictCheckMatch![1]!;
+      expect(condition).toMatch(/v_existing_fulfilment\.order_id/);
+      expect(condition).toMatch(/v_existing_fulfilment\.payment_id/);
+      expect(condition).toMatch(
+        /v_existing_fulfilment\.effect_type <> 'FULFIL_ORDER'/,
+      );
+    });
+  });
+});
+
 describe("Phase 1C-A correction — explicit browser-role revocation", () => {
   it("orders explicitly revokes privileges from anon and authenticated", () => {
     expect(combinedSql).toMatch(

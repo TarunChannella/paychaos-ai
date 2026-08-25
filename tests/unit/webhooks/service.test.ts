@@ -31,11 +31,33 @@ vi.mock("@/lib/webhooks/repository", () => ({
 
 const getDurableNormalizedAttemptForWebhookEventMock = vi.fn();
 const insertEventProcessingAttemptMock = vi.fn();
+const markEventProcessingAttemptFailedIfNotFinalMock = vi.fn();
 
 vi.mock("@/lib/webhooks/event-processing-repository", () => ({
   getDurableNormalizedAttemptForWebhookEvent:
     getDurableNormalizedAttemptForWebhookEventMock,
   insertEventProcessingAttempt: insertEventProcessingAttemptMock,
+  markEventProcessingAttemptFailedIfNotFinal:
+    markEventProcessingAttemptFailedIfNotFinalMock,
+}));
+
+// Phase 2F: the merchant processor is mocked at its OWN module boundary
+// (`lib/events/processor.ts`), not re-derived from the
+// event-processing-repository mock above — this proves
+// `lib/webhooks/service.ts` calls the processor module directly, exactly
+// once per durable attempt, using only the attempt id.
+const processMerchantWebhookEventMock = vi.fn();
+class FakeMerchantProcessingError extends Error {
+  code: string;
+  constructor(code: string) {
+    super(`merchant processing failed: ${code}`);
+    this.name = "MerchantProcessingError";
+    this.code = code;
+  }
+}
+vi.mock("@/lib/events/processor", () => ({
+  processMerchantWebhookEvent: processMerchantWebhookEventMock,
+  MerchantProcessingError: FakeMerchantProcessingError,
 }));
 
 const getPaymentAttemptByRazorpayOrderIdMock = vi.fn();
@@ -182,6 +204,23 @@ beforeEach(() => {
   insertEventProcessingAttemptMock
     .mockReset()
     .mockResolvedValue({ id: "attempt-record-1", status: "PENDING" });
+  markEventProcessingAttemptFailedIfNotFinalMock
+    .mockReset()
+    .mockResolvedValue(undefined);
+  // Phase 2F: default every test to a SUCCESSFUL merchant-processing
+  // outcome, so every pre-existing (pre-Phase-2F) test in this file that
+  // asserts a "processed"/"duplicate_received" outcome continues to pass
+  // unchanged — those tests are exercising normalization/correlation/
+  // dedup behavior, not merchant-processing behavior, and Phase 2F must
+  // not require touching every one of them individually. Tests that
+  // specifically exercise Phase 2F behavior override this per-test.
+  processMerchantWebhookEventMock.mockReset().mockResolvedValue({
+    outcome: "processed",
+    eventType: "payment.captured",
+    orderId: "order-1",
+    paymentId: PAYMENT_ID,
+    fulfilmentId: "fulfilment-1",
+  });
   getPaymentAttemptByRazorpayOrderIdMock.mockReset();
   getPaymentByRazorpayPaymentIdMock.mockReset();
   insertPaymentFromWebhookEvidenceMock.mockReset();
@@ -1151,5 +1190,369 @@ describe("ingestRazorpayWebhook — raw body hashing wiring (unchanged from Phas
     });
 
     expect(insertWebhookEventMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ingestRazorpayWebhook — Phase 2F merchant-processing integration", () => {
+  it("11: fresh payment.captured — normalize -> PENDING -> processor invoked with the pending attempt id -> 2xx", async () => {
+    insertWebhookEventMock.mockResolvedValue(fakeWebhookEventRow());
+    getPaymentAttemptByRazorpayOrderIdMock.mockResolvedValue(fakeAttemptRow());
+    getPaymentByRazorpayPaymentIdMock.mockResolvedValue(fakePaymentRow());
+    insertEventProcessingAttemptMock.mockResolvedValue({
+      id: "fresh-pending-attempt",
+      status: "PENDING",
+    });
+
+    const { ingestRazorpayWebhook } = await import("@/lib/webhooks/service");
+    const result = await ingestRazorpayWebhook({
+      rawBody: paymentCapturedBody(),
+      signatureHeader: VALID_SIGNATURE,
+      eventIdHeader: VALID_EVENT_ID,
+    });
+
+    expect(result.outcome).toBe("processed");
+    expect(processMerchantWebhookEventMock).toHaveBeenCalledTimes(1);
+    expect(processMerchantWebhookEventMock).toHaveBeenCalledWith(
+      "fresh-pending-attempt",
+    );
+
+    // Ordering: the PENDING attempt must be durably persisted BEFORE the
+    // processor is invoked against it.
+    const insertOrder =
+      insertEventProcessingAttemptMock.mock.invocationCallOrder[0]!;
+    const processOrder =
+      processMerchantWebhookEventMock.mock.invocationCallOrder[0]!;
+    expect(insertOrder).toBeLessThan(processOrder);
+  });
+
+  it("12: processor failure -> safe 5xx path (WebhookMerchantProcessingFailedError), never a 2xx", async () => {
+    insertWebhookEventMock.mockResolvedValue(fakeWebhookEventRow());
+    getPaymentAttemptByRazorpayOrderIdMock.mockResolvedValue(fakeAttemptRow());
+    getPaymentByRazorpayPaymentIdMock.mockResolvedValue(fakePaymentRow());
+    processMerchantWebhookEventMock.mockRejectedValue(
+      new FakeMerchantProcessingError("PROCESSING_AMOUNT_MISMATCH"),
+    );
+
+    const { ingestRazorpayWebhook, WebhookMerchantProcessingFailedError } =
+      await import("@/lib/webhooks/service");
+
+    let caught: unknown;
+    try {
+      await ingestRazorpayWebhook({
+        rawBody: paymentCapturedBody(),
+        signatureHeader: VALID_SIGNATURE,
+        eventIdHeader: VALID_EVENT_ID,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(WebhookMerchantProcessingFailedError);
+    expect(
+      (caught as InstanceType<typeof WebhookMerchantProcessingFailedError>)
+        .code,
+    ).toBe("PROCESSING_AMOUNT_MISMATCH");
+  });
+
+  it("12b: a processor failure conditionally marks the attempt FAILED (never unconditionally, and the original error still propagates even if the mark itself fails)", async () => {
+    insertWebhookEventMock.mockResolvedValue(fakeWebhookEventRow());
+    getPaymentAttemptByRazorpayOrderIdMock.mockResolvedValue(fakeAttemptRow());
+    getPaymentByRazorpayPaymentIdMock.mockResolvedValue(fakePaymentRow());
+    insertEventProcessingAttemptMock.mockResolvedValue({
+      id: "fresh-pending-attempt-2",
+      status: "PENDING",
+    });
+    processMerchantWebhookEventMock.mockRejectedValue(
+      new FakeMerchantProcessingError("PROCESSING_TRANSACTION_FAILED"),
+    );
+    markEventProcessingAttemptFailedIfNotFinalMock.mockRejectedValue(
+      new Error("db unavailable"),
+    );
+
+    const { ingestRazorpayWebhook, WebhookMerchantProcessingFailedError } =
+      await import("@/lib/webhooks/service");
+
+    await expect(
+      ingestRazorpayWebhook({
+        rawBody: paymentCapturedBody(),
+        signatureHeader: VALID_SIGNATURE,
+        eventIdHeader: VALID_EVENT_ID,
+      }),
+    ).rejects.toThrow(WebhookMerchantProcessingFailedError);
+
+    expect(markEventProcessingAttemptFailedIfNotFinalMock).toHaveBeenCalledWith(
+      "fresh-pending-attempt-2",
+      "PROCESSING_TRANSACTION_FAILED",
+      expect.any(String),
+    );
+  });
+
+  it("13: fresh payment.failed — processor is invoked", async () => {
+    function paymentFailedBody() {
+      return Buffer.from(
+        JSON.stringify({
+          entity: "event",
+          event: "payment.failed",
+          created_at: 1_800_000_000,
+          payload: {
+            payment: {
+              entity: {
+                id: "pay_fake_id",
+                order_id: "order_fake_id",
+                amount: 50000,
+                currency: "INR",
+                status: "failed",
+              },
+            },
+          },
+        }),
+        "utf8",
+      );
+    }
+    insertWebhookEventMock.mockResolvedValue(
+      fakeWebhookEventRow({
+        event_type: "payment.failed",
+        // Correction D: normalization reads from the CANONICAL persisted
+        // row's raw_payload_redacted, not from this test's locally-built
+        // request body — it must reflect a "failed" payment status.
+        raw_payload_redacted: redactedPaymentCapturedEvidence({
+          event: "payment.failed",
+          payment: {
+            id: "pay_fake_id",
+            order_id: "order_fake_id",
+            amount: 50000,
+            currency: "INR",
+            status: "failed",
+          },
+        }),
+      }),
+    );
+    getPaymentAttemptByRazorpayOrderIdMock.mockResolvedValue(fakeAttemptRow());
+    getPaymentByRazorpayPaymentIdMock.mockResolvedValue(fakePaymentRow());
+    insertEventProcessingAttemptMock.mockResolvedValue({
+      id: "fresh-failed-attempt",
+      status: "PENDING",
+    });
+
+    const { ingestRazorpayWebhook } = await import("@/lib/webhooks/service");
+    const result = await ingestRazorpayWebhook({
+      rawBody: paymentFailedBody(),
+      signatureHeader: VALID_SIGNATURE,
+      eventIdHeader: VALID_EVENT_ID,
+    });
+
+    expect(result.outcome).toBe("processed");
+    expect(processMerchantWebhookEventMock).toHaveBeenCalledWith(
+      "fresh-failed-attempt",
+    );
+  });
+
+  it("14: fresh order.paid — processor is invoked", async () => {
+    insertWebhookEventMock.mockResolvedValue(
+      fakeWebhookEventRow({
+        event_type: "order.paid",
+        raw_payload_redacted: {
+          event: "order.paid",
+          entity: "event",
+          created_at: 1_800_000_000,
+          order: {
+            id: "order_fake_id",
+            amount: 50000,
+            currency: "INR",
+            status: "paid",
+          },
+        },
+      }),
+    );
+    getPaymentAttemptByRazorpayOrderIdMock.mockResolvedValue(fakeAttemptRow());
+    insertEventProcessingAttemptMock.mockResolvedValue({
+      id: "fresh-order-paid-attempt",
+      status: "PENDING",
+    });
+
+    const { ingestRazorpayWebhook } = await import("@/lib/webhooks/service");
+    const result = await ingestRazorpayWebhook({
+      rawBody: orderPaidBody(),
+      signatureHeader: VALID_SIGNATURE,
+      eventIdHeader: VALID_EVENT_ID,
+    });
+
+    expect(result.outcome).toBe("processed");
+    expect(processMerchantWebhookEventMock).toHaveBeenCalledWith(
+      "fresh-order-paid-attempt",
+    );
+  });
+
+  it("15: duplicate + prior SUCCEEDED — NO processor reapplication; SKIPPED_DUPLICATE; 2xx", async () => {
+    insertWebhookEventMock.mockResolvedValue(null);
+    incrementWebhookDuplicateDeliveryCountMock.mockResolvedValue(
+      fakeWebhookEventRow(),
+    );
+    getDurableNormalizedAttemptForWebhookEventMock.mockResolvedValue(
+      fakeDurableAttempt({ status: "SUCCEEDED" }),
+    );
+
+    const { ingestRazorpayWebhook } = await import("@/lib/webhooks/service");
+    const result = await ingestRazorpayWebhook({
+      rawBody: paymentCapturedBody(),
+      signatureHeader: VALID_SIGNATURE,
+      eventIdHeader: VALID_EVENT_ID,
+    });
+
+    expect(result.outcome).toBe("duplicate_received");
+    expect(processMerchantWebhookEventMock).not.toHaveBeenCalled();
+    const skippedCall = insertEventProcessingAttemptMock.mock.calls.find(
+      (call) => call[0]?.status === "SKIPPED_DUPLICATE",
+    );
+    expect(skippedCall).toBeDefined();
+  });
+
+  it("16: duplicate + prior PENDING — the SAME PENDING attempt is processed; no new normalized PENDING attempt", async () => {
+    insertWebhookEventMock.mockResolvedValue(null);
+    incrementWebhookDuplicateDeliveryCountMock.mockResolvedValue(
+      fakeWebhookEventRow(),
+    );
+    getDurableNormalizedAttemptForWebhookEventMock.mockResolvedValue(
+      fakeDurableAttempt({ id: "existing-pending-attempt", status: "PENDING" }),
+    );
+
+    const { ingestRazorpayWebhook } = await import("@/lib/webhooks/service");
+    const result = await ingestRazorpayWebhook({
+      rawBody: paymentCapturedBody(),
+      signatureHeader: VALID_SIGNATURE,
+      eventIdHeader: VALID_EVENT_ID,
+    });
+
+    expect(result.outcome).toBe("duplicate_received");
+    expect(processMerchantWebhookEventMock).toHaveBeenCalledWith(
+      "existing-pending-attempt",
+    );
+    // No SECOND normalized PENDING attempt is ever created.
+    const pendingCalls = insertEventProcessingAttemptMock.mock.calls.filter(
+      (call) => call[0]?.status === "PENDING",
+    );
+    expect(pendingCalls).toHaveLength(0);
+  });
+
+  it("17: duplicate + prior PROCESSING — processor handles the same attempt safely", async () => {
+    insertWebhookEventMock.mockResolvedValue(null);
+    incrementWebhookDuplicateDeliveryCountMock.mockResolvedValue(
+      fakeWebhookEventRow(),
+    );
+    getDurableNormalizedAttemptForWebhookEventMock.mockResolvedValue(
+      fakeDurableAttempt({
+        id: "existing-processing-attempt",
+        status: "PROCESSING",
+      }),
+    );
+
+    const { ingestRazorpayWebhook } = await import("@/lib/webhooks/service");
+    const result = await ingestRazorpayWebhook({
+      rawBody: paymentCapturedBody(),
+      signatureHeader: VALID_SIGNATURE,
+      eventIdHeader: VALID_EVENT_ID,
+    });
+
+    expect(result.outcome).toBe("duplicate_received");
+    expect(processMerchantWebhookEventMock).toHaveBeenCalledWith(
+      "existing-processing-attempt",
+    );
+  });
+
+  it("duplicate + prior HELD — processor invoked; a processing failure never falsely acknowledges success", async () => {
+    insertWebhookEventMock.mockResolvedValue(null);
+    incrementWebhookDuplicateDeliveryCountMock.mockResolvedValue(
+      fakeWebhookEventRow(),
+    );
+    getDurableNormalizedAttemptForWebhookEventMock.mockResolvedValue(
+      fakeDurableAttempt({ id: "existing-held-attempt", status: "HELD" }),
+    );
+    processMerchantWebhookEventMock.mockRejectedValue(
+      new FakeMerchantProcessingError("PROCESSING_ATTEMPT_NOT_READY"),
+    );
+
+    const { ingestRazorpayWebhook, WebhookMerchantProcessingFailedError } =
+      await import("@/lib/webhooks/service");
+
+    await expect(
+      ingestRazorpayWebhook({
+        rawBody: paymentCapturedBody(),
+        signatureHeader: VALID_SIGNATURE,
+        eventIdHeader: VALID_EVENT_ID,
+      }),
+    ).rejects.toThrow(WebhookMerchantProcessingFailedError);
+
+    // No SKIPPED_DUPLICATE evidence — and therefore no false
+    // acknowledgement — is created for a HELD attempt that failed
+    // processing.
+    const skippedCall = insertEventProcessingAttemptMock.mock.calls.find(
+      (call) => call[0]?.status === "SKIPPED_DUPLICATE",
+    );
+    expect(skippedCall).toBeUndefined();
+  });
+
+  it("18: duplicate + prior FAILED (not eligible) — retry normalization creates a new PENDING attempt and processes it", async () => {
+    insertWebhookEventMock.mockResolvedValue(null);
+    incrementWebhookDuplicateDeliveryCountMock.mockResolvedValue(
+      fakeWebhookEventRow(),
+    );
+    getDurableNormalizedAttemptForWebhookEventMock.mockResolvedValue(null);
+    getPaymentAttemptByRazorpayOrderIdMock.mockResolvedValue(fakeAttemptRow());
+    getPaymentByRazorpayPaymentIdMock.mockResolvedValue(fakePaymentRow());
+    insertEventProcessingAttemptMock.mockResolvedValue({
+      id: "retried-pending-attempt",
+      status: "PENDING",
+    });
+
+    const { ingestRazorpayWebhook } = await import("@/lib/webhooks/service");
+    const result = await ingestRazorpayWebhook({
+      rawBody: paymentCapturedBody(),
+      signatureHeader: VALID_SIGNATURE,
+      eventIdHeader: VALID_EVENT_ID,
+    });
+
+    expect(result.outcome).toBe("processed");
+    expect(processMerchantWebhookEventMock).toHaveBeenCalledWith(
+      "retried-pending-attempt",
+    );
+  });
+
+  it("19: no 2xx is returned before the merchant processor succeeds — a fresh event's processor failure never resolves", async () => {
+    insertWebhookEventMock.mockResolvedValue(fakeWebhookEventRow());
+    getPaymentAttemptByRazorpayOrderIdMock.mockResolvedValue(fakeAttemptRow());
+    getPaymentByRazorpayPaymentIdMock.mockResolvedValue(fakePaymentRow());
+    processMerchantWebhookEventMock.mockRejectedValue(
+      new FakeMerchantProcessingError("PROCESSING_TRANSACTION_FAILED"),
+    );
+
+    const { ingestRazorpayWebhook } = await import("@/lib/webhooks/service");
+    await expect(
+      ingestRazorpayWebhook({
+        rawBody: paymentCapturedBody(),
+        signatureHeader: VALID_SIGNATURE,
+        eventIdHeader: VALID_EVENT_ID,
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("20: an unsupported authenticated event is still a safe 2xx WITHOUT invoking the merchant processor", async () => {
+    insertWebhookEventMock.mockResolvedValue(
+      fakeWebhookEventRow({
+        event_type: "payment.authorized",
+        raw_payload_redacted: { event: "payment.authorized" },
+      }),
+    );
+
+    const { ingestRazorpayWebhook } = await import("@/lib/webhooks/service");
+    const result = await ingestRazorpayWebhook({
+      rawBody: Buffer.from(
+        JSON.stringify({ event: "payment.authorized" }),
+        "utf8",
+      ),
+      signatureHeader: VALID_SIGNATURE,
+      eventIdHeader: VALID_EVENT_ID,
+    });
+
+    expect(result.outcome).toBe("unsupported_event_accepted");
+    expect(processMerchantWebhookEventMock).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,6 @@
 /**
- * Phase 2D/2E — Razorpay webhook ingestion + deduplication + event
- * normalization orchestration.
+ * Phase 2D/2E/2F — Razorpay webhook ingestion + deduplication + event
+ * normalization + merchant processing orchestration.
  *
  * `import "server-only"` for the same structural reason as
  * `lib/demo-merchant/service.ts`: this module performs I/O (through the
@@ -63,16 +63,31 @@
  *        could permanently strand webhook_events with missing correlation
  *        fields once a later duplicate saw the PENDING row and stopped
  *        retrying)
- *     -> respond 2xx
+ *     -> Phase 2F: invoke the single narrow merchant-processing transaction
+ *        (`lib/events/processor.ts` -> `process_webhook_payment_event`)
+ *        against the durable PENDING attempt — NEVER acknowledge 2xx before
+ *        this succeeds (this task's Section 22). A processing failure is
+ *        marked on the attempt via a status-guarded conditional update
+ *        (never regressing an already-SUCCEEDED attempt — "ambiguous RPC
+ *        failure safety", this task's Section 21) and propagates as a safe
+ *        5xx so Razorpay/the caller redelivers later.
+ *     -> respond 2xx ONLY after merchant processing has actually succeeded
+ *        (or already idempotently succeeded)
  *
- * STOPS THERE — Phase 2E does not set orders.payment_status = PAID,
- * orders.business_status = FULFILLED, payment_attempts.status = CAPTURED,
- * payments.razorpay_payment_status/captured_at/failed_at, and does not
- * create any fulfilment. Applying authoritative provider state to
- * merchant/payment records and business-effect idempotency are Phase 2F's
- * responsibility, not this module's — confirmed by this module never
- * importing anything from `lib/demo-merchant/order.ts` or calling any
- * "mark paid"/"fulfil" function.
+ * For a genuine duplicate delivery whose existing durable attempt is not
+ * yet SUCCEEDED (PENDING/PROCESSING/HELD), the merchant-processing
+ * transaction is invoked against that SAME existing attempt before a
+ * SKIPPED_DUPLICATE evidence row is recorded and 2xx returned (this task's
+ * Section 23) — a duplicate must never receive 2xx merely because merchant
+ * processing is still uncompleted.
+ *
+ * Merchant/payment authoritative-state application
+ * (orders.payment_status/business_status, payment_attempts.status,
+ * payments.razorpay_payment_status/captured_at/failed_at, and fulfilment
+ * creation) happens EXCLUSIVELY inside the single Phase 2F SQL transaction
+ * — this module never mutates any of those fields directly; it only
+ * invokes the trusted processor boundary with an internal processing
+ * attempt id.
  */
 import "server-only";
 
@@ -89,12 +104,18 @@ import {
   normalizeRazorpayEvent,
   type NormalizedRazorpayEvent,
 } from "@/lib/events/normalization";
+import {
+  MerchantProcessingError,
+  processMerchantWebhookEvent,
+} from "@/lib/events/processor";
 import { verifyWebhookSignature } from "@/lib/razorpay/webhook-verification";
 import { logEvent } from "@/lib/security/logger";
 
 import {
   getDurableNormalizedAttemptForWebhookEvent,
   insertEventProcessingAttempt,
+  markEventProcessingAttemptFailedIfNotFinal,
+  type EventProcessingAttemptRow,
 } from "./event-processing-repository";
 import {
   buildRedactedWebhookEvidence,
@@ -176,6 +197,25 @@ export class WebhookEventCorrelationFailedError extends Error {
   }
 }
 
+/**
+ * Phase 2F — a durable, normalized, correlated processing attempt could not
+ * be successfully processed by the merchant-processing transaction (this
+ * task's Section 22 "If merchant processing fails: return safe 5xx"). Never
+ * acknowledge 2xx before this succeeds. Always safe to retry — the
+ * business-effect idempotency the Phase 2F transaction itself guarantees
+ * means a later retry (whether a genuine Razorpay redelivery or the normal
+ * webhook retry flow) can safely re-attempt the same logical effect.
+ */
+export class WebhookMerchantProcessingFailedError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = "WebhookMerchantProcessingFailedError";
+    this.code = code;
+  }
+}
+
 export interface IngestRazorpayWebhookInput {
   /** The EXACT raw bytes of the incoming request body. */
   readonly rawBody: Buffer;
@@ -228,6 +268,57 @@ async function recordFailedProcessingAttempt(
     logEvent("webhook_failed_attempt_record_failed", {
       razorpay_event_id: webhookEventId,
     });
+  }
+}
+
+/**
+ * Phase 2F — invokes the merchant-processing transaction for one durable
+ * processing attempt (this task's Section 22). On success, returns the
+ * trusted result. On failure, performs "ambiguous RPC failure safety" (this
+ * task's Section 21): a best-effort, status-guarded `FAILED` mark (never
+ * regressing an already-`SUCCEEDED` attempt, since the conditional update
+ * only matches `PENDING`/`PROCESSING`), then throws
+ * `WebhookMerchantProcessingFailedError` — always safe to retry, always
+ * mapped to a 5xx by the route so Razorpay/the caller redelivers later.
+ * Never acknowledges success before this succeeds (this task's Section 22
+ * "Do NOT acknowledge 2xx merely because normalization reached PENDING").
+ */
+async function runMerchantProcessingOrFail(
+  attempt: EventProcessingAttemptRow,
+): Promise<Awaited<ReturnType<typeof processMerchantWebhookEvent>>> {
+  try {
+    return await processMerchantWebhookEvent(attempt.id);
+  } catch (err) {
+    const code =
+      err instanceof MerchantProcessingError
+        ? err.code
+        : "PROCESSING_TRANSACTION_FAILED";
+    const message =
+      err instanceof MerchantProcessingError
+        ? err.message
+        : "Merchant processing failed.";
+
+    // Belt-and-suspenders: `markEventProcessingAttemptFailedIfNotFinal` is
+    // itself documented to never throw (it swallows its own I/O failures
+    // internally), but this call must NEVER be allowed to mask the
+    // ORIGINAL merchant-processing error being propagated below, even if
+    // that contract were ever violated.
+    try {
+      await markEventProcessingAttemptFailedIfNotFinal(
+        attempt.id,
+        code,
+        message,
+      );
+    } catch {
+      logEvent("webhook_failed_attempt_record_failed", {
+        event_processing_attempt_id: attempt.id,
+      });
+    }
+    logEvent("webhook_merchant_processing_failed", {
+      event_processing_attempt_id: attempt.id,
+      processing_failure_code: code,
+    });
+    throw new WebhookMerchantProcessingFailedError(code, message);
   }
 }
 
@@ -287,7 +378,7 @@ async function correlateNormalizeAndPersist(
   webhookEventRow: WebhookEventRow,
   normalized: NormalizedRazorpayEvent,
   isDuplicateDelivery: boolean,
-): Promise<void> {
+): Promise<EventProcessingAttemptRow> {
   let resolvedAttempt: PaymentAttemptRow | null;
   try {
     resolvedAttempt = await getPaymentAttemptByRazorpayOrderId(
@@ -451,7 +542,7 @@ async function correlateNormalizeAndPersist(
   }
 
   try {
-    await insertEventProcessingAttempt({
+    return await insertEventProcessingAttempt({
       webhookEventId: webhookEventRow.id,
       paymentAttemptId: resolvedAttempt.id,
       paymentId: payment?.id ?? null,
@@ -629,9 +720,30 @@ export async function ingestRazorpayWebhook(
     if (durableAttempt) {
       // A durable normalized-or-later attempt already exists (Correction
       // B: PENDING/HELD/PROCESSING/SUCCEEDED all qualify — not merely
-      // "the latest row happens to be PENDING") — do NOT re-normalize;
-      // record a SKIPPED_DUPLICATE attempt reusing the SAME canonical
-      // normalized event (this task's Section 17).
+      // "the latest row happens to be PENDING") — do NOT re-normalize.
+      //
+      // Phase 2F (this task's Section 23): a duplicate must never receive
+      // 2xx merely because merchant processing is still uncompleted.
+      //
+      //   - SUCCEEDED: merchant processing already durably completed —
+      //     record SKIPPED_DUPLICATE directly, with NO processor
+      //     reapplication (an extra RPC round trip would be redundant, not
+      //     merely idempotent).
+      //   - PENDING/PROCESSING/HELD: the merchant-processing transaction is
+      //     invoked against this SAME existing attempt FIRST. For
+      //     PENDING/PROCESSING this actually performs (or safely
+      //     re-confirms) merchant processing; for HELD (not normally
+      //     produced in Phase 2) it fails safely rather than falsely
+      //     acknowledging success — this task's Section 23 "do not falsely
+      //     acknowledge successful merchant processing". ONLY once that
+      //     resolves successfully is the SKIPPED_DUPLICATE evidence row
+      //     recorded and 2xx returned. A processing failure here propagates
+      //     (5xx, caller/Razorpay may redeliver) and creates NO
+      //     SKIPPED_DUPLICATE row.
+      if (durableAttempt.status !== "SUCCEEDED") {
+        await runMerchantProcessingOrFail(durableAttempt);
+      }
+
       await insertEventProcessingAttempt({
         webhookEventId: webhookEventRow.id,
         paymentAttemptId: durableAttempt.payment_attempt_id,
@@ -698,11 +810,21 @@ export async function ingestRazorpayWebhook(
     throw new WebhookEventNormalizationInvalidError(normalization.reason);
   }
 
-  await correlateNormalizeAndPersist(
+  const pendingAttempt = await correlateNormalizeAndPersist(
     webhookEventRow,
     normalization.event,
     isDuplicateDelivery,
   );
+
+  // Phase 2F (this task's Section 22): extend the normal supported-event
+  // path all the way through merchant processing — normalization/
+  // correlation reaching a durable PENDING attempt is NOT itself
+  // sufficient for a 2xx acknowledgement. `runMerchantProcessingOrFail`
+  // throws (safe 5xx, Razorpay/the caller redelivers) if this fails; it
+  // never returns a "processed" outcome without the merchant-processing
+  // transaction having actually succeeded (or already having idempotently
+  // succeeded).
+  await runMerchantProcessingOrFail(pendingAttempt);
 
   logEvent("webhook_event_processed", {
     razorpay_event_id: webhookEventRow.razorpay_event_id,

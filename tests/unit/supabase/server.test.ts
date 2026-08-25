@@ -236,7 +236,7 @@ describe("Phase 1C-A: no service-role name leaks into client-importable code (#3
   });
 });
 
-describe("Phase 1C-A/2C/2D/2E: Database type is scoped to exactly the 6 approved tables", () => {
+describe("Phase 1C-A/2C/2D/2E/2F: Database type is scoped to exactly the 6 approved tables", () => {
   const typesSource = fs.readFileSync(
     path.join(repoRoot, "lib", "supabase", "types.ts"),
     "utf-8",
@@ -279,17 +279,25 @@ describe("Phase 1C-A/2C/2D/2E: Database type is scoped to exactly the 6 approved
     }
   });
 
-  it("fulfilments has no payment_id or trigger_processing_attempt_id field", () => {
+  it("Phase 2F: fulfilments DOES declare payment_id and trigger_processing_attempt_id (additive columns)", () => {
     // Scoped to ONLY the `fulfilments:` table block — the Phase 2C
     // `payments` table legitimately declares an unrelated
     // `payment_attempt_id` column, which contains the substring
     // "payment_id" and would false-positive against a whole-file check.
+    //
+    // This assertion is the deliberate opposite of the pre-Phase-2F
+    // expectation: docs/DATABASE.md's "Column Phasing Note" on
+    // `fulfilments` always documented these two columns as part of the
+    // FINAL schema, deferred only until `payments` /
+    // `event_processing_attempts` existed — Phase 2F is exactly the phase
+    // that adds them via
+    // supabase/migrations/20260828000000_phase2f_merchant_processing.sql.
     const fulfilmentsMatch = typesSource.match(
       /\bfulfilments:\s*\{[\s\S]*?\n {6}\};/,
     );
     expect(fulfilmentsMatch).not.toBeNull();
     const fulfilmentsBlock = fulfilmentsMatch![0]!;
-    expect(fulfilmentsBlock).not.toMatch(/\bpayment_id\b/);
-    expect(fulfilmentsBlock).not.toMatch(/\btrigger_processing_attempt_id\b/);
+    expect(fulfilmentsBlock).toMatch(/\bpayment_id:\s*string/);
+    expect(fulfilmentsBlock).toMatch(/\btrigger_processing_attempt_id\b/);
   });
 });

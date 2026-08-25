@@ -130,8 +130,13 @@ describe("Task 7 — anon client is denied on fulfilments", () => {
 
   it("INSERT is denied and no row is created (synthetic, non-sensitive values)", async () => {
     const idempotencyKey = taggedValue("anon-insert-fulfilment");
+    // Phase 2F additive migration made fulfilments.payment_id NOT NULL
+    // (docs/DATABASE.md Section 12) — a synthetic, non-referencing value is
+    // supplied only to satisfy the column's type; RLS denies this INSERT
+    // before any FK/constraint would even be relevant.
     const { error } = await anon.from("fulfilments").insert({
       order_id: randomUUID(),
+      payment_id: randomUUID(),
       effect_type: "FULFIL_ORDER",
       idempotency_key: idempotencyKey,
     });

@@ -1,5 +1,5 @@
 /**
- * Phase 2E — server-only persistence boundary for
+ * Phase 2E/2F — server-only persistence boundary for
  * `event_processing_attempts`.
  *
  * Structural guarantee: `import "server-only"` (same pattern as every
@@ -12,6 +12,15 @@
  * normalized/correlated by the caller (`lib/webhooks/service.ts`). This
  * mirrors every other repository in this codebase: repositories are pure
  * persistence, domain/security logic lives one layer up.
+ *
+ * Phase 2F adds `processWebhookPaymentEvent` — the thin RPC wrapper around
+ * the single narrow `process_webhook_payment_event` transaction
+ * (supabase/migrations/20260828000000_phase2f_merchant_processing.sql) —
+ * and `markEventProcessingAttemptFailedIfNotFinal`, the conditional
+ * "ambiguous RPC failure safety" marker. `lib/events/processor.ts` is the
+ * actual processor application boundary (this task's Section 25); this
+ * module remains pure persistence/RPC-transport, same as every other
+ * repository here.
  */
 import "server-only";
 
@@ -176,4 +185,162 @@ export async function getDurableNormalizedAttemptForWebhookEvent(
   }
 
   return data;
+}
+
+/**
+ * Phase 2F — the shape returned by the `process_webhook_payment_event`
+ * transactional RPC (supabase/migrations/20260828000000_phase2f_merchant_processing.sql).
+ * Deliberately narrow (this task's Section 26): no raw normalized evidence,
+ * no secrets, no raw webhook body, no database error detail.
+ */
+export interface ProcessWebhookPaymentEventResult {
+  readonly outcome: "processed" | "already_processed";
+  readonly eventType: string;
+  readonly orderId: string;
+  readonly paymentId: string | null;
+  readonly fulfilmentId: string | null;
+}
+
+/**
+ * Deterministic safe processing failure codes the
+ * `process_webhook_payment_event` SQL function raises (this task's Section
+ * 27) — each `RAISE EXCEPTION` in the migration begins with exactly one of
+ * these tokens followed by `:`. Kept in sync with the migration by hand;
+ * any Postgres error whose message does not start with one of these is
+ * mapped to the generic `PROCESSING_TRANSACTION_FAILED` fallback rather
+ * than ever forwarding raw SQL error text.
+ */
+const KNOWN_PROCESSOR_ERROR_CODES: ReadonlySet<string> = new Set([
+  "PROCESSING_ATTEMPT_NOT_FOUND",
+  "PROCESSING_ATTEMPT_NOT_READY",
+  "PROCESSING_SOURCE_INVALID",
+  "PROCESSING_EVENT_INVALID",
+  "PROCESSING_CORRELATION_INVALID",
+  "PROCESSING_PAYMENT_REQUIRED",
+  "PROCESSING_AMOUNT_MISMATCH",
+  "PROCESSING_CURRENCY_MISMATCH",
+  "PROCESSING_FULFILMENT_CONFLICT",
+  "PROCESSING_TRANSACTION_FAILED",
+]);
+
+const PROCESSOR_ERROR_CODE_PATTERN = /^([A-Z_]+):/;
+
+/**
+ * Extracts only the leading deterministic code token from a Postgres error
+ * message (e.g. `"PROCESSING_AMOUNT_MISMATCH: amount_subunits disagree..."`
+ * -> `"PROCESSING_AMOUNT_MISMATCH"`), discarding everything else — this is
+ * the ONLY part of the raw database error text that is ever propagated
+ * beyond this function, and even that only as a fixed code, never as free
+ * text (this task's Section 27 "do not expose raw SQL errors").
+ */
+function extractProcessorErrorCode(message: string | undefined): string {
+  const match = message ? PROCESSOR_ERROR_CODE_PATTERN.exec(message) : null;
+  const code = match?.[1];
+  return code && KNOWN_PROCESSOR_ERROR_CODES.has(code)
+    ? code
+    : "PROCESSING_TRANSACTION_FAILED";
+}
+
+function isValidProcessorResult(value: unknown): value is Record<
+  string,
+  unknown
+> & {
+  outcome: "processed" | "already_processed";
+} {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    (record.outcome === "processed" ||
+      record.outcome === "already_processed") &&
+    typeof record.event_type === "string" &&
+    typeof record.order_id === "string" &&
+    (record.payment_id === null || typeof record.payment_id === "string") &&
+    (record.fulfilment_id === null || typeof record.fulfilment_id === "string")
+  );
+}
+
+/**
+ * Phase 2F — invokes the single narrow `process_webhook_payment_event`
+ * transactional RPC for one internal processing-attempt id (this task's
+ * Sections 3/25/26). This is the ONLY place that calls this RPC — never a
+ * sequence of independent UPDATE/INSERT calls that could commit partially.
+ *
+ * Never accepts a normalized event, order id, payment id, amount, currency,
+ * status, or fulfilment key from its own caller — the ONLY parameter is the
+ * internal processing-attempt id; every fact the transaction acts on is
+ * loaded from trusted database rows inside the SQL function itself.
+ *
+ * Throws `EventProcessingRepositoryError` with a deterministic safe `.code`
+ * (one of `KNOWN_PROCESSOR_ERROR_CODES`) on any failure — never leaks the
+ * raw Postgres error message.
+ */
+export async function processWebhookPaymentEvent(
+  processingAttemptId: string,
+): Promise<ProcessWebhookPaymentEventResult> {
+  const client = getSupabaseServerClient();
+
+  const { data, error } = await client.rpc("process_webhook_payment_event", {
+    p_processing_attempt_id: processingAttemptId,
+  });
+
+  if (error) {
+    const code = extractProcessorErrorCode(error.message);
+    throw new EventProcessingRepositoryError(
+      code,
+      `Merchant processing failed (${code}).`,
+    );
+  }
+
+  if (!isValidProcessorResult(data)) {
+    throw new EventProcessingRepositoryError(
+      "PROCESSING_TRANSACTION_FAILED",
+      "Merchant processing returned an unexpected result shape.",
+    );
+  }
+
+  return {
+    outcome: data.outcome,
+    eventType: data.event_type as string,
+    orderId: data.order_id as string,
+    paymentId: (data.payment_id as string | null) ?? null,
+    fulfilmentId: (data.fulfilment_id as string | null) ?? null,
+  };
+}
+
+/**
+ * Phase 2F — "ambiguous RPC failure safety" (this task's Section 21).
+ * Application code calling `processWebhookPaymentEvent` must behave safely
+ * if the RPC call itself errors (which may be a genuine database-side
+ * rejection, OR a network/client error masking a transaction that actually
+ * committed SUCCEEDED server-side). This function marks the target
+ * processing attempt `FAILED` ONLY via a conditional
+ * `WHERE id = ... AND status IN ('PENDING', 'PROCESSING')` update — so it
+ * can never regress an attempt that is already `SUCCEEDED` (or any other
+ * terminal status) back to `FAILED`. Never throws: a failure to record the
+ * failure must never mask the original error the caller is already
+ * propagating, and must never itself become an unhandled rejection (same
+ * best-effort contract as `lib/webhooks/service.ts`'s
+ * `recordFailedProcessingAttempt`).
+ */
+export async function markEventProcessingAttemptFailedIfNotFinal(
+  id: string,
+  errorCode: string,
+  errorMessageRedacted: string,
+): Promise<void> {
+  try {
+    const client = getSupabaseServerClient();
+    await client
+      .from("event_processing_attempts")
+      .update({
+        status: "FAILED",
+        error_code: errorCode,
+        error_message_redacted: errorMessageRedacted,
+        finished_at: new Date().toISOString(),
+      })
+      .eq("id", id)
+      .in("status", ["PENDING", "PROCESSING"]);
+  } catch {
+    // Best-effort only — never mask the original error the caller is
+    // about to (re)throw.
+  }
 }

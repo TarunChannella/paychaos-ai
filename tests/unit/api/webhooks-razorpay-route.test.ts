@@ -55,6 +55,14 @@ class FakeWebhookEventCorrelationFailedError extends Error {
     this.code = code;
   }
 }
+class FakeWebhookMerchantProcessingFailedError extends Error {
+  readonly code: string;
+  constructor(code = "PROCESSING_TRANSACTION_FAILED") {
+    super(`merchant processing failed: ${code}`);
+    this.name = "WebhookMerchantProcessingFailedError";
+    this.code = code;
+  }
+}
 class FakeEnvValidationError extends Error {
   readonly variable: string;
   constructor(variable: string) {
@@ -78,6 +86,8 @@ vi.mock("@/lib/webhooks/service", () => ({
   WebhookEventNormalizationInvalidError:
     FakeWebhookEventNormalizationInvalidError,
   WebhookEventCorrelationFailedError: FakeWebhookEventCorrelationFailedError,
+  WebhookMerchantProcessingFailedError:
+    FakeWebhookMerchantProcessingFailedError,
 }));
 
 vi.mock("@/lib/config/env-validation", () => ({
@@ -234,6 +244,19 @@ describe("POST /api/webhooks/razorpay", () => {
     const json = await response.json();
     expect(json).toEqual({ error: "Webhook request could not be processed." });
     expect(JSON.stringify(json)).not.toContain("CORRELATION_PAYMENT_MISMATCH");
+  });
+
+  it("Phase 2F: maps WebhookMerchantProcessingFailedError to 500 with the generic safe body — never leaking err.code or err.message", async () => {
+    ingestRazorpayWebhookMock.mockRejectedValue(
+      new FakeWebhookMerchantProcessingFailedError(
+        "PROCESSING_AMOUNT_MISMATCH",
+      ),
+    );
+    const response = await callRoute({ body: "{}" });
+    expect(response.status).toBe(500);
+    const json = await response.json();
+    expect(json).toEqual({ error: "Webhook request could not be processed." });
+    expect(JSON.stringify(json)).not.toContain("PROCESSING_AMOUNT_MISMATCH");
   });
 
   it("does NOT re-serialize the body — an arbitrary/malformed body's exact bytes still reach the service unchanged", async () => {

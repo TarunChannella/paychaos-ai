@@ -1,5 +1,5 @@
 /**
- * Phase 2D/2E — public Razorpay Test Mode webhook endpoint.
+ * Phase 2D/2E/2F — public Razorpay Test Mode webhook endpoint.
  *
  * `POST /api/webhooks/razorpay` (docs/RAZORPAY_GUIDE.md Section 14). This
  * route's trust boundary is the Razorpay webhook HMAC signature, NOT an
@@ -32,6 +32,7 @@ import {
   WebhookEventCorrelationFailedError,
   WebhookEventIdMissingError,
   WebhookEventNormalizationInvalidError,
+  WebhookMerchantProcessingFailedError,
   WebhookPayloadMalformedError,
   WebhookPayloadTooLargeError,
   WebhookSignatureInvalidError,
@@ -135,6 +136,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         latency_ms: latencyMs,
         error_name: err.name,
         correlation_failure_code: err.code,
+      });
+      return safeErrorResponse(500);
+    }
+
+    if (err instanceof WebhookMerchantProcessingFailedError) {
+      // Phase 2F: the merchant-processing transaction failed for a durable,
+      // normalized, correlated attempt — always safe to retry (this task's
+      // Section 22/41); Razorpay redelivers later, and the Phase 2F
+      // transaction's own business-effect idempotency makes a retry safe.
+      // Never expose `err.code` or `err.message` in the response.
+      logEvent("webhook_request_completed", {
+        http_status: 500,
+        latency_ms: latencyMs,
+        error_name: err.name,
+        processing_failure_code: err.code,
       });
       return safeErrorResponse(500);
     }

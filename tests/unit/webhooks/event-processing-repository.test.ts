@@ -12,6 +12,7 @@ interface MockResult {
 }
 
 type InsertFn = (payload: Record<string, unknown>) => FakeQueryBuilder;
+type UpdateFn = (payload: Record<string, unknown>) => FakeQueryBuilder;
 type SelectFn = () => FakeQueryBuilder;
 type EqFn = (column: string, value: unknown) => FakeQueryBuilder;
 type InFn = (column: string, values: readonly string[]) => FakeQueryBuilder;
@@ -22,6 +23,7 @@ type SingleFn = () => Promise<MockResult>;
 
 interface FakeQueryBuilder extends PromiseLike<MockResult> {
   insert: Mock<InsertFn>;
+  update: Mock<UpdateFn>;
   select: Mock<SelectFn>;
   eq: Mock<EqFn>;
   in: Mock<InFn>;
@@ -34,6 +36,7 @@ interface FakeQueryBuilder extends PromiseLike<MockResult> {
 function makeQueryBuilder(result: MockResult): FakeQueryBuilder {
   const builder: FakeQueryBuilder = {
     insert: vi.fn<InsertFn>(() => builder),
+    update: vi.fn<UpdateFn>(() => builder),
     select: vi.fn<SelectFn>(() => builder),
     eq: vi.fn<EqFn>(() => builder),
     in: vi.fn<InFn>(() => builder),
@@ -48,12 +51,14 @@ function makeQueryBuilder(result: MockResult): FakeQueryBuilder {
 }
 
 const fromMock = vi.fn();
+const rpcMock = vi.fn();
 vi.mock("@/lib/supabase/server", () => ({
-  getSupabaseServerClient: () => ({ from: fromMock }),
+  getSupabaseServerClient: () => ({ from: fromMock, rpc: rpcMock }),
 }));
 
 beforeEach(() => {
   fromMock.mockReset();
+  rpcMock.mockReset();
 });
 
 describe("insertEventProcessingAttempt", () => {
@@ -329,6 +334,217 @@ describe("getDurableNormalizedAttemptForWebhookEvent", () => {
       expect(err).toBeInstanceOf(EventProcessingRepositoryError);
       expect((err as Error).message).not.toContain("connection string");
     }
+  });
+});
+
+describe("processWebhookPaymentEvent (Phase 2F)", () => {
+  it("calls the process_webhook_payment_event RPC with exactly the processing attempt id, no other value", async () => {
+    rpcMock.mockResolvedValue({
+      data: {
+        outcome: "processed",
+        event_type: "payment.captured",
+        order_id: "order-1",
+        payment_id: "payment-1",
+        fulfilment_id: "fulfilment-1",
+      },
+      error: null,
+    });
+
+    const { processWebhookPaymentEvent } =
+      await import("@/lib/webhooks/event-processing-repository");
+    const result = await processWebhookPaymentEvent("attempt-1");
+
+    expect(rpcMock).toHaveBeenCalledWith("process_webhook_payment_event", {
+      p_processing_attempt_id: "attempt-1",
+    });
+    expect(rpcMock.mock.calls[0]?.[1]).toEqual({
+      p_processing_attempt_id: "attempt-1",
+    });
+    expect(result).toEqual({
+      outcome: "processed",
+      eventType: "payment.captured",
+      orderId: "order-1",
+      paymentId: "payment-1",
+      fulfilmentId: "fulfilment-1",
+    });
+  });
+
+  it("maps an 'already_processed' outcome through unchanged", async () => {
+    rpcMock.mockResolvedValue({
+      data: {
+        outcome: "already_processed",
+        event_type: "order.paid",
+        order_id: "order-1",
+        payment_id: null,
+        fulfilment_id: null,
+      },
+      error: null,
+    });
+
+    const { processWebhookPaymentEvent } =
+      await import("@/lib/webhooks/event-processing-repository");
+    const result = await processWebhookPaymentEvent("attempt-1");
+    expect(result.outcome).toBe("already_processed");
+    expect(result.paymentId).toBeNull();
+    expect(result.fulfilmentId).toBeNull();
+  });
+
+  it("extracts the leading deterministic code from a RAISE EXCEPTION message and never leaks the raw text", async () => {
+    rpcMock.mockResolvedValue({
+      data: null,
+      error: {
+        message:
+          "PROCESSING_AMOUNT_MISMATCH: amount_subunits disagree for attempt 11111111-1111-1111-1111-111111111111",
+      },
+    });
+
+    const { processWebhookPaymentEvent, EventProcessingRepositoryError } =
+      await import("@/lib/webhooks/event-processing-repository");
+
+    try {
+      await processWebhookPaymentEvent("attempt-1");
+      throw new Error("expected to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(EventProcessingRepositoryError);
+      const repoErr = err as InstanceType<
+        typeof EventProcessingRepositoryError
+      >;
+      expect(repoErr.code).toBe("PROCESSING_AMOUNT_MISMATCH");
+      expect(repoErr.message).not.toContain("11111111-1111-1111-1111");
+    }
+  });
+
+  it("an unrecognized error message maps to PROCESSING_TRANSACTION_FAILED", async () => {
+    rpcMock.mockResolvedValue({
+      data: null,
+      error: { message: "some raw postgres internal error text" },
+    });
+
+    const { processWebhookPaymentEvent, EventProcessingRepositoryError } =
+      await import("@/lib/webhooks/event-processing-repository");
+
+    try {
+      await processWebhookPaymentEvent("attempt-1");
+      throw new Error("expected to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(EventProcessingRepositoryError);
+      expect(
+        (err as InstanceType<typeof EventProcessingRepositoryError>).code,
+      ).toBe("PROCESSING_TRANSACTION_FAILED");
+      expect((err as Error).message).not.toContain(
+        "some raw postgres internal error text",
+      );
+    }
+  });
+
+  it("a missing error but also missing/malformed data still throws PROCESSING_TRANSACTION_FAILED (defensive shape validation)", async () => {
+    rpcMock.mockResolvedValue({ data: { unexpected: "shape" }, error: null });
+
+    const { processWebhookPaymentEvent, EventProcessingRepositoryError } =
+      await import("@/lib/webhooks/event-processing-repository");
+
+    try {
+      await processWebhookPaymentEvent("attempt-1");
+      throw new Error("expected to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(EventProcessingRepositoryError);
+      expect(
+        (err as InstanceType<typeof EventProcessingRepositoryError>).code,
+      ).toBe("PROCESSING_TRANSACTION_FAILED");
+    }
+  });
+
+  it("never returns raw normalized evidence, secrets, or a raw webhook body — result keys are exactly the trusted 5", async () => {
+    rpcMock.mockResolvedValue({
+      data: {
+        outcome: "processed",
+        event_type: "payment.captured",
+        order_id: "order-1",
+        payment_id: "payment-1",
+        fulfilment_id: "fulfilment-1",
+        // A hypothetical RPC bug/future change could add extra keys — this
+        // proves the repository's typed return shape only ever surfaces
+        // the 5 trusted fields regardless of what the raw RPC data object
+        // additionally contains.
+        raw_payload_redacted: { should: "never surface" },
+        card_number: "4111111111111111",
+      },
+      error: null,
+    });
+
+    const { processWebhookPaymentEvent } =
+      await import("@/lib/webhooks/event-processing-repository");
+    const result = await processWebhookPaymentEvent("attempt-1");
+    expect(Object.keys(result).sort()).toEqual(
+      ["eventType", "fulfilmentId", "orderId", "outcome", "paymentId"].sort(),
+    );
+  });
+});
+
+describe("markEventProcessingAttemptFailedIfNotFinal (Phase 2F)", () => {
+  it("updates status=FAILED with a conditional WHERE status IN (PENDING, PROCESSING)", async () => {
+    const builder = makeQueryBuilder({ data: null, error: null });
+    fromMock.mockReturnValue(builder);
+
+    const { markEventProcessingAttemptFailedIfNotFinal } =
+      await import("@/lib/webhooks/event-processing-repository");
+    await markEventProcessingAttemptFailedIfNotFinal(
+      "attempt-1",
+      "PROCESSING_AMOUNT_MISMATCH",
+      "The event's amount does not match the correlated records.",
+    );
+
+    expect(fromMock).toHaveBeenCalledWith("event_processing_attempts");
+    const updatePayload = builder.update.mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(updatePayload).toMatchObject({
+      status: "FAILED",
+      error_code: "PROCESSING_AMOUNT_MISMATCH",
+      error_message_redacted:
+        "The event's amount does not match the correlated records.",
+    });
+    expect(updatePayload.finished_at).toEqual(expect.any(String));
+    expect(builder.eq).toHaveBeenCalledWith("id", "attempt-1");
+    expect(builder.in).toHaveBeenCalledWith("status", [
+      "PENDING",
+      "PROCESSING",
+    ]);
+  });
+
+  it("never throws even when the underlying update fails (best-effort)", async () => {
+    const builder = makeQueryBuilder({
+      data: null,
+      error: { message: "connection string leaked here" },
+    });
+    fromMock.mockReturnValue(builder);
+
+    const { markEventProcessingAttemptFailedIfNotFinal } =
+      await import("@/lib/webhooks/event-processing-repository");
+    await expect(
+      markEventProcessingAttemptFailedIfNotFinal(
+        "attempt-1",
+        "PROCESSING_TRANSACTION_FAILED",
+        "Merchant processing failed.",
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("never throws when the underlying client call itself throws (best-effort, defensive)", async () => {
+    fromMock.mockImplementation(() => {
+      throw new Error("client construction failed");
+    });
+
+    const { markEventProcessingAttemptFailedIfNotFinal } =
+      await import("@/lib/webhooks/event-processing-repository");
+    await expect(
+      markEventProcessingAttemptFailedIfNotFinal(
+        "attempt-1",
+        "PROCESSING_TRANSACTION_FAILED",
+        "Merchant processing failed.",
+      ),
+    ).resolves.toBeUndefined();
   });
 });
 

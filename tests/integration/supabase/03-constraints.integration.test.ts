@@ -458,9 +458,16 @@ describe("Task 6 — payment_attempts constraints", () => {
   });
 });
 
-describe("Task 6 — fulfilments constraint (orphan order_id ONLY)", () => {
+describe("Task 6 — fulfilments constraint (orphan order_id)", () => {
   const client = getSupabaseServerClient();
 
+  // Phase 2F additive migration made fulfilments.payment_id NOT NULL with
+  // its own FK (docs/DATABASE.md Section 12) — an orphan payment_id is
+  // supplied purely to satisfy that requirement so this test can still
+  // isolate the order_id FK's rejection behavior. Both order_id and
+  // payment_id are orphaned here (neither references a real row), and
+  // either alone is sufficient to produce a 23503 foreign-key violation —
+  // this test only asserts the error code, not which specific FK fired.
   it("orphan order_id is rejected; NO fulfilments row is ever inserted by this test", async () => {
     const idempotencyKey = taggedValue("fulfilment-orphan-order-id");
     const orphanOrderId = randomUUID();
@@ -469,6 +476,7 @@ describe("Task 6 — fulfilments constraint (orphan order_id ONLY)", () => {
       .from("fulfilments")
       .insert({
         order_id: orphanOrderId,
+        payment_id: randomUUID(),
         effect_type: "FULFIL_ORDER",
         idempotency_key: idempotencyKey,
       })

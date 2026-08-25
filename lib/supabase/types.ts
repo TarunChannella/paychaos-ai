@@ -1,5 +1,5 @@
 /**
- * Phase 1C-A/2B/2C/2D/2E — minimal Supabase `Database` type.
+ * Phase 1C-A/2B/2C/2D/2E/2F — minimal Supabase `Database` type.
  *
  * Scoped EXACTLY to the tables that exist after the approved Phase 1
  * migration (`orders`, `payment_attempts`, `fulfilments` — see
@@ -11,22 +11,21 @@
  * the Phase 2C additive `payments` table
  * (supabase/migrations/20260825000000_phase2c_payments.sql), the
  * Phase 2D additive `webhook_events` table
- * (supabase/migrations/20260826000000_phase2d_webhook_events.sql), and the
+ * (supabase/migrations/20260826000000_phase2d_webhook_events.sql), the
  * Phase 2E additive `event_processing_attempts` table plus the
  * `record_webhook_duplicate_delivery` RPC
- * (supabase/migrations/20260827000000_phase2e_webhook_dedup.sql).
+ * (supabase/migrations/20260827000000_phase2e_webhook_dedup.sql), and the
+ * Phase 2F additive `fulfilments.payment_id` /
+ * `fulfilments.trigger_processing_attempt_id` columns plus the
+ * `process_webhook_payment_event` RPC
+ * (supabase/migrations/20260828000000_phase2f_merchant_processing.sql).
  *
- * Do NOT add Phase 2F+ tables here (`chaos_runs`, `invariant_results`,
+ * Do NOT add Phase 3+ tables here (`chaos_runs`, `invariant_results`,
  * `findings`, `regression_runs`) — those are created and typed by the
  * phases that own them. `event_processing_attempts` here is deliberately
  * the Phase 2 SUBSET ONLY — no `chaos_run_id`/`fault_action`/
  * `state_before`/`state_after` (docs/DATABASE.md Section 14 "Phase
  * Ownership" pre-approves those as later, separate additive columns).
- *
- * `fulfilments` intentionally has no `payment_id` /
- * `trigger_processing_attempt_id` fields here — those columns do not exist
- * until a later additive migration (docs/DATABASE.md "Column Phasing
- * Note" on the `fulfilments` table).
  *
  * This type only describes shape for `createClient<Database>()`. It is not
  * itself a migration and does not create/alter anything.
@@ -367,6 +366,8 @@ export interface Database {
         Row: {
           id: string;
           order_id: string;
+          payment_id: string;
+          trigger_processing_attempt_id: string | null;
           effect_type: FulfilmentEffectType;
           idempotency_key: string;
           applied_at: string;
@@ -375,6 +376,8 @@ export interface Database {
         Insert: {
           id?: string;
           order_id: string;
+          payment_id: string;
+          trigger_processing_attempt_id?: string | null;
           effect_type?: FulfilmentEffectType;
           idempotency_key: string;
           applied_at?: string;
@@ -383,6 +386,8 @@ export interface Database {
         Update: {
           id?: string;
           order_id?: string;
+          payment_id?: string;
+          trigger_processing_attempt_id?: string | null;
           effect_type?: FulfilmentEffectType;
           idempotency_key?: string;
           applied_at?: string;
@@ -396,6 +401,20 @@ export interface Database {
             referencedRelation: "orders";
             referencedColumns: ["id"];
           },
+          {
+            foreignKeyName: "fulfilments_payment_id_fkey";
+            columns: ["payment_id"];
+            isOneToOne: false;
+            referencedRelation: "payments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "fulfilments_trigger_processing_attempt_id_fkey";
+            columns: ["trigger_processing_attempt_id"];
+            isOneToOne: false;
+            referencedRelation: "event_processing_attempts";
+            referencedColumns: ["id"];
+          },
         ];
       };
     };
@@ -404,6 +423,10 @@ export interface Database {
       record_webhook_duplicate_delivery: {
         Args: { p_razorpay_event_id: string };
         Returns: Database["public"]["Tables"]["webhook_events"]["Row"];
+      };
+      process_webhook_payment_event: {
+        Args: { p_processing_attempt_id: string };
+        Returns: Record<string, unknown>;
       };
     };
     Enums: Record<string, never>;
