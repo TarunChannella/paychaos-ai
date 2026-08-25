@@ -3264,3 +3264,108 @@ APPROVED             PENDING
 ```
 
 Phase 2 as a whole remains **NOT APPROVED**. The real payment evidence in Section 291 is a strong positive signal, but final Phase 2G manual verification (re-observing the corrected UI against this same real order, or a fresh one, on the deployed instance) has not yet been performed by this session and cannot be — only the developer can view the live deployed page.
+
+---
+
+# PHASE 2G — DEPLOYED UI RE-VERIFICATION FAILURE AND CORRECTIVE FIX
+
+**2026-09-01. Starting HEAD `a0d21ac08a4d66095e4c0757e81aae4c8acb652b`** (the previous UI fix from Sections 291–302, committed and pushed). Confirmed clean working tree before this round began.
+
+## 303. Deployed re-verification failure
+
+Commit `a0d21ac` deployed successfully to Vercel (Ready/Production). The developer hard-refreshed the browser (Ctrl+Shift+R — ruling out browser cache) and re-observed the SAME real order from Section 291. The card correctly showed every authoritative field (Payment State PAID, Business State FULFILLED, Fulfilment 1 effect, Attempt Status CAPTURED, Razorpay Order Status paid, Provider Payment Status captured, Checkout Signature Verified Yes, the "Razorpay Test Mode — Real Event" badge with Event Type `order.paid`, Signature Verified Yes, Processing State PROCESSED) while **still simultaneously rendering "Checkout response verified — awaiting webhook confirmation."** The "Pay with Razorpay" button was correctly absent (proving the attempt is past `CHECKOUT_IN_PROGRESS`) — yet the stale sentence remained, proving it was NOT being rendered by `PayWithRazorpayButton` at all. The previous fix (Sections 291–302) did not resolve the actual deployed bug.
+
+## 304. Task 1 — every occurrence of the stale string, found by repo-wide search
+
+A repo-wide `rg`/grep for the exact string and the partial fragments `"awaiting webhook"` / `"Checkout response verified"` / `"webhook confirmation"` across `app/`, `lib/`, `tests/` found:
+
+1. `app/demo-merchant/pay-with-razorpay-button.tsx` — the string previously fixed in Sections 291–302 (now conditional on `webhookConfirmed`).
+2. **`app/demo-merchant/page.tsx:236-239` — a SECOND, completely independent, unconditional occurrence, never previously found or fixed.** It rendered as a plain hardcoded `<p>` inside the `{order.latestPayment && (...)}` "persisted-checkout-evidence" block, with no conditional logic of any kind.
+3. Several references inside `handoffs/PHASE-2-HANDOFF.md` (documentation/history only — not rendering code).
+4. Two references inside `tests/unit/demo-merchant/pay-with-razorpay-button.test.ts` (assertions against occurrence #1 only — the previous test suite never looked at `page.tsx` at all).
+
+**Occurrence #2 is the one that renders for a PAID/FULFILLED order where `PayWithRazorpayButton` itself is not shown** — exactly matching the deployed evidence and the architect's own visual clue.
+
+**Why the first fix's own search missed it:** Prettier line-wrapped the JSX text across two lines — `Checkout response verified — awaiting webhook` then a line break then `confirmation.` — so a plain single-line literal string search for the full sentence (used during the Section 291–302 round) never matched this second file at all. This round's search used partial fragments specifically to defeat that blind spot.
+
+## 305. Task 2 — the real successful-order render path, traced
+
+`database/service data -> listDemoMerchantOrders -> toDemoMerchantOrderViewModel -> app/demo-merchant/page.tsx`. For a PAID/FULFILLED/CAPTURED order, the page renders (in order): the order-level `<dl>` (Payment/Business/Fulfilment/State — all correct, all already order-state-driven), the payment-attempt `<dl>` (only when `order.latestPaymentAttempt` exists — unconditional on attempt.status), the **persisted-checkout-evidence `<dl>`** (only when `order.latestPayment` exists — this block, once a payment has EVER been Checkout-verified, renders unconditionally forever, regardless of what happens to the payment/order afterward — this is where the bug lived), the webhook-evidence `<dl>` (only when `order.latestWebhookEvent` exists — already correctly order-state-driven since Phase 2G readiness), then conditionally `PayWithRazorpayButton` (gated by `isEligibleForCheckout`, which returns `false` once `attempt.status` is `CAPTURED`).
+
+Explicit answers:
+
+1. **Is `PayWithRazorpayButton` rendered for the successful order?** No — `isEligibleForCheckout` requires `attempt.status` to be `ORDER_CREATED` or `CHECKOUT_IN_PROGRESS`; once a real webhook processes `payment.captured`, the Phase 2F transaction sets `payment_attempts.status = 'CAPTURED'`, so the button (and its entire local-state evidence block) is not in the React tree at all on any fresh page load past that point.
+2. **Which component/JSX renders the stale sentence?** `app/demo-merchant/page.tsx`'s own hardcoded `<p>` inside its `persisted-checkout-evidence` block (Section 304 occurrence #2) — a plain server-rendered paragraph with zero conditional logic, entirely independent of `PayWithRazorpayButton`.
+3. **Why did the previous `webhookConfirmed` prop fix not affect this path?** Because that prop was wired ONLY into `PayWithRazorpayButton`'s own props — a component this exact scenario doesn't even render. The actual rendering path for a captured order goes through a completely different, previously-unexamined piece of JSX in `page.tsx` that the fix never touched.
+4. **Are there duplicated status-message implementations?** Yes — confirmed exactly two, independently hardcoded, with no shared logic between them (this round's root design defect, addressed in Section 306).
+5. **Is any stale field precomputed in the view model/service?** No. `DemoMerchantOrderViewModel`/`WebhookEvidenceViewModel` already carry fully correct, fresh, order-state-driven data on every request (`force-dynamic`). The staleness was purely a hardcoded, unconditional JSX string that never consulted that already-correct data at all.
+
+## 306. Task 3 — the existing projection already carries sufficient authoritative information
+
+Confirmed: `order.paymentStatus` (`PAID`), `order.latestPayment.razorpayPaymentStatus` (`captured`), and `order.latestWebhookEvent` (`sourceKind: REAL_RAZORPAY_WEBHOOK`, `processingStatus: PROCESSED`) are ALL already present on the exact same `order` object `page.tsx` already has in scope at the point of the bug. **No new database query, no new field, and no migration were added or needed** — this round is a pure rendering-logic fix.
+
+## 307. Task 4 — the corrected, single-authoritative-decision fix
+
+Per the architect's explicit "IMPORTANT DESIGN RULE" (one authoritative decision; no competing message logic in `page.tsx` / `PayWithRazorpayButton` / the view-model / anywhere else), `lib/demo-merchant/view-model.ts` now owns BOTH message strings as private constants and exposes exactly two pure functions, and every rendering path consumes one of them — neither `page.tsx` nor `pay-with-razorpay-button.tsx` hardcodes either string itself any more:
+
+- **`isPaymentCaptureConfirmedByRealWebhook(order)`** — strengthened from the previous round: now requires `order.paymentStatus === "PAID"` AND `order.latestPayment?.razorpayPaymentStatus === "captured"` (the provider-status half of Case B, checked independently rather than assumed) AND `order.latestWebhookEvent` present/real/`PROCESSED`. Deliberately does **not** require `latestWebhookEvent.eventType === "payment.captured"` — this is exactly Case E: the real deployed order's latest displayed event was `order.paid`, yet the durable payment/order state already proved capture, so the function must not (and now does not) require the specific latest event's type.
+- **`formatCheckoutWebhookConfirmationMessage(order)`** — the order-based formatter; the ONLY place either message string literal is written.
+- **`formatCheckoutWebhookConfirmationMessageFromConfirmedFlag(confirmed)`** — a boolean-only overload for `PayWithRazorpayButton`, which only has the derived boolean prop available, not the full order — internally maps to the exact same two constants, so the text is never duplicated.
+
+`app/demo-merchant/page.tsx`'s persisted-checkout-evidence block now renders `{formatCheckoutWebhookConfirmationMessage(order)}` instead of the hardcoded paragraph. `app/demo-merchant/pay-with-razorpay-button.tsx` now renders `{formatCheckoutWebhookConfirmationMessageFromConfirmedFlag(webhookConfirmed)}` instead of its own inline ternary with its own copies of the two strings.
+
+## 308. How duplicate message logic was eliminated and prevented from recurring
+
+Both message string literals now exist in exactly one place — the two exported constants inside `lib/demo-merchant/view-model.ts`. A new repo-wide structural test (Section 310) asserts those two literal strings do NOT appear anywhere in `app/demo-merchant/page.tsx` or `app/demo-merchant/pay-with-razorpay-button.tsx`, and that both files call one of the two shared formatter functions — a permanent regression guard against a third hardcoded copy silently reappearing in either file (or a new one) in the future.
+
+## 309. Case-by-case behavior (corrected)
+
+- **Case A** (checkout verified, no real webhook evidence): unchanged — waiting message renders via `formatCheckoutWebhookConfirmationMessage`.
+- **Case B** (PAID + provider status captured + real, processed webhook evidence): confirmed message renders; the waiting sentence is now genuinely absent from BOTH rendering paths, including the one that actually fired in the deployed bug.
+- **Case C** (synthetic/non-real evidence): structurally cannot satisfy `isPaymentCaptureConfirmedByRealWebhook`, unchanged reasoning from Section 294.
+- **Case D** (webhook-first, Checkout later): unchanged — the function is timing-agnostic.
+- **Case E** (latest displayed event is `order.paid`, but durable payment/order state already proves capture — the exact real scenario that failed deployed verification): now explicitly handled and tested — `isPaymentCaptureConfirmedByRealWebhook` never inspects `eventType`, only the durable `paymentStatus`/`razorpayPaymentStatus`/`processingStatus` facts, so this case now correctly renders the confirmed message.
+
+## 310. Files changed
+
+**Modified:** `app/demo-merchant/page.tsx`, `app/demo-merchant/pay-with-razorpay-button.tsx`, `lib/demo-merchant/view-model.ts`, `tests/unit/demo-merchant/view-model.test.ts`, `tests/unit/demo-merchant/pay-with-razorpay-button.test.ts`.
+
+**Added/deleted/database/migration/external config:** none.
+
+## 311. Tests added/changed
+
+`tests/unit/demo-merchant/view-model.test.ts`'s `isPaymentCaptureConfirmedByRealWebhook` describe block was rewritten (every case now also supplies `latestPayment`, matching the strengthened signature) and extended to 7 cases, covering exactly the required assertions: (1) no real evidence -> waiting message; (2) PAID+captured+real+PROCESSED -> confirmed message; (3) the confirmed case's message is asserted to NOT contain/equal the stale waiting text; (4) `paymentStatus` and provider status are each independently required; (5) non-real/incomplete provenance stays unconfirmed; (6) webhook-first timing-agnosticism; (7) **Case E** — latest displayed event `order.paid` + already-captured durable state -> confirmed, reproducing the exact real scenario that failed deployed verification. A new sibling describe block tests `formatCheckoutWebhookConfirmationMessageFromConfirmedFlag`'s boolean overload directly.
+
+`tests/unit/demo-merchant/pay-with-razorpay-button.test.ts` was rewritten: the button's own structural checks now assert it calls the shared formatter and contains neither string literal; a new describe block asserts `page.tsx`'s persisted-checkout-evidence block also calls the shared formatter and contains neither string literal (including a regex specifically matching the exact broken multi-line pattern this round found and removed); a final repo-wide regression-guard describe block asserts both message strings exist ONLY inside `lib/demo-merchant/view-model.ts` and nowhere in `app/demo-merchant` — directly satisfying this task's required assertion 7 ("repo search proves no unconditional duplicate waiting-message path remains") as a permanent, automated, structural test rather than a one-time manual grep.
+
+No React component-rendering test dependency exists in this codebase (confirmed again this round — no `@testing-library/react`); per the architect's own explicit fallback instruction, this round used the same source-structural testing approach already established throughout the project (e.g. the webhook route's and migration's own "structural checks" blocks) rather than introduce a new test framework.
+
+## 312. Tests/results
+
+| Command                                                                    | Result                                                                                                                                                                                   |
+| -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npx vitest run tests/unit/demo-merchant/view-model.test.ts`               | **27/27 PASS**                                                                                                                                                                           |
+| `npx vitest run tests/unit/demo-merchant/pay-with-razorpay-button.test.ts` | **7/7 PASS**                                                                                                                                                                             |
+| `npm run lint`                                                             | **PASS, exit 0** (one unused-import warning surfaced and was fixed mid-round, then re-verified clean)                                                                                    |
+| `npm run typecheck`                                                        | **PASS, exit 0**                                                                                                                                                                         |
+| `npm run build`                                                            | **PASS** — route manifest unchanged (`/access`, `/api/access/login`, `/api/access/logout`, `/api/webhooks/razorpay`, `/demo-merchant`, `ƒ Proxy (Middleware)`)                           |
+| `npx prettier --check` on every changed file                               | **PASS** after one `--write` on the view-model test file (pre-existing-style wrapping, no logic change), re-verified, then re-ran the affected test file to confirm no behavioral change |
+| `git diff --check`                                                         | **PASS** — only benign LF/CRLF advisories                                                                                                                                                |
+
+No Supabase integration suite was re-run — this fix touches only rendering/presentation logic, no database or webhook-ingestion semantics.
+
+## 313. Explicit non-claims
+
+**The `a0d21ac` implementation did NOT pass deployed manual verification.** No new payment was created. No webhook was sent. No database schema changed. No external configuration changed. Phase 2G remains **NOT APPROVED** pending another deployed UI re-verification.
+
+## 314. Phase 2G lifecycle (unchanged — awaiting re-verification)
+
+```
+IMPLEMENTED          PENDING
+TESTED               PENDING
+MANUALLY VERIFIED    FAILED / PENDING RE-VERIFY
+DOCUMENTED           CANDIDATE
+APPROVED             NO
+```
+
+Phase 2 as a whole remains **NOT APPROVED**. Neither Phase 2 nor Phase 2G is being marked complete by this round.

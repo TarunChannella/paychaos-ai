@@ -21,9 +21,17 @@
  * evidence via `isPaymentCaptureConfirmedByRealWebhook` — never from this
  * component's own ephemeral Checkout-verification result) says a real
  * webhook has already confirmed capture (this task's Section 12 "Merchant
- * Authority Boundary"; Phase 2G real-verification UI consistency fix).
+ * Authority Boundary"; Phase 2G real-verification UI consistency fix,
+ * corrected after deployed re-verification failure). The message text
+ * itself comes from the shared
+ * `formatCheckoutWebhookConfirmationMessageFromConfirmedFlag` — this
+ * component must never hardcode either string literal itself, since
+ * `app/demo-merchant/page.tsx`'s own separate persisted-evidence block
+ * renders the exact same decision from the same single source of truth.
  */
 import { useState, useTransition } from "react";
+
+import { formatCheckoutWebhookConfirmationMessageFromConfirmedFlag } from "@/lib/demo-merchant/view-model";
 
 import { prepareCheckoutAction, verifyCheckoutAction } from "./actions";
 
@@ -210,9 +218,9 @@ export function PayWithRazorpayButton({
             className="mt-1 font-medium text-foreground"
             data-testid="checkout-verified-status-message"
           >
-            {webhookConfirmed
-              ? "Payment capture confirmed by Razorpay Test Mode webhook."
-              : "Checkout response verified — awaiting webhook confirmation."}
+            {formatCheckoutWebhookConfirmationMessageFromConfirmedFlag(
+              webhookConfirmed,
+            )}
           </p>
         </dl>
       )}

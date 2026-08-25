@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   formatAmountForDisplay,
+  formatCheckoutWebhookConfirmationMessage,
+  formatCheckoutWebhookConfirmationMessageFromConfirmedFlag,
   formatConceptualState,
   isPaymentCaptureConfirmedByRealWebhook,
   toDemoMerchantOrderViewModel,
@@ -323,34 +325,62 @@ describe("toWebhookEvidenceViewModel", () => {
   });
 });
 
-describe("isPaymentCaptureConfirmedByRealWebhook (Phase 2G UI consistency fix)", () => {
+describe("isPaymentCaptureConfirmedByRealWebhook / formatCheckoutWebhookConfirmationMessage* (Phase 2G UI consistency fix, corrected after deployed re-verification failure)", () => {
   const REAL_PROCESSED_EVENT = toWebhookEvidenceViewModel(webhookEventRow());
+  const CAPTURED_PAYMENT = toPaymentViewModel(
+    paymentRow({ razorpay_payment_status: "captured" }),
+  );
+  const UNCAPTURED_PAYMENT = toPaymentViewModel(
+    paymentRow({ razorpay_payment_status: null }),
+  );
 
-  it("1: checkout_signature_verified=true + no real webhook evidence yet -> false (the waiting message must remain)", () => {
+  it("1: checkout_signature_verified=true + no real webhook evidence yet -> not confirmed (the waiting message must remain)", () => {
     expect(
       isPaymentCaptureConfirmedByRealWebhook({
         paymentStatus: "UNPAID",
+        latestPayment: UNCAPTURED_PAYMENT,
         latestWebhookEvent: null,
       }),
     ).toBe(false);
-  });
-
-  it("2: PAID order + REAL_RAZORPAY_WEBHOOK evidence with processingStatus PROCESSED -> true (the waiting message must be replaced with a confirmed message)", () => {
     expect(
-      isPaymentCaptureConfirmedByRealWebhook({
-        paymentStatus: "PAID",
-        latestWebhookEvent: REAL_PROCESSED_EVENT,
+      formatCheckoutWebhookConfirmationMessage({
+        paymentStatus: "UNPAID",
+        latestPayment: UNCAPTURED_PAYMENT,
+        latestWebhookEvent: null,
       }),
-    ).toBe(true);
+    ).toBe("Checkout response verified — awaiting webhook confirmation.");
   });
 
-  it("3: the final captured/PAID/FULFILLED-eligible state renders a truthful confirmation (paymentStatus PAID is required, not merely 'some webhook processed')", () => {
-    // An order.paid event alone can reach processingStatus PROCESSED without
-    // itself authorizing capture (Phase 2F semantics) — paymentStatus must
-    // also independently be PAID, never inferred from processingStatus alone.
+  it("2: PAID + provider status captured + REAL_RAZORPAY_WEBHOOK evidence with processingStatus PROCESSED -> confirmed (the waiting message must be replaced with a confirmed message)", () => {
+    const order = {
+      paymentStatus: "PAID" as const,
+      latestPayment: CAPTURED_PAYMENT,
+      latestWebhookEvent: REAL_PROCESSED_EVENT,
+    };
+    expect(isPaymentCaptureConfirmedByRealWebhook(order)).toBe(true);
+    expect(formatCheckoutWebhookConfirmationMessage(order)).toBe(
+      "Payment capture confirmed by Razorpay Test Mode webhook.",
+    );
+  });
+
+  it("3: in the confirmed case, the stale waiting message is genuinely absent from the returned string (not merely a different message that happens to also be truthful)", () => {
+    const message = formatCheckoutWebhookConfirmationMessage({
+      paymentStatus: "PAID",
+      latestPayment: CAPTURED_PAYMENT,
+      latestWebhookEvent: REAL_PROCESSED_EVENT,
+    });
+    expect(message).not.toContain("awaiting webhook confirmation");
+    expect(message).not.toBe(
+      "Checkout response verified — awaiting webhook confirmation.",
+    );
+  });
+
+  it("4: paymentStatus PAID and provider status 'captured' are each independently required, not merely 'some webhook processed' — an order.paid event alone reaching PROCESSED must not, by itself, satisfy confirmation", () => {
+    // order.paid processed, but paymentStatus/provider status not yet PAID/captured.
     expect(
       isPaymentCaptureConfirmedByRealWebhook({
         paymentStatus: "UNPAID",
+        latestPayment: UNCAPTURED_PAYMENT,
         latestWebhookEvent: toWebhookEvidenceViewModel(
           webhookEventRow({
             event_type: "order.paid",
@@ -360,9 +390,20 @@ describe("isPaymentCaptureConfirmedByRealWebhook (Phase 2G UI consistency fix)",
       }),
     ).toBe(false);
 
+    // paymentStatus PAID but provider status not yet reflected as captured.
     expect(
       isPaymentCaptureConfirmedByRealWebhook({
         paymentStatus: "PAID",
+        latestPayment: UNCAPTURED_PAYMENT,
+        latestWebhookEvent: REAL_PROCESSED_EVENT,
+      }),
+    ).toBe(false);
+
+    // Genuine payment.captured driving both PAID and captured -> true.
+    expect(
+      isPaymentCaptureConfirmedByRealWebhook({
+        paymentStatus: "PAID",
+        latestPayment: CAPTURED_PAYMENT,
         latestWebhookEvent: toWebhookEvidenceViewModel(
           webhookEventRow({
             event_type: "payment.captured",
@@ -373,10 +414,11 @@ describe("isPaymentCaptureConfirmedByRealWebhook (Phase 2G UI consistency fix)",
     ).toBe(true);
   });
 
-  it("4: non-real/incomplete provenance can never satisfy real confirmation — absent evidence or an unprocessed/non-PROCESSED webhook state stays false (the type system itself already guarantees WebhookEvidenceViewModel.sourceKind can only ever be the literal REAL_RAZORPAY_WEBHOOK, so the closest constructible 'not real yet' proof is: no evidence at all, or evidence that has not reached PROCESSED)", () => {
+  it("5: non-real/incomplete provenance can never satisfy real confirmation — absent evidence or an unprocessed/non-PROCESSED webhook state stays not-confirmed (the type system itself already guarantees WebhookEvidenceViewModel.sourceKind can only ever be the literal REAL_RAZORPAY_WEBHOOK, so the closest constructible 'not real yet' proof is: no evidence at all, or evidence that has not reached PROCESSED)", () => {
     expect(
       isPaymentCaptureConfirmedByRealWebhook({
         paymentStatus: "PAID",
+        latestPayment: CAPTURED_PAYMENT,
         latestWebhookEvent: null,
       }),
     ).toBe(false);
@@ -384,6 +426,7 @@ describe("isPaymentCaptureConfirmedByRealWebhook (Phase 2G UI consistency fix)",
     expect(
       isPaymentCaptureConfirmedByRealWebhook({
         paymentStatus: "PAID",
+        latestPayment: CAPTURED_PAYMENT,
         latestWebhookEvent: toWebhookEvidenceViewModel(
           webhookEventRow({ processing_status: "RECEIVED" }),
         ),
@@ -393,6 +436,7 @@ describe("isPaymentCaptureConfirmedByRealWebhook (Phase 2G UI consistency fix)",
     expect(
       isPaymentCaptureConfirmedByRealWebhook({
         paymentStatus: "PAID",
+        latestPayment: CAPTURED_PAYMENT,
         latestWebhookEvent: toWebhookEvidenceViewModel(
           webhookEventRow({ processing_status: "FAILED" }),
         ),
@@ -400,17 +444,46 @@ describe("isPaymentCaptureConfirmedByRealWebhook (Phase 2G UI consistency fix)",
     ).toBe(false);
   });
 
-  it("5: webhook-first-then-Checkout-later still renders the final confirmed state correctly — the function is timing-agnostic, evaluating only the order's current final state", () => {
-    // Simulates the order already being PAID with real processed evidence
-    // BEFORE a (hypothetical, later) Checkout verification result would
-    // even be considered — proves no assumption that Checkout precedes the
-    // webhook.
+  it("6: webhook-first-then-Checkout-later still renders the final confirmed state correctly — the function is timing-agnostic, evaluating only the order's current final state", () => {
+    // Simulates the order already being PAID/captured with real processed
+    // evidence BEFORE a (hypothetical, later) Checkout verification result
+    // would even be considered — proves no assumption that Checkout
+    // precedes the webhook.
     expect(
       isPaymentCaptureConfirmedByRealWebhook({
         paymentStatus: "PAID",
+        latestPayment: CAPTURED_PAYMENT,
         latestWebhookEvent: REAL_PROCESSED_EVENT,
       }),
     ).toBe(true);
+  });
+
+  it("7: this task's Case E — the latest DISPLAYED event being order.paid must not block a truthful confirmed message when the durable payment/order state already proves capture (reproduces the exact real deployed scenario that failed manual re-verification: latest webhook event shown was order.paid, yet the order was already PAID with the payment already captured)", () => {
+    const order = {
+      paymentStatus: "PAID" as const,
+      latestPayment: CAPTURED_PAYMENT,
+      latestWebhookEvent: toWebhookEvidenceViewModel(
+        webhookEventRow({
+          event_type: "order.paid",
+          processing_status: "PROCESSED",
+        }),
+      ),
+    };
+    expect(isPaymentCaptureConfirmedByRealWebhook(order)).toBe(true);
+    expect(formatCheckoutWebhookConfirmationMessage(order)).toBe(
+      "Payment capture confirmed by Razorpay Test Mode webhook.",
+    );
+  });
+});
+
+describe("formatCheckoutWebhookConfirmationMessageFromConfirmedFlag (the boolean-only overload PayWithRazorpayButton consumes)", () => {
+  it("maps false/true to exactly the same two strings the order-based formatter produces", () => {
+    expect(
+      formatCheckoutWebhookConfirmationMessageFromConfirmedFlag(false),
+    ).toBe("Checkout response verified — awaiting webhook confirmation.");
+    expect(
+      formatCheckoutWebhookConfirmationMessageFromConfirmedFlag(true),
+    ).toBe("Payment capture confirmed by Razorpay Test Mode webhook.");
   });
 });
 

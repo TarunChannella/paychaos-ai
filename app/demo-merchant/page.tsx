@@ -5,6 +5,7 @@ import { DEMO_MERCHANT_PRODUCT } from "@/lib/demo-merchant/product";
 import { listDemoMerchantOrders } from "@/lib/demo-merchant/service";
 import {
   formatAmountForDisplay,
+  formatCheckoutWebhookConfirmationMessage,
   formatConceptualState,
   isPaymentCaptureConfirmedByRealWebhook,
   type PaymentAttemptViewModel,
@@ -233,9 +234,11 @@ export default async function DemoMerchantPage() {
                           "Awaiting webhook evidence"}
                       </dd>
                     </div>
-                    <p className="col-span-full mt-1 font-medium text-card-foreground">
-                      Checkout response verified — awaiting webhook
-                      confirmation.
+                    <p
+                      className="col-span-full mt-1 font-medium text-card-foreground"
+                      data-testid="persisted-checkout-status-message"
+                    >
+                      {formatCheckoutWebhookConfirmationMessage(order)}
                     </p>
                   </dl>
                 )}

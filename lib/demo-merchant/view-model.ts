@@ -215,24 +215,38 @@ export function toDemoMerchantOrderViewModel(
 }
 
 /**
- * Phase 2G real-verification UI consistency fix — true only when
+ * Phase 2G real-verification UI consistency fix (2026-08-31, corrected
+ * 2026-09-01 after deployed re-verification failure) — true only when
  * authoritative REAL_RAZORPAY_WEBHOOK evidence already confirms this
  * order's payment was captured.
  *
- * A confirmed bug: `pay-with-razorpay-button.tsx`'s post-Checkout evidence
- * block unconditionally claimed "awaiting webhook confirmation" even after
- * a real webhook had already processed the capture — because that claim
- * was derived only from the button's own ephemeral client-side Checkout-
- * verification result, never from the order's actual current webhook
- * evidence. This function is the single source of truth the page passes
- * down instead, so the claim is always order-state-derived, not stale
- * client state (this task's Cases A/B/D).
+ * A confirmed bug, TWICE: `pay-with-razorpay-button.tsx`'s post-Checkout
+ * evidence block, and (discovered only after the first fix still failed
+ * deployed manual verification) `app/demo-merchant/page.tsx`'s OWN
+ * separate, unconditional "persisted-checkout-evidence" paragraph, both
+ * independently claimed "awaiting webhook confirmation" even after a real
+ * webhook had already processed the capture. Neither claim was ever
+ * derived from the order's actual current webhook/payment evidence — this
+ * function (and `formatCheckoutWebhookConfirmationMessage`/
+ * `formatCheckoutWebhookConfirmationMessageFromConfirmedFlag` below) is now
+ * the SINGLE authoritative source every rendering path must consume,
+ * instead of each independently hardcoding its own copy of the claim (this
+ * task's "IMPORTANT DESIGN RULE" — one authoritative decision, no
+ * competing message logic).
  *
- * Requires BOTH the order-level authoritative `paymentStatus` (`PAID` —
- * never merely "some webhook processed something", since e.g. an `order.paid`
- * event alone can reach `processingStatus: "PROCESSED"` without itself
- * authorizing capture, per the Phase 2F `order.paid` semantics) AND a
- * `latestWebhookEvent` that is itself real, processed evidence.
+ * Requires ALL of: the order-level authoritative `paymentStatus` (`PAID` —
+ * never merely "some webhook processed something", since e.g. an
+ * `order.paid` event alone can reach `processingStatus: "PROCESSED"`
+ * without itself authorizing capture, per the Phase 2F `order.paid`
+ * semantics); the persisted `latestPayment.razorpayPaymentStatus`
+ * (`"captured"` — the provider-status half of this task's Case B, checked
+ * independently of `paymentStatus` rather than assuming the two always
+ * agree); and a `latestWebhookEvent` that is itself real, processed
+ * evidence. Deliberately does NOT require `latestWebhookEvent.eventType` to
+ * be `"payment.captured"` specifically (this task's Case E) — if the
+ * durable payment/order state already proves capture, a merely-corroborating
+ * `order.paid` event being the most recently DISPLAYED one must not block a
+ * truthful confirmed message.
  *
  * Cannot be satisfied by synthetic/non-real evidence (this task's Case C):
  * `latestWebhookEvent` is only ever populated from an actual `webhook_events`
@@ -253,14 +267,51 @@ export function toDemoMerchantOrderViewModel(
 export function isPaymentCaptureConfirmedByRealWebhook(
   order: Pick<
     DemoMerchantOrderViewModel,
-    "paymentStatus" | "latestWebhookEvent"
+    "paymentStatus" | "latestPayment" | "latestWebhookEvent"
   >,
 ): boolean {
   return (
     order.paymentStatus === "PAID" &&
+    order.latestPayment !== null &&
+    order.latestPayment.razorpayPaymentStatus === "captured" &&
     order.latestWebhookEvent !== null &&
     order.latestWebhookEvent.sourceKind === "REAL_RAZORPAY_WEBHOOK" &&
     order.latestWebhookEvent.processingStatus === "PROCESSED"
+  );
+}
+
+const AWAITING_WEBHOOK_CONFIRMATION_MESSAGE =
+  "Checkout response verified — awaiting webhook confirmation.";
+const CONFIRMED_BY_REAL_WEBHOOK_MESSAGE =
+  "Payment capture confirmed by Razorpay Test Mode webhook.";
+
+/**
+ * The single authoritative post-Checkout status message, derived from an
+ * already-computed `isPaymentCaptureConfirmedByRealWebhook` result. Every
+ * rendering path (the persisted `app/demo-merchant/page.tsx` evidence block,
+ * and `PayWithRazorpayButton`'s own ephemeral post-Checkout block, which only
+ * has the boolean available, not the full order) MUST call one of these two
+ * functions rather than hardcode either message string itself — this is the
+ * fix for the confirmed duplicate/competing-message-logic bug (see the
+ * doc-comment on `isPaymentCaptureConfirmedByRealWebhook` above).
+ */
+export function formatCheckoutWebhookConfirmationMessageFromConfirmedFlag(
+  confirmed: boolean,
+): string {
+  return confirmed
+    ? CONFIRMED_BY_REAL_WEBHOOK_MESSAGE
+    : AWAITING_WEBHOOK_CONFIRMATION_MESSAGE;
+}
+
+/** Convenience wrapper for callers that have the full order view model available (this round's `app/demo-merchant/page.tsx` fix). */
+export function formatCheckoutWebhookConfirmationMessage(
+  order: Pick<
+    DemoMerchantOrderViewModel,
+    "paymentStatus" | "latestPayment" | "latestWebhookEvent"
+  >,
+): string {
+  return formatCheckoutWebhookConfirmationMessageFromConfirmedFlag(
+    isPaymentCaptureConfirmedByRealWebhook(order),
   );
 }
 
