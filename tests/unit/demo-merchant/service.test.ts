@@ -47,6 +47,16 @@ vi.mock("@/lib/razorpay/checkout-verification", () => ({
   verifyCheckoutSignature: verifyCheckoutSignatureMock,
 }));
 
+// Phase 2G readiness: listDemoMerchantOrders now also resolves each order's
+// latest correlated real webhook event evidence (lib/webhooks/repository.ts
+// owns webhook_events reads/writes — mocked here the same way every other
+// cross-module repository dependency in this file is).
+const listLatestWebhookEventsForPaymentIdsMock = vi.fn();
+vi.mock("@/lib/webhooks/repository", () => ({
+  listLatestWebhookEventsForPaymentIds:
+    listLatestWebhookEventsForPaymentIdsMock,
+}));
+
 const FAKE_KEY_ID = "rzp_test_fake_key_id_not_real";
 const FAKE_KEY_SECRET = "fake-razorpay-key-secret-not-real";
 const getRazorpayEnvMock = vi.fn();
@@ -158,6 +168,9 @@ beforeEach(() => {
   insertVerifiedPaymentMock.mockReset();
   attachCheckoutVerificationToPaymentMock.mockReset();
   listLatestPaymentsForAttemptIdsMock.mockReset().mockResolvedValue(new Map());
+  listLatestWebhookEventsForPaymentIdsMock
+    .mockReset()
+    .mockResolvedValue(new Map());
   createRazorpayOrderMock.mockReset();
   verifyCheckoutSignatureMock.mockReset();
   getRazorpayEnvMock.mockReset().mockReturnValue({
@@ -262,6 +275,81 @@ describe("listDemoMerchantOrders", () => {
       "a",
     ]);
     expect(result[0]?.latestPaymentAttempt?.status).toBe("CREATED");
+  });
+
+  it("also resolves each order's latest correlated real webhook event (never hardcodes null)", async () => {
+    const rowA = orderRow({ id: "a" });
+    listRecentOrdersMock.mockResolvedValue([rowA]);
+    countFulfilmentsForOrderIdsMock.mockResolvedValue(new Map([["a", 0]]));
+    listLatestPaymentAttemptsForOrderIdsMock.mockResolvedValue(
+      new Map([["a", attemptRow({ order_id: "a" })]]),
+    );
+    listLatestPaymentsForAttemptIdsMock.mockResolvedValue(
+      new Map([["attempt-1", paymentRow({ id: "payment-a" })]]),
+    );
+    listLatestWebhookEventsForPaymentIdsMock.mockResolvedValue(
+      new Map([
+        [
+          "payment-a",
+          {
+            id: "webhook-event-1",
+            razorpay_event_id: "evt_fake",
+            event_type: "payment.captured",
+            source_kind: "REAL_RAZORPAY_WEBHOOK",
+            razorpay_order_id: "order_fake",
+            razorpay_payment_id: "pay_fake",
+            payment_attempt_id: VALID_ATTEMPT_ID,
+            payment_id: "payment-a",
+            signature_verified: true,
+            received_at: "2026-01-01T00:00:00.000Z",
+            provider_created_at: "2026-01-01T00:00:00.000Z",
+            amount_subunits: 50000,
+            currency: "INR",
+            razorpay_payment_status: "captured",
+            raw_body_sha256: "a".repeat(64),
+            raw_payload_redacted: {},
+            processing_status: "PROCESSED",
+            processed_at: "2026-01-01T00:00:01.000Z",
+            duplicate_delivery_count: 0,
+            updated_at: "2026-01-01T00:00:01.000Z",
+          },
+        ],
+      ]),
+    );
+
+    const { listDemoMerchantOrders } =
+      await import("@/lib/demo-merchant/service");
+    const result = await listDemoMerchantOrders(10);
+
+    expect(listLatestWebhookEventsForPaymentIdsMock).toHaveBeenCalledWith([
+      "payment-a",
+    ]);
+    expect(result[0]?.latestWebhookEvent).toEqual({
+      sourceKind: "REAL_RAZORPAY_WEBHOOK",
+      eventType: "payment.captured",
+      signatureVerified: true,
+      processingStatus: "PROCESSED",
+      receivedAt: "2026-01-01T00:00:00.000Z",
+      processedAt: "2026-01-01T00:00:01.000Z",
+      isDuplicateDelivery: false,
+      duplicateDeliveryCount: 0,
+    });
+  });
+
+  it("leaves latestWebhookEvent null when there is no latest payment to correlate against", async () => {
+    const rowA = orderRow({ id: "a" });
+    listRecentOrdersMock.mockResolvedValue([rowA]);
+    countFulfilmentsForOrderIdsMock.mockResolvedValue(new Map([["a", 0]]));
+
+    const { listDemoMerchantOrders } =
+      await import("@/lib/demo-merchant/service");
+    const result = await listDemoMerchantOrders(10);
+
+    // No payment attempt/payment exists for this order, so the webhook
+    // lookup must never even be asked to correlate a payment id that
+    // doesn't exist.
+    expect(listLatestWebhookEventsForPaymentIdsMock).toHaveBeenCalledWith([]);
+    expect(result[0]?.latestWebhookEvent).toBeNull();
   });
 });
 

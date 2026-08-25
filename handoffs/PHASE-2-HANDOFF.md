@@ -2953,3 +2953,201 @@ Phase 2G (real Razorpay Test Mode webhook configuration, `RAZORPAY_WEBHOOK_SECRE
 **NONE — await architect review of Phase 2F before starting Phase 2G.**
 
 No migration was applied by Claude at any point (the developer applied it manually, per Section 259). No commit was made — HEAD remains `dd3dcc0cc38a27e7740fc8828263da79fda25be3`. Nothing was pushed. No Razorpay webhook was configured. No Razorpay payment was created. Phase 2G was not started.
+
+---
+
+# PHASE 2G — REAL TEST MODE VERIFICATION READINESS
+
+## 271. Starting commit and scope
+
+- **Starting branch:** `phase-2-razorpay`
+- **Starting HEAD:** `072e97d728d873bdb76f3f0cac5985c8a8e090b3` (confirmed clean working tree before this round began — additional Phase 2A–2F architect-review commits landed between Section 270's `dd3dcc0c...` and this HEAD; none of that history was touched by this round).
+- **Scope:** a READINESS audit only. Does NOT perform the real Test Mode payment, does NOT configure the Razorpay Dashboard, does NOT create `RAZORPAY_WEBHOOK_SECRET`, does NOT deploy to Vercel, does NOT start Phase 3. Audits whether the application is ready for a human to later perform the real external Phase 2G manual verification (G1–G14, Section 279 below).
+- Every relevant doc (`CLAUDE.md`, `docs/PROJECT_CONTEXT.md`, `docs/ARCHITECTURE.md`, `docs/PHASE_PLAN.md`, `docs/RAZORPAY_GUIDE.md`, `docs/DATABASE.md`, `docs/MONEY_INVARIANTS.md`, `docs/SECURITY.md`, `docs/TESTING.md`, `docs/CHAOS_SCENARIOS.md`, `docs/DEMO_PLAN.md`) was read fresh, along with this handoff in full and the current Phase 2A–2F implementation (`app/api/webhooks/razorpay/route.ts`, `lib/config/*`, `lib/demo-merchant/*`, `lib/razorpay/*`, `lib/events/*`, `lib/webhooks/*`, `lib/supabase/*`, all migrations, and the full `tests/unit`/`tests/integration/supabase` trees).
+
+## 272. Operator access-gate audit — confirmed P0 gap, corrected
+
+No code implementing `docs/SECURITY.md` Section 17's "P0 Access Gate" existed anywhere in the repository before this round: no `middleware.ts`/proxy file, no `lib/access/*`, no route under `app/api/access/*`, and `PAYCHAOS_ACCESS_GATE`/`PAYCHAOS_ACCESS_TOKEN`/`PAYCHAOS_SESSION_SECRET` were referenced only in documentation, `lib/security/logger.ts`'s redaction denylist (which explicitly disclaims implementing any gate functionality itself), and a test asserting these names must NOT yet appear in `.env.example`. `docs/PHASE_PLAN.md` Section 6.8 item 1 lists "implement or enable the minimal single-workspace operator access gate" as a Claude implementation task, and `docs/ARCHITECTURE.md` ADR-A16 makes the gate mandatory "before any publicly reachable payment-enabled PayChaos deployment is used" — exactly the state Phase 2G's public HTTPS exposure step (G3 below) is about to create. This is a confirmed P0 gap for this round's Section 4 ("Public Payment Deployment Safety Audit"), corrected with the smallest workable implementation:
+
+- `lib/config/access-env.ts` — server-only, lazily-validated config (mirrors `lib/config/razorpay-webhook-env.ts`'s lazy pattern, NOT `razorpay-env.ts`'s eager startup validation): `PAYCHAOS_ACCESS_GATE` unset/empty/`"disabled"` → gate disabled (the correct default for local development — zero change to existing dev/test/e2e workflow, confirmed by the full regression gate below); `"enabled"` → `PAYCHAOS_ACCESS_TOKEN` (>=20 chars) and `PAYCHAOS_SESSION_SECRET` (>=32 chars, must differ from the token) become required and fail closed otherwise; any other value is rejected rather than guessed.
+- `lib/access/session.ts` — signed session tokens (`<expiresAtMs>.<HMAC-SHA256 hex>`), `node:crypto` HMAC + `timingSafeEqual`, matching `lib/razorpay/webhook-verification.ts`'s established pattern. No user record (single workspace, per `docs/SECURITY.md`).
+- `middleware.ts` — Node.js middleware runtime (same reason the webhook route pins `runtime = "nodejs"`). Protects only `/demo-merchant` and its sub-paths (the one payment-mutation-capable surface currently exposed — Demo Merchant order creation, Razorpay Order creation, Checkout launch, and Checkout verification server actions all post to that same URL). Checks the request pathname itself as defense in depth (not solely the exported `matcher`), so `/api/webhooks/razorpay` and `/api/access/*` are structurally unreachable by the gate logic regardless of matcher config drift. Fails closed (503) if the gate is enabled but misconfigured — never falls open.
+- `app/api/access/login/route.ts` / `app/api/access/logout/route.ts` — the only way to establish/clear a session; timing-safe token comparison; never logs the token (per `docs/SECURITY.md`'s "Access-Gate Audit: Do not log the access token"); logs only `ACCESS_GRANTED`/`ACCESS_DENIED` outcomes.
+- `app/access/page.tsx` — minimal single-field login screen (no dashboard), open-redirect-guarded `next` handling.
+- `.env.example` documents the three new names with safe placeholders (default `PAYCHAOS_ACCESS_GATE=disabled`); `tests/unit/config/env-files.test.ts`'s stale "not yet declared" assertion (a legitimate Phase 2A-era premise, exactly like the `RAZORPAY_KEY_SECRET` precedent it was modeled on) was updated to assert the names now ARE declared.
+
+**Verified NOT touched:** `RAZORPAY_WEBHOOK_SECRET` remains undeclared in `.env.example` and unconfigured in `.env.local` — still a Phase 2G-manual-step-only value, validated lazily exactly as before.
+
+## 273. Webhook public-exemption and signature-boundary result
+
+Confirmed by direct code inspection and a dedicated test suite (`tests/unit/middleware.test.ts`): `POST /api/webhooks/razorpay` is never touched by the access-gate middleware (pathname check, defense in depth beyond the matcher) regardless of gate mode, and its trust boundary remains exactly `X-Razorpay-Signature` + `RAZORPAY_WEBHOOK_SECRET` verified against the raw body in `lib/razorpay/webhook-verification.ts` — completely unmodified by this round. No Phase 2A–2F file was rewritten; the correction is additive only.
+
+## 274. Webhook timing-instrumentation result — already satisfied, no change made
+
+`app/api/webhooks/razorpay/route.ts` already measures `latency_ms` as `Date.now() - startedAt` with `startedAt` captured before the raw body is even read, through every branch (success, duplicate, 4xx, 5xx) via `logEvent("webhook_request_completed", ...)`. The full critical path — raw body read, signature verification, persistence/dedup, normalization/correlation, transactional merchant processing (`process_webhook_payment_event`) — runs synchronously with no intentional sleep, no AI, no network reconciliation, and no analytics/report generation before the response, confirmed unchanged from Phase 2D–2F. No code or test change was required for this item; the existing structured log line is sufficient manual evidence for the real deployed Phase 2G webhook (G12).
+
+**2026-08-30 architect timing-evidence correction:** the original readiness round marked 2G-RDY-09/10 PASS on this narrative description alone, without citing the specific automated test `docs/RAZORPAY_GUIDE.md` requires ("an automated timing/budget test must prove the normal handler contains no intentional long sleep or unbounded work"). No such explicit test existed at that time. It has now been added — see Section 285 for the full finding and resolution. Explicit evidence:
+
+- **Test file:** `tests/unit/api/webhooks-razorpay-route.test.ts`
+- **Describe block:** `"webhook critical path — timing / bounded-work contract (Phase 2G readiness)"`
+- **Six `it` cases (A–F)** read the actual source of the entire synchronous critical-path chain (`app/api/webhooks/razorpay/route.ts`, `lib/webhooks/service.ts`, `lib/events/processor.ts`, `lib/webhooks/event-processing-repository.ts`, `lib/webhooks/repository.ts`) and assert, structurally:
+  - **A** — `const startedAt = Date.now()` appears (by source index) strictly before `request.arrayBuffer()`.
+  - **B** — the success-path `latency_ms: Date.now() - startedAt` log line appears (by source index) strictly after `const result = await ingestRazorpayWebhook(...)` — i.e. after the full verify → persist/dedup → normalize/correlate → merchant-process chain has already resolved.
+  - **C** — none of the five files contain `setTimeout(`, `setInterval(`, `Atomics.wait(`, a `node:timers`/`timers` import, or an ad hoc `sleep(`/`delay(` call.
+  - **D** — none of the five files contain an unbounded `while (true)` or `for (;;)` loop.
+  - **E** — none of the five files import an AI/ML/diagnosis/reconciliation/analytics/report-generation module (`openai`/`anthropic`/`ollama`/`langchain`/`lib/diagnosis`/`lib/reliability`/`lib/reconciliation`/`lib/analytics`/`lib/report`).
+  - **F** — a self-check confirming this test file itself contains no fabricated `<5000ms` wall-clock assertion (`toBeLessThan(5000)`, `toBeGreaterThan(5000)`, or `performance.now()`) — i.e. this evidence is 100% structural, never a mocked/faked timing benchmark.
+- **Result:** `npx vitest run tests/unit/api/webhooks-razorpay-route.test.ts` → 33/33 PASS (27 pre-existing + 6 new).
+- **What remains PENDING:** the real `<5000 ms` measurement against a genuine deployed Razorpay Test Mode webhook request — that is explicitly G12 (Section 283), performed only during the real manual verification chain, never claimed here.
+
+## 275. Evidence UI — confirmed P0 gap, corrected
+
+Before this round, the Demo Merchant UI (`app/demo-merchant/page.tsx`) displayed merchant order/payment/business state, fulfilment count, Razorpay Order ID/status, Razorpay Payment ID, and Checkout-signature-verified status — but nothing from `webhook_events` at all: no real-webhook presence, no event type, no webhook signature-verified status, no webhook processing state, and no explicit real-vs-synthetic provenance label. This is a confirmed gap against this round's Section 6 ("Basic Payment/Event Evidence UI — P0") and `docs/PHASE_PLAN.md` item 21. Corrected with the smallest read-only addition, following the exact existing repository → service → view-model → page layering:
+
+- `lib/webhooks/repository.ts` — new `listLatestWebhookEventsForPaymentIds(paymentIds)`, a batch lookup mirroring `lib/demo-merchant/repository.ts`'s `listLatestPaymentsForAttemptIds` shape exactly. Still the only place `webhook_events` is read/written.
+- `lib/demo-merchant/view-model.ts` — new `WebhookEvidenceViewModel`/`toWebhookEvidenceViewModel`, exposing only `sourceKind` (always the literal `"REAL_RAZORPAY_WEBHOOK"`), `eventType`, `signatureVerified`, `processingStatus`, `receivedAt`, `processedAt`, `isDuplicateDelivery`, `duplicateDeliveryCount`. Deliberately excludes `raw_payload_redacted` and `raw_body_sha256` — never rendered. `DemoMerchantOrderViewModel` gained `latestWebhookEvent: WebhookEvidenceViewModel | null`.
+- `lib/demo-merchant/service.ts` — `listDemoMerchantOrders` now also batch-resolves each order's latest correlated webhook event by payment id.
+- `app/demo-merchant/page.tsx` — a new evidence block per order (rendered only when real webhook evidence exists) showing an explicit "Razorpay Test Mode — Real Event" badge, event type, signature-verified, processing state, duplicate-delivery count, and received-at; a distinct "no evidence yet" message otherwise. No raw payload, no secret, no PII/instrument field is rendered anywhere — the view model structurally cannot carry one.
+
+**Real vs. synthetic provenance:** `webhook_events.source_kind` is a fixed-value database CHECK constraint (`docs/DATABASE.md` Section 13: the only permitted value is `REAL_RAZORPAY_WEBHOOK`) — every row `listLatestWebhookEventsForPaymentIds` can possibly return is genuine provider evidence by construction. A PayChaos replay/simulation/test-fixture row can only ever exist in `event_processing_attempts` (a different table, with its own `source_kind` values `PAYCHAOS_REPLAY`/`PAYCHAOS_SIMULATION`/`TEST_FIXTURE`) — this evidence projection never reads that table, so a synthetic row can never be mislabeled real by this UI.
+
+## 276. Files changed this round
+
+**Added:** `lib/config/access-env.ts`, `lib/access/session.ts`, `middleware.ts`, `app/api/access/login/route.ts`, `app/api/access/logout/route.ts`, `app/access/page.tsx`, `tests/unit/config/access-env.test.ts`, `tests/unit/access/session.test.ts`, `tests/unit/middleware.test.ts`, `tests/unit/api/access-login-route.test.ts`, `tests/unit/api/access-logout-route.test.ts`.
+
+**Modified:** `.env.example`, `app/demo-merchant/page.tsx`, `lib/demo-merchant/service.ts`, `lib/demo-merchant/view-model.ts`, `lib/webhooks/repository.ts`, `tests/unit/config/env-files.test.ts`, `tests/unit/demo-merchant/service.test.ts`, `tests/unit/demo-merchant/view-model.test.ts`, `tests/unit/webhooks/repository.test.ts`.
+
+**Deleted:** none. **Database/migration:** none — no migration file was created, edited, or applied; every new capability uses the already-approved `webhook_events`/`payments` schema read-only.
+
+## 277. Tests and regression gate — results
+
+| Command                                                                                                                                                                                          | Result                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| New/updated focused unit files (access-env, session, middleware, login route, logout route, env-files, view-model, service, webhooks/repository)                                                 | **9/9 files, 200 individual test cases across them, all PASS** (see Section 278 for the full-suite roll-up including these)                                                                                                                                                                                                              |
+| `npm run test` (full offline unit suite)                                                                                                                                                         | **35/35 files, 632/632 tests PASS, exit 0**                                                                                                                                                                                                                                                                                              |
+| `npm run test:integration:supabase` (real Supabase)                                                                                                                                              | **11/11 files, 125/125 tests PASS, exit 0** — unchanged from Phase 2F, proving the schema/RLS/data model is untouched                                                                                                                                                                                                                    |
+| `npm run lint`                                                                                                                                                                                   | **PASS, exit 0**                                                                                                                                                                                                                                                                                                                         |
+| `npm run typecheck`                                                                                                                                                                              | **PASS, exit 0**                                                                                                                                                                                                                                                                                                                         |
+| `npm run build`                                                                                                                                                                                  | **PASS** after clearing a stale `.next` OneDrive-lock artifact (the same known Windows/OneDrive condition documented in prior sections, not a product defect) — production build succeeds; new routes `/access`, `/api/access/login`, `/api/access/logout` and the `Proxy (Middleware)` layer all appear correctly in the route manifest |
+| `npm run e2e`                                                                                                                                                                                    | **2/2 PASS** on a clean run; one earlier attempt hit the same known dev-server cold-compile timeout under 2 parallel workers documented since Phase 1/2F — confirmed environmental by an isolated single-worker re-run of the same spec (16.3s, PASS), then reconfirmed by a full clean 2/2 re-run                                       |
+| `npx prettier --check` on every new/modified file                                                                                                                                                | **PASS** after `--write` on 7 files with pre-existing-style line-length/wrapping differences (no logic change)                                                                                                                                                                                                                           |
+| Client static-bundle secret-name scan (`.next/static/**/*.js` for `RAZORPAY_KEY_SECRET`/`SUPABASE_SERVICE_ROLE_KEY`/`RAZORPAY_WEBHOOK_SECRET`/`PAYCHAOS_ACCESS_TOKEN`/`PAYCHAOS_SESSION_SECRET`) | **0 matches**                                                                                                                                                                                                                                                                                                                            |
+| `git diff --check`                                                                                                                                                                               | **PASS** — only benign LF/CRLF advisories (the same pre-existing, out-of-scope Windows `core.autocrlf` condition documented since Phase 2A), no real whitespace errors                                                                                                                                                                   |
+
+## 278. Security review
+
+- `PAYCHAOS_ACCESS_TOKEN`/`PAYCHAOS_SESSION_SECRET` are never logged (dedicated test asserts this across every login-route code path) and never appear in any HTTP response body.
+- Session cookie is `HttpOnly`, `Secure` in production, `SameSite=Lax`, path-scoped, 12-hour lifetime — never written to `localStorage`.
+- Token comparison and session-signature verification both use `node:crypto.timingSafeEqual`.
+- Fails closed on gate misconfiguration (enabled but invalid token/secret) — denies the protected route (503) rather than falling open; a dedicated test proves this.
+- The webhook route's own trust boundary (HMAC signature + `RAZORPAY_WEBHOOK_SECRET`) is provably untouched — no line in `app/api/webhooks/razorpay/route.ts`, `lib/webhooks/service.ts`, or `lib/razorpay/webhook-verification.ts` was edited this round.
+- Client static-bundle scan (Section 277) confirms none of the five critical secret names ever reach the browser bundle.
+- No new dependency was added — `node:crypto` only, matching the existing `lib/razorpay/webhook-verification.ts` precedent (CLAUDE.md "do not add unnecessary frameworks").
+
+## 279. Historical real Phase 2C payment — zero-mutation proof (this round)
+
+A read-only Node script (not committed, deleted immediately after use) queried the real Supabase project directly for the historical order `eabed2c4-5d48-4f20-8cc9-67248564648a` / Razorpay Order `order_TTYzkTb1oMiRwP` / Razorpay Payment `pay_TTcbVd43PMN79M`. Result, confirmed identical to the state documented after Phase 2F approval:
+
+```
+orders.payment_status = UNPAID
+orders.business_status = OPEN
+latest payment_attempt.status = CHECKOUT_IN_PROGRESS (razorpay_order_id = order_TTYzkTb1oMiRwP)
+payments.razorpay_payment_status = NULL
+payments.checkout_signature_verified = true
+payments.captured_at = NULL
+payments.failed_at = NULL
+fulfilments for this order = 0
+webhook_events (whole table) = 0
+event_processing_attempts (whole table) = 0
+```
+
+Zero mutation confirmed. This round did not create a Razorpay Order, did not create a Razorpay payment, and did not open Checkout.
+
+## 280. Known issue — `middleware.ts` naming convention deprecated in Next.js 16.3.2
+
+`npm run build` and `npm run e2e` both emit: `The "middleware" file convention is deprecated. Please use "proxy" instead.` (`npx @next/codemod@canary middleware-to-proxy .`). The file works correctly under this Next.js version (build succeeds, all tests pass, the route manifest correctly shows `ƒ Proxy (Middleware)`) — this is a naming-convention deprecation warning, not a build error or functional defect. Severity: LOW, non-blocking. Recommended follow-up (a separate, dedicated task, not folded into this readiness round per "smallest possible correction"): rename `middleware.ts` to `proxy.ts` via the official codemod once available, with its own test/build verification pass.
+
+## 281. Explicit non-claims
+
+**NO REAL PHASE 2G PAYMENT YET. NO REAL PHASE 2G WEBHOOK YET. NO PHASE 2G MANUAL APPROVAL YET.** No `RAZORPAY_WEBHOOK_SECRET` was created. No Razorpay Dashboard was configured. No Vercel deployment was performed. No migration was created or applied. Nothing was committed. Nothing was pushed. Phase 3 was not touched.
+
+## 282. Phase 2G readiness lifecycle
+
+```
+IMPLEMENTED          PENDING REAL VERIFICATION  (application-side readiness — access gate,
+                                                  webhook exemption/timing, evidence UI —
+                                                  is now in place; the real external flow is not)
+TESTED               READY  (632/632 unit, 125/125 real-Supabase, lint/typecheck/build/e2e
+                             all green — see Section 277)
+MANUALLY VERIFIED    PENDING  (G1–G14 below remain entirely undone)
+DOCUMENTED           CANDIDATE  (this section)
+APPROVED             PENDING
+```
+
+Phase 2 as a whole remains **NOT APPROVED**. This round does not change that.
+
+## 283. Phase 2G manual gates that will follow (documented, not performed)
+
+- **G1** — confirm public deployment/access-gate readiness (this round's own subject — `PAYCHAOS_ACCESS_GATE=enabled` plus real `PAYCHAOS_ACCESS_TOKEN`/`PAYCHAOS_SESSION_SECRET` values must be set on the deployment target; they remain unset/disabled locally by design).
+- **G2** — create/store a dedicated `RAZORPAY_WEBHOOK_SECRET` privately.
+- **G3** — expose an HTTPS endpoint (temporary tunnel or Vercel preview).
+- **G4** — configure the Razorpay Dashboard in TEST MODE, webhook URL `https://<public-domain>/api/webhooks/razorpay`, subscribed ONLY to `payment.captured`, `payment.failed`, `order.paid`.
+- **G5** — verify the webhook is enabled in the Dashboard.
+- **G6** — perform one NEW successful Razorpay Test Mode payment.
+- **G7** — verify Checkout signature evidence in the UI/DB.
+- **G8** — confirm a genuine webhook was received.
+- **G9** — inspect DB correlation/evidence directly.
+- **G10** — verify payment captured, order PAID, business FULFILLED, exactly one fulfilment.
+- **G11** — inspect the UI evidence added in Section 275.
+- **G12** — inspect the deployed webhook's `latency_ms` (Section 274's instrumentation) and prove it is under 5000 ms for the real request.
+- **G13** — if practical, an approved Test Mode redelivery/duplicate verification.
+- **G14** — final Phase 2 handoff reconciliation and approval.
+
+## 284. Final next action
+
+**Developer performs G1–G5** (deploy with the access gate enabled, configure the Razorpay Dashboard webhook in Test Mode) before any real Test Mode payment is attempted. Only the developer can perform G1–G14 — none of it can be done from this session (no Razorpay Dashboard access, no ability to deploy, no ability to make a real payment). HEAD remains `072e97d728d873bdb76f3f0cac5985c8a8e090b3` at the start of this round; see the coordinator's own record of the final HEAD after this round's changes are reviewed. No commit was made by this round. Nothing was pushed.
+
+---
+
+# PHASE 2G READINESS — ARCHITECT TIMING-EVIDENCE CORRECTION
+
+**2026-08-30. Narrow correction only** — the access-gate and evidence-UI work from Sections 271–284 is entirely preserved and untouched by this round.
+
+## 285. Architect finding and resolution
+
+**Finding:** the Section 274/282 readiness report marked 2G-RDY-09 ("`latency_ms` covers the normal critical request path") and 2G-RDY-10 ("no long/unbounded work added to the webhook path") PASS on a narrative description of the code alone, without citing the specific automated test `docs/RAZORPAY_GUIDE.md` requires: "an automated timing/budget test must prove the normal handler contains no intentional long sleep or unbounded work." A search of `tests/unit/api/webhooks-razorpay-route.test.ts` and `tests/unit/webhooks/service.test.ts` confirmed no existing test asserted this contract — a genuine evidence gap, not a functional defect (the underlying handler code was, and remains, correct).
+
+**Resolution:** the smallest possible structural test addition — six `it` cases in a new describe block in `tests/unit/api/webhooks-razorpay-route.test.ts` (full detail in Section 274) — proving, via source-index and pattern assertions against the real critical-path files (never a mocked/faked wall-clock number), that: timing starts before raw-body read; the success-path latency measurement wraps the complete verify → persist/dedup → normalize/correlate → merchant-process chain; no intentional timer/sleep primitive exists anywhere in that chain; no unbounded loop exists anywhere in that chain; no AI/diagnosis/reconciliation/analytics module is imported anywhere in that chain; and this test file itself makes no fabricated `<5000ms` assertion. The real `<5000 ms` measurement against a genuine deployed webhook remains explicitly G12 — this test does not and cannot substitute for it.
+
+No runtime source file was modified. Only one test file changed.
+
+## 286. Middleware deprecation warning — disposition confirmed
+
+Re-confirmed non-blocking per Section 280: the Next.js 16.3.2 "middleware is deprecated, use proxy" warning is cosmetic (build succeeds, all tests pass, the route manifest correctly resolves `ƒ Proxy (Middleware)`). Disposition: **NON-BLOCKING — deferred to Phase 5 cleanup.** `middleware.ts` was NOT renamed to `proxy.ts` during this correction, per explicit instruction — the access-gate architecture is unchanged.
+
+## 287. Tests and regression gate — this correction only
+
+| Command                                                         | Result                                                                                   |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `npx vitest run tests/unit/api/webhooks-razorpay-route.test.ts` | **33/33 PASS** (27 pre-existing + 6 new)                                                 |
+| `npx vitest run tests/unit/webhooks/service.test.ts`            | **50/50 PASS** (unchanged, run for relevance confirmation only)                          |
+| `npm run lint`                                                  | **PASS, exit 0**                                                                         |
+| `npm run typecheck`                                             | **PASS, exit 0**                                                                         |
+| `npx prettier --check` on the one changed file                  | **PASS** after one `--write` (pre-existing-style wrapping, no logic change), re-verified |
+| `git diff --check`                                              | **PASS** — only benign LF/CRLF advisories                                                |
+
+No full unit suite, no real-Supabase integration suite, no build, and no e2e were re-run this round — none were required or requested; no runtime source changed.
+
+## 288. Files changed by this correction
+
+**Modified:** `tests/unit/api/webhooks-razorpay-route.test.ts` (one file — the new timing/bounded-work describe block).
+
+**Added/deleted/database:** none.
+
+## 289. Explicit non-claims (reaffirmed)
+
+**NO REAL PHASE 2G PAYMENT YET. NO REAL PHASE 2G WEBHOOK YET. NO PHASE 2G MANUAL APPROVAL YET.** No `RAZORPAY_WEBHOOK_SECRET` was created. No Razorpay Dashboard was configured. No `.env.local` value was edited or printed. No Vercel deployment was performed. No migration was created. Nothing was committed. Nothing was pushed. Phase 3 was not touched. `middleware.ts` was not renamed. No runtime/access-gate/evidence-UI/deduplication/merchant-processing/signature-verification behavior was modified.
+
+## 290. Recommendation
+
+**PHASE 2G READINESS READY FOR ARCHITECT RE-REVIEW.** The evidence gap identified in Section 285 is resolved with explicit, source-verified automated evidence; no other change was made to the readiness candidate.

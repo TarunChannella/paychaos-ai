@@ -6,16 +6,18 @@ import {
   toDemoMerchantOrderViewModel,
   toPaymentAttemptViewModel,
   toPaymentViewModel,
+  toWebhookEvidenceViewModel,
 } from "@/lib/demo-merchant/view-model";
 import type { Database } from "@/lib/supabase/types";
 
-// Phase 1E/2B/2C: pure DB-row -> view-model mapping and display formatting —
-// no Supabase/network — fully offline.
+// Phase 1E/2B/2C/2G-readiness: pure DB-row -> view-model mapping and
+// display formatting — no Supabase/network — fully offline.
 
 type OrderRow = Database["public"]["Tables"]["orders"]["Row"];
 type PaymentAttemptRow =
   Database["public"]["Tables"]["payment_attempts"]["Row"];
 type PaymentRow = Database["public"]["Tables"]["payments"]["Row"];
+type WebhookEventRow = Database["public"]["Tables"]["webhook_events"]["Row"];
 
 function row(overrides: Partial<OrderRow> = {}): OrderRow {
   return {
@@ -74,6 +76,34 @@ function paymentRow(overrides: Partial<PaymentRow> = {}): PaymentRow {
   };
 }
 
+function webhookEventRow(
+  overrides: Partial<WebhookEventRow> = {},
+): WebhookEventRow {
+  return {
+    id: "webhook-event-1",
+    razorpay_event_id: "evt_fake_id",
+    event_type: "payment.captured",
+    source_kind: "REAL_RAZORPAY_WEBHOOK",
+    razorpay_order_id: "order_fake_id",
+    razorpay_payment_id: "pay_fake_id",
+    payment_attempt_id: "attempt-1",
+    payment_id: "payment-1",
+    signature_verified: true,
+    received_at: "2026-01-01T00:00:00.000Z",
+    provider_created_at: "2026-01-01T00:00:00.000Z",
+    amount_subunits: 50000,
+    currency: "INR",
+    razorpay_payment_status: "captured",
+    raw_body_sha256: "a".repeat(64),
+    raw_payload_redacted: {},
+    processing_status: "PROCESSED",
+    processed_at: "2026-01-01T00:00:01.000Z",
+    duplicate_delivery_count: 0,
+    updated_at: "2026-01-01T00:00:01.000Z",
+    ...overrides,
+  };
+}
+
 describe("formatAmountForDisplay", () => {
   it("formats INR subunits as a rupee amount with 2 decimals", () => {
     expect(formatAmountForDisplay(50000, "INR")).toBe("₹500.00");
@@ -89,7 +119,7 @@ describe("formatAmountForDisplay", () => {
 });
 
 describe("toDemoMerchantOrderViewModel", () => {
-  it("maps a fresh UNPAID/OPEN row with 0 fulfilments to conceptualState=CREATED, latestPaymentAttempt=null and latestPayment=null by default", () => {
+  it("maps a fresh UNPAID/OPEN row with 0 fulfilments to conceptualState=CREATED, latestPaymentAttempt=null, latestPayment=null and latestWebhookEvent=null by default", () => {
     const vm = toDemoMerchantOrderViewModel(row(), 0);
 
     expect(vm).toEqual({
@@ -103,6 +133,7 @@ describe("toDemoMerchantOrderViewModel", () => {
       createdAt: "2026-01-01T00:00:00.000Z",
       latestPaymentAttempt: null,
       latestPayment: null,
+      latestWebhookEvent: null,
     });
   });
 
@@ -123,6 +154,34 @@ describe("toDemoMerchantOrderViewModel", () => {
       capturedAt: null,
       failedAt: null,
     });
+  });
+
+  it("maps the latest webhook event row when one is supplied, and defaults to null when omitted", () => {
+    const withEvent = toDemoMerchantOrderViewModel(
+      row(),
+      0,
+      attemptRow(),
+      paymentRow(),
+      webhookEventRow(),
+    );
+    expect(withEvent.latestWebhookEvent).toEqual({
+      sourceKind: "REAL_RAZORPAY_WEBHOOK",
+      eventType: "payment.captured",
+      signatureVerified: true,
+      processingStatus: "PROCESSED",
+      receivedAt: "2026-01-01T00:00:00.000Z",
+      processedAt: "2026-01-01T00:00:01.000Z",
+      isDuplicateDelivery: false,
+      duplicateDeliveryCount: 0,
+    });
+
+    const withoutEvent = toDemoMerchantOrderViewModel(
+      row(),
+      0,
+      attemptRow(),
+      paymentRow(),
+    );
+    expect(withoutEvent.latestWebhookEvent).toBeNull();
   });
 
   it("maps PENDING/OPEN to PAYMENT_PENDING", () => {
@@ -209,6 +268,57 @@ describe("toPaymentViewModel", () => {
     expect(vm.razorpayPaymentStatus).toBeNull();
     expect(vm.capturedAt).toBeNull();
     expect(vm.failedAt).toBeNull();
+  });
+});
+
+describe("toWebhookEvidenceViewModel", () => {
+  it("always labels sourceKind as REAL_RAZORPAY_WEBHOOK", () => {
+    const vm = toWebhookEvidenceViewModel(webhookEventRow());
+    expect(vm.sourceKind).toBe("REAL_RAZORPAY_WEBHOOK");
+  });
+
+  it("derives isDuplicateDelivery from duplicate_delivery_count > 0", () => {
+    expect(
+      toWebhookEvidenceViewModel(
+        webhookEventRow({ duplicate_delivery_count: 0 }),
+      ).isDuplicateDelivery,
+    ).toBe(false);
+    expect(
+      toWebhookEvidenceViewModel(
+        webhookEventRow({ duplicate_delivery_count: 2 }),
+      ).isDuplicateDelivery,
+    ).toBe(true);
+  });
+
+  it("never includes raw_payload_redacted or raw_body_sha256 in the view model", () => {
+    const vm = toWebhookEvidenceViewModel(webhookEventRow());
+    expect(vm).not.toHaveProperty("rawPayloadRedacted");
+    expect(vm).not.toHaveProperty("rawBodySha256");
+    expect(Object.keys(vm)).not.toContain("raw_payload_redacted");
+    expect(Object.keys(vm)).not.toContain("raw_body_sha256");
+  });
+
+  it("maps every displayed field from the row", () => {
+    const vm = toWebhookEvidenceViewModel(
+      webhookEventRow({
+        event_type: "order.paid",
+        signature_verified: true,
+        processing_status: "PROCESSING",
+        received_at: "2026-02-02T00:00:00.000Z",
+        processed_at: null,
+        duplicate_delivery_count: 3,
+      }),
+    );
+    expect(vm).toEqual({
+      sourceKind: "REAL_RAZORPAY_WEBHOOK",
+      eventType: "order.paid",
+      signatureVerified: true,
+      processingStatus: "PROCESSING",
+      receivedAt: "2026-02-02T00:00:00.000Z",
+      processedAt: null,
+      isDuplicateDelivery: true,
+      duplicateDeliveryCount: 3,
+    });
   });
 });
 

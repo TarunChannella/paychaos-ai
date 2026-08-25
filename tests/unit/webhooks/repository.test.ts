@@ -16,6 +16,8 @@ type InsertFn = (payload: Record<string, unknown>) => FakeQueryBuilder;
 type UpdateFn = (payload: Record<string, unknown>) => FakeQueryBuilder;
 type SelectFn = () => FakeQueryBuilder;
 type EqFn = (column: string, value: unknown) => FakeQueryBuilder;
+type InFn = (column: string, values: readonly string[]) => FakeQueryBuilder;
+type OrderFn = () => FakeQueryBuilder;
 type MaybeSingleFn = () => Promise<MockResult>;
 type SingleFn = () => Promise<MockResult>;
 
@@ -24,6 +26,8 @@ interface FakeQueryBuilder extends PromiseLike<MockResult> {
   update: Mock<UpdateFn>;
   select: Mock<SelectFn>;
   eq: Mock<EqFn>;
+  in: Mock<InFn>;
+  order: Mock<OrderFn>;
   maybeSingle: Mock<MaybeSingleFn>;
   single: Mock<SingleFn>;
 }
@@ -34,6 +38,8 @@ function makeQueryBuilder(result: MockResult): FakeQueryBuilder {
     update: vi.fn<UpdateFn>(() => builder),
     select: vi.fn<SelectFn>(() => builder),
     eq: vi.fn<EqFn>(() => builder),
+    in: vi.fn<InFn>(() => builder),
+    order: vi.fn<OrderFn>(() => builder),
     maybeSingle: vi.fn<MaybeSingleFn>(async () => result),
     single: vi.fn<SingleFn>(async () => result),
     then: (onfulfilled, onrejected) =>
@@ -197,6 +203,78 @@ describe("getWebhookEventByRazorpayEventId", () => {
 
     try {
       await getWebhookEventByRazorpayEventId("evt_fail");
+      throw new Error("expected to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(WebhookRepositoryError);
+      expect((err as Error).message).not.toContain("connection string");
+    }
+  });
+});
+
+describe("listLatestWebhookEventsForPaymentIds", () => {
+  it("returns an empty map without querying when paymentIds is empty", async () => {
+    const { listLatestWebhookEventsForPaymentIds } =
+      await import("@/lib/webhooks/repository");
+    const result = await listLatestWebhookEventsForPaymentIds([]);
+    expect(result.size).toBe(0);
+    expect(fromMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps only the newest row per payment_id (rows arrive received_at-descending)", async () => {
+    const rowA2 = { id: "we2", payment_id: "a", received_at: "2" };
+    const rowA1 = { id: "we1", payment_id: "a", received_at: "1" };
+    const rowB1 = { id: "web1", payment_id: "b", received_at: "1" };
+    const builder = makeQueryBuilder({
+      data: [rowA2, rowA1, rowB1],
+      error: null,
+    });
+    fromMock.mockReturnValue(builder);
+
+    const { listLatestWebhookEventsForPaymentIds } =
+      await import("@/lib/webhooks/repository");
+    const result = await listLatestWebhookEventsForPaymentIds(["a", "b", "c"]);
+
+    expect(fromMock).toHaveBeenCalledWith("webhook_events");
+    expect(builder.in).toHaveBeenCalledWith("payment_id", ["a", "b", "c"]);
+    expect(builder.order).toHaveBeenCalledWith("received_at", {
+      ascending: false,
+    });
+    expect(result.get("a")).toEqual(rowA2);
+    expect(result.get("b")).toEqual(rowB1);
+    expect(result.get("c")).toBeUndefined();
+  });
+
+  it("ignores a row whose payment_id is unexpectedly null instead of crashing", async () => {
+    const rowNullPaymentId = {
+      id: "we-null",
+      payment_id: null,
+      received_at: "1",
+    };
+    const builder = makeQueryBuilder({
+      data: [rowNullPaymentId],
+      error: null,
+    });
+    fromMock.mockReturnValue(builder);
+
+    const { listLatestWebhookEventsForPaymentIds } =
+      await import("@/lib/webhooks/repository");
+    const result = await listLatestWebhookEventsForPaymentIds(["a"]);
+
+    expect(result.size).toBe(0);
+  });
+
+  it("throws WebhookRepositoryError (never leaks the raw Supabase error) on a lookup failure", async () => {
+    const builder = makeQueryBuilder({
+      data: null,
+      error: { message: "connection string leaked here" },
+    });
+    fromMock.mockReturnValue(builder);
+
+    const { listLatestWebhookEventsForPaymentIds, WebhookRepositoryError } =
+      await import("@/lib/webhooks/repository");
+
+    try {
+      await listLatestWebhookEventsForPaymentIds(["a"]);
       throw new Error("expected to throw");
     } catch (err) {
       expect(err).toBeInstanceOf(WebhookRepositoryError);

@@ -239,6 +239,83 @@ export default async function DemoMerchantPage() {
                   </dl>
                 )}
 
+                {order.latestWebhookEvent ? (
+                  <dl
+                    className="mt-2 grid grid-cols-1 gap-x-4 gap-y-1 border-t border-border pt-2 text-xs text-muted-foreground sm:grid-cols-2"
+                    data-testid="webhook-evidence"
+                  >
+                    <p className="col-span-full mb-1">
+                      <Badge
+                        variant="outline"
+                        className="text-xs"
+                        data-testid="webhook-evidence-provenance"
+                      >
+                        Razorpay Test Mode — Real Event
+                      </Badge>
+                    </p>
+                    <div>
+                      <dt className="inline font-medium">Event Type: </dt>
+                      <dd
+                        className="inline"
+                        data-testid="webhook-evidence-event-type"
+                      >
+                        {order.latestWebhookEvent.eventType}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="inline font-medium">
+                        Signature Verified:{" "}
+                      </dt>
+                      <dd
+                        className="inline"
+                        data-testid="webhook-evidence-signature-verified"
+                      >
+                        {order.latestWebhookEvent.signatureVerified
+                          ? "Yes"
+                          : "No"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="inline font-medium">Processing State: </dt>
+                      <dd
+                        className="inline"
+                        data-testid="webhook-evidence-processing-status"
+                      >
+                        {order.latestWebhookEvent.processingStatus}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="inline font-medium">
+                        Duplicate Deliveries:{" "}
+                      </dt>
+                      <dd
+                        className="inline"
+                        data-testid="webhook-evidence-duplicate-count"
+                      >
+                        {order.latestWebhookEvent.duplicateDeliveryCount}
+                      </dd>
+                    </div>
+                    <div className="col-span-full">
+                      <dt className="inline font-medium">Received: </dt>
+                      <dd className="inline">
+                        {new Date(
+                          order.latestWebhookEvent.receivedAt,
+                        ).toLocaleString()}
+                      </dd>
+                    </div>
+                  </dl>
+                ) : (
+                  order.latestPayment && (
+                    <p
+                      className="mt-2 border-t border-border pt-2 text-xs text-muted-foreground"
+                      data-testid="webhook-evidence-absent"
+                    >
+                      No real Razorpay webhook evidence received yet for this
+                      payment.
+                    </p>
+                  )
+                )}
+
                 <CreateRazorpayOrderButton orderId={order.id} />
                 {isEligibleForCheckout(order.latestPaymentAttempt) && (
                   <PayWithRazorpayButton

@@ -50,6 +50,7 @@ import {
 } from "@/lib/razorpay/adapter";
 import { verifyCheckoutSignature } from "@/lib/razorpay/checkout-verification";
 import { logEvent } from "@/lib/security/logger";
+import { listLatestWebhookEventsForPaymentIds } from "@/lib/webhooks/repository";
 
 import {
   assertPaymentAttemptMatchesOrderTerms,
@@ -159,8 +160,10 @@ export async function createDemoMerchantOrder(): Promise<DemoMerchantOrderViewMo
 
 /**
  * Reads the most recent Demo Merchant orders, newest first, with each
- * order's real fulfilment count and latest payment attempt (if any)
- * resolved from the database (never hardcoded).
+ * order's real fulfilment count, latest payment attempt (if any), and
+ * latest correlated real webhook event (Phase 2G readiness — this round's
+ * "Basic Payment/Event Evidence UI") resolved from the database (never
+ * hardcoded).
  */
 export async function listDemoMerchantOrders(
   limit: number = DEFAULT_RECENT_ORDER_LIMIT,
@@ -177,16 +180,24 @@ export async function listDemoMerchantOrders(
   const attemptIds = [...latestAttempts.values()].map((attempt) => attempt.id);
   const latestPayments = await listLatestPaymentsForAttemptIds(attemptIds);
 
+  const paymentIds = [...latestPayments.values()].map((payment) => payment.id);
+  const latestWebhookEvents =
+    await listLatestWebhookEventsForPaymentIds(paymentIds);
+
   return rows.map((row) => {
     const latestAttempt = latestAttempts.get(row.id) ?? null;
     const latestPayment = latestAttempt
       ? (latestPayments.get(latestAttempt.id) ?? null)
+      : null;
+    const latestWebhookEvent = latestPayment
+      ? (latestWebhookEvents.get(latestPayment.id) ?? null)
       : null;
     return toDemoMerchantOrderViewModel(
       row,
       counts.get(row.id) ?? 0,
       latestAttempt,
       latestPayment,
+      latestWebhookEvent,
     );
   });
 }

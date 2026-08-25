@@ -162,6 +162,55 @@ export async function incrementWebhookDuplicateDeliveryCount(
   return data;
 }
 
+/**
+ * Phase 2G readiness — real server-side lookup of each canonical payment's
+ * most recent `webhook_events` row (by `payment_id`), grouped by
+ * `payment_id` — never hardcoded, never guessed. Mirrors
+ * `lib/demo-merchant/repository.ts`'s `listLatestPaymentsForAttemptIds`
+ * batch-lookup shape exactly, for the Demo Merchant evidence UI (this
+ * round's Section 6 "Basic Payment/Event Evidence UI").
+ *
+ * `webhook_events.source_kind` is a fixed-value database CHECK constraint
+ * (`docs/DATABASE.md` Section 13: "For this canonical table the only
+ * permitted P0 value is: REAL_RAZORPAY_WEBHOOK") — every row this function
+ * can possibly return is therefore genuine real-provider evidence by
+ * construction, never a PayChaos replay/simulation/test-fixture row (those
+ * only ever appear in `event_processing_attempts`, a different table).
+ */
+export async function listLatestWebhookEventsForPaymentIds(
+  paymentIds: readonly string[],
+): Promise<Map<string, WebhookEventRow>> {
+  const latestByPaymentId = new Map<string, WebhookEventRow>();
+  if (paymentIds.length === 0) return latestByPaymentId;
+
+  const client = getSupabaseServerClient();
+
+  const { data, error } = await client
+    .from("webhook_events")
+    .select("*")
+    .in("payment_id", [...paymentIds])
+    .order("received_at", { ascending: false });
+
+  if (error) {
+    throw new WebhookRepositoryError(
+      "WEBHOOK_EVENT_LOOKUP_FAILED",
+      "Failed to load webhook events for these payments.",
+    );
+  }
+
+  for (const row of data ?? []) {
+    // `payment_id` is nullable at the schema level (only populated once
+    // Phase 2E correlation succeeds) — every row reaching this loop was
+    // just selected `WHERE payment_id IN (...)`, so it is always present
+    // here, but the null check keeps this defensive rather than asserting.
+    if (row.payment_id && !latestByPaymentId.has(row.payment_id)) {
+      latestByPaymentId.set(row.payment_id, row);
+    }
+  }
+
+  return latestByPaymentId;
+}
+
 export interface UpdateWebhookEventDerivedFieldsInput {
   readonly razorpayOrderId: string | null;
   readonly razorpayPaymentId: string | null;

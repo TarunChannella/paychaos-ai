@@ -28,16 +28,27 @@ describe("I: .env.example exists and contains no real secret values", () => {
     expect(content).toMatch(/^RAZORPAY_KEY_SECRET=/m);
   });
 
-  it("does not declare any later-phase Razorpay/session secret as a variable line", () => {
+  it("declares the three Phase 2G readiness access-gate variable names", () => {
+    // PAYCHAOS_ACCESS_TOKEN/PAYCHAOS_SESSION_SECRET are intentionally NOT
+    // in the "not yet declared" list below any more: the Phase 2G
+    // readiness round implemented the minimal operator access gate
+    // (lib/config/access-env.ts, middleware.ts) and both names are now
+    // legitimately declared above, exactly like RAZORPAY_KEY_SECRET's
+    // Phase 2A precedent. Values are safe placeholders only — never real
+    // credentials (docs/SECURITY.md ENV-004).
+    expect(content).toMatch(/^PAYCHAOS_ACCESS_GATE=/m);
+    expect(content).toMatch(/^PAYCHAOS_ACCESS_TOKEN=/m);
+    expect(content).toMatch(/^PAYCHAOS_SESSION_SECRET=/m);
+  });
+
+  it("does not declare RAZORPAY_WEBHOOK_SECRET as a variable line", () => {
     // Mentioning a later-phase name in an explanatory comment is fine (and
     // present here, to tell the reader why it's absent); what must not
-    // happen is actually declaring it as a `NAME=` variable line yet.
-    // RAZORPAY_KEY_SECRET is intentionally NOT in this list any more: it
-    // is Phase 2A scope (Razorpay Test Configuration, this phase) and is
-    // now legitimately declared above.
+    // happen is actually declaring it as a `NAME=` variable line.
+    // RAZORPAY_WEBHOOK_SECRET remains a manual Phase 2G Dashboard-setup
+    // step (lib/config/razorpay-webhook-env.ts validates it lazily, never
+    // at startup) — it is deliberately never added to this committed file.
     expect(content).not.toMatch(/^RAZORPAY_WEBHOOK_SECRET=/m);
-    expect(content).not.toMatch(/^PAYCHAOS_ACCESS_TOKEN=/m);
-    expect(content).not.toMatch(/^PAYCHAOS_SESSION_SECRET=/m);
   });
 
   it("the Razorpay Key ID placeholder uses the Test Mode prefix, never rzp_live_", () => {

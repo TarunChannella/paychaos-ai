@@ -16,6 +16,7 @@ type OrderRow = Database["public"]["Tables"]["orders"]["Row"];
 type PaymentAttemptRow =
   Database["public"]["Tables"]["payment_attempts"]["Row"];
 type PaymentRow = Database["public"]["Tables"]["payments"]["Row"];
+type WebhookEventRow = Database["public"]["Tables"]["webhook_events"]["Row"];
 
 /**
  * The safe, UI-facing shape of one payment attempt. Every field here is
@@ -104,6 +105,48 @@ export interface CheckoutConfigViewModel {
 }
 
 /**
+ * Phase 2G readiness — the safe, UI-facing shape of one real webhook
+ * evidence row (Section 6 "Basic Payment/Event Evidence UI — P0").
+ *
+ * Deliberately excludes `raw_payload_redacted` (never rendered — this
+ * round's explicit "The UI must NEVER render: raw unredacted webhook
+ * payload" rule extends to the redacted copy too, out of caution: a UI
+ * projection stays structured-fields-only, matching every other view model
+ * in this file) and `raw_body_sha256` (an integrity hash, not
+ * judge-relevant evidence). `sourceKind` is always the literal
+ * `"REAL_RAZORPAY_WEBHOOK"` here — `webhook_events.source_kind` is a fixed-
+ * value database CHECK constraint (docs/DATABASE.md Section 13), so any row
+ * this type wraps is real provider evidence by construction, never a
+ * PayChaos replay/simulation/fixture (this round's Section 8 "Real vs
+ * Synthetic Provenance").
+ */
+export interface WebhookEvidenceViewModel {
+  readonly sourceKind: "REAL_RAZORPAY_WEBHOOK";
+  readonly eventType: string;
+  readonly signatureVerified: boolean;
+  readonly processingStatus: WebhookEventRow["processing_status"];
+  readonly receivedAt: string;
+  readonly processedAt: string | null;
+  readonly isDuplicateDelivery: boolean;
+  readonly duplicateDeliveryCount: number;
+}
+
+export function toWebhookEvidenceViewModel(
+  row: WebhookEventRow,
+): WebhookEvidenceViewModel {
+  return {
+    sourceKind: "REAL_RAZORPAY_WEBHOOK",
+    eventType: row.event_type,
+    signatureVerified: row.signature_verified,
+    processingStatus: row.processing_status,
+    receivedAt: row.received_at,
+    processedAt: row.processed_at,
+    isDuplicateDelivery: row.duplicate_delivery_count > 0,
+    duplicateDeliveryCount: row.duplicate_delivery_count,
+  };
+}
+
+/**
  * The safe, UI-facing shape of one Demo Merchant order. Every field here is
  * server-derived (read back from the persisted `orders` row plus a real
  * `fulfilments` count) — nothing here is browser-supplied.
@@ -111,7 +154,9 @@ export interface CheckoutConfigViewModel {
  * `latestPaymentAttempt` is `null` until a Phase 2B Razorpay Order-creation
  * attempt has been made for this order — most orders will have none.
  * `latestPayment` (Phase 2C) is `null` until a Checkout response has been
- * verified for that attempt.
+ * verified for that attempt. `latestWebhookEvent` (Phase 2G readiness) is
+ * `null` until a real, signature-verified Razorpay webhook correlated to
+ * that payment has been received.
  */
 export interface DemoMerchantOrderViewModel {
   readonly id: string;
@@ -124,20 +169,23 @@ export interface DemoMerchantOrderViewModel {
   readonly createdAt: string;
   readonly latestPaymentAttempt: PaymentAttemptViewModel | null;
   readonly latestPayment: PaymentViewModel | null;
+  readonly latestWebhookEvent: WebhookEvidenceViewModel | null;
 }
 
 /**
  * Maps a persisted `orders` row plus its real fulfilment count (and, if
- * they exist, its latest payment attempt and latest verified payment) onto
- * the safe view model, deriving `conceptualState` via the approved Phase 1D
- * projection (which itself rejects impossible combinations rather than
- * silently presenting misleading state).
+ * they exist, its latest payment attempt, latest verified payment, and
+ * latest correlated real webhook event) onto the safe view model, deriving
+ * `conceptualState` via the approved Phase 1D projection (which itself
+ * rejects impossible combinations rather than silently presenting
+ * misleading state).
  */
 export function toDemoMerchantOrderViewModel(
   row: OrderRow,
   fulfilmentCount: number,
   latestPaymentAttemptRow: PaymentAttemptRow | null = null,
   latestPaymentRow: PaymentRow | null = null,
+  latestWebhookEventRow: WebhookEventRow | null = null,
 ): DemoMerchantOrderViewModel {
   const conceptualState = projectConceptualOrderState({
     paymentStatus: row.payment_status,
@@ -159,6 +207,9 @@ export function toDemoMerchantOrderViewModel(
       : null,
     latestPayment: latestPaymentRow
       ? toPaymentViewModel(latestPaymentRow)
+      : null,
+    latestWebhookEvent: latestWebhookEventRow
+      ? toWebhookEvidenceViewModel(latestWebhookEventRow)
       : null,
   };
 }

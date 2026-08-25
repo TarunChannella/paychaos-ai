@@ -470,3 +470,136 @@ describe("app/api/webhooks/razorpay/route.ts — structural checks", () => {
     expect(source).not.toContain("alreadyRecorded");
   });
 });
+
+/**
+ * Phase 2G readiness — architect timing-evidence correction
+ * (docs/RAZORPAY_GUIDE.md's "an automated timing/budget test must prove the
+ * normal handler contains no intentional long sleep or unbounded work").
+ *
+ * This does NOT (and cannot) prove the real webhook completes in
+ * <5000 ms — that remains Phase 2G's deployed, real-provider manual
+ * verification gate. What it proves, with stable structural assertions
+ * against the actual source of the whole synchronous critical-path chain
+ * (never a mocked/faked wall-clock number), is that nothing in that chain
+ * is STRUCTURALLY capable of introducing an unbounded or artificially
+ * delayed response:
+ *
+ *   - `latency_ms` timing starts before the raw body is read, and the
+ *     success-path measurement is taken only after the full chain
+ *     (signature verification -> persistence/dedup -> normalization/
+ *     correlation -> merchant processing) has already resolved;
+ *   - no deliberate timer/sleep primitive (`setTimeout`, `setInterval`,
+ *     `Atomics.wait`, `node:timers/promises`, or an ad hoc `sleep`/`delay`
+ *     helper) appears anywhere in that chain;
+ *   - no unbounded `while (true)`/`for (;;)` loop appears anywhere in that
+ *     chain;
+ *   - no AI/ML/diagnosis/reconciliation/analytics/report-generation module
+ *     is imported anywhere in that chain (Phase 4's diagnosis/Reliability
+ *     Score engine does not exist yet, and this webhook path must never
+ *     depend on it even once it does).
+ */
+describe("webhook critical path — timing / bounded-work contract (Phase 2G readiness)", () => {
+  const routeSource = fs.readFileSync(
+    path.resolve(
+      import.meta.dirname,
+      "../../../app/api/webhooks/razorpay/route.ts",
+    ),
+    "utf-8",
+  );
+  const serviceSource = fs.readFileSync(
+    path.resolve(import.meta.dirname, "../../../lib/webhooks/service.ts"),
+    "utf-8",
+  );
+  const processorSource = fs.readFileSync(
+    path.resolve(import.meta.dirname, "../../../lib/events/processor.ts"),
+    "utf-8",
+  );
+  const eventProcessingRepoSource = fs.readFileSync(
+    path.resolve(
+      import.meta.dirname,
+      "../../../lib/webhooks/event-processing-repository.ts",
+    ),
+    "utf-8",
+  );
+  const webhookRepoSource = fs.readFileSync(
+    path.resolve(import.meta.dirname, "../../../lib/webhooks/repository.ts"),
+    "utf-8",
+  );
+
+  const CRITICAL_PATH_SOURCES: Record<string, string> = {
+    "app/api/webhooks/razorpay/route.ts": routeSource,
+    "lib/webhooks/service.ts": serviceSource,
+    "lib/events/processor.ts": processorSource,
+    "lib/webhooks/event-processing-repository.ts": eventProcessingRepoSource,
+    "lib/webhooks/repository.ts": webhookRepoSource,
+  };
+
+  it("A: latency timing (startedAt) is captured strictly before the raw body is read", () => {
+    const startedAtIndex = routeSource.indexOf("const startedAt = Date.now()");
+    const rawBodyReadIndex = routeSource.indexOf("request.arrayBuffer()");
+    expect(startedAtIndex).toBeGreaterThan(-1);
+    expect(rawBodyReadIndex).toBeGreaterThan(-1);
+    expect(startedAtIndex).toBeLessThan(rawBodyReadIndex);
+  });
+
+  it("B: the success-path latency_ms measurement is computed only AFTER ingestRazorpayWebhook (the full verify -> persist/dedup -> normalize/correlate -> merchant-process chain) has resolved", () => {
+    const ingestCallIndex = routeSource.indexOf(
+      "const result = await ingestRazorpayWebhook(",
+    );
+    const successLatencyLogIndex = routeSource.indexOf(
+      'logEvent("webhook_request_completed", {\n      http_status: 200,\n      latency_ms: Date.now() - startedAt,',
+    );
+    expect(ingestCallIndex).toBeGreaterThan(-1);
+    expect(successLatencyLogIndex).toBeGreaterThan(-1);
+    expect(ingestCallIndex).toBeLessThan(successLatencyLogIndex);
+  });
+
+  it("C: no intentional timer/sleep mechanism (setTimeout/setInterval/Atomics.wait/node:timers/ad hoc sleep-delay helper) exists anywhere in the critical-path chain", () => {
+    const forbiddenTimerPattern =
+      /\bsetTimeout\s*\(|\bsetInterval\s*\(|Atomics\.wait\s*\(|from\s+["']node:timers|from\s+["']timers|\bsleep\s*\(|\bdelay\s*\(/;
+    for (const [file, src] of Object.entries(CRITICAL_PATH_SOURCES)) {
+      expect(
+        src,
+        `${file} must not contain a deliberate timer/sleep call`,
+      ).not.toMatch(forbiddenTimerPattern);
+    }
+  });
+
+  it("D: no unbounded while(true)/for(;;) loop exists anywhere in the critical-path chain", () => {
+    const unboundedLoopPattern = /while\s*\(\s*true\s*\)|for\s*\(\s*;\s*;\s*\)/;
+    for (const [file, src] of Object.entries(CRITICAL_PATH_SOURCES)) {
+      expect(src, `${file} must not contain an unbounded loop`).not.toMatch(
+        unboundedLoopPattern,
+      );
+    }
+  });
+
+  it("E: no AI/ML/diagnosis/reconciliation/analytics/report-generation module is imported anywhere in the critical-path chain", () => {
+    const forbiddenDependencyPattern =
+      /openai|anthropic|ollama|langchain|lib\/diagnosis|lib\/reliability|lib\/reconciliation|lib\/analytics|lib\/report/i;
+    for (const [file, src] of Object.entries(CRITICAL_PATH_SOURCES)) {
+      expect(
+        src,
+        `${file} must not import an AI/diagnosis/reconciliation/analytics module`,
+      ).not.toMatch(forbiddenDependencyPattern);
+    }
+  });
+
+  it("F: this test file makes NO real <5000ms wall-clock assertion — real latency proof remains Phase 2G's deployed manual verification gate, never a mocked/faked unit-test number", () => {
+    // A structural self-check on this describe block's own intent: no test
+    // in THIS file measures actual elapsed Date.now() time against a
+    // millisecond threshold. Every assertion above is source-structural
+    // (index/pattern checks against the real critical-path source files),
+    // not a fabricated timing benchmark.
+    const thisTestFileSource = fs.readFileSync(
+      path.resolve(
+        import.meta.dirname,
+        "../../../tests/unit/api/webhooks-razorpay-route.test.ts",
+      ),
+      "utf-8",
+    );
+    const fakeWallClockAssertionPattern =
+      /toBeLessThan\s*\(\s*5000\s*\)|toBeGreaterThan\s*\(\s*5000\s*\)|performance\.now\s*\(/;
+    expect(thisTestFileSource).not.toMatch(fakeWallClockAssertionPattern);
+  });
+});
