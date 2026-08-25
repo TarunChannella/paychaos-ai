@@ -215,6 +215,56 @@ export function toDemoMerchantOrderViewModel(
 }
 
 /**
+ * Phase 2G real-verification UI consistency fix — true only when
+ * authoritative REAL_RAZORPAY_WEBHOOK evidence already confirms this
+ * order's payment was captured.
+ *
+ * A confirmed bug: `pay-with-razorpay-button.tsx`'s post-Checkout evidence
+ * block unconditionally claimed "awaiting webhook confirmation" even after
+ * a real webhook had already processed the capture — because that claim
+ * was derived only from the button's own ephemeral client-side Checkout-
+ * verification result, never from the order's actual current webhook
+ * evidence. This function is the single source of truth the page passes
+ * down instead, so the claim is always order-state-derived, not stale
+ * client state (this task's Cases A/B/D).
+ *
+ * Requires BOTH the order-level authoritative `paymentStatus` (`PAID` —
+ * never merely "some webhook processed something", since e.g. an `order.paid`
+ * event alone can reach `processingStatus: "PROCESSED"` without itself
+ * authorizing capture, per the Phase 2F `order.paid` semantics) AND a
+ * `latestWebhookEvent` that is itself real, processed evidence.
+ *
+ * Cannot be satisfied by synthetic/non-real evidence (this task's Case C):
+ * `latestWebhookEvent` is only ever populated from an actual `webhook_events`
+ * row, and that table's own `source_kind` CHECK constraint
+ * (docs/DATABASE.md Section 13) guarantees every such row is genuine
+ * Razorpay-delivered evidence — `WebhookEvidenceViewModel.sourceKind` is a
+ * literal-typed `"REAL_RAZORPAY_WEBHOOK"`-only projection reinforcing the
+ * same guarantee at the type level. A PayChaos replay/simulation/test
+ * fixture can only ever exist in `event_processing_attempts`
+ * (`PAYCHAOS_REPLAY`/`PAYCHAOS_SIMULATION`/`TEST_FIXTURE` source kinds), a
+ * different table this projection never reads.
+ *
+ * Timing-agnostic by design (this task's Case D "webhook-first"): this
+ * function only ever inspects the order's CURRENT final state, never the
+ * order in which Checkout verification and webhook processing happened to
+ * arrive.
+ */
+export function isPaymentCaptureConfirmedByRealWebhook(
+  order: Pick<
+    DemoMerchantOrderViewModel,
+    "paymentStatus" | "latestWebhookEvent"
+  >,
+): boolean {
+  return (
+    order.paymentStatus === "PAID" &&
+    order.latestWebhookEvent !== null &&
+    order.latestWebhookEvent.sourceKind === "REAL_RAZORPAY_WEBHOOK" &&
+    order.latestWebhookEvent.processingStatus === "PROCESSED"
+  );
+}
+
+/**
  * Formats integer smallest-currency subunits as a human-readable amount.
  *
  * Phase 1E's only fixed product is INR (2 decimal subunits), so this

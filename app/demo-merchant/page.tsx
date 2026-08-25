@@ -6,6 +6,7 @@ import { listDemoMerchantOrders } from "@/lib/demo-merchant/service";
 import {
   formatAmountForDisplay,
   formatConceptualState,
+  isPaymentCaptureConfirmedByRealWebhook,
   type PaymentAttemptViewModel,
 } from "@/lib/demo-merchant/view-model";
 
@@ -320,6 +321,9 @@ export default async function DemoMerchantPage() {
                 {isEligibleForCheckout(order.latestPaymentAttempt) && (
                   <PayWithRazorpayButton
                     paymentAttemptId={order.latestPaymentAttempt.id}
+                    webhookConfirmed={isPaymentCaptureConfirmedByRealWebhook(
+                      order,
+                    )}
                   />
                 )}
               </li>

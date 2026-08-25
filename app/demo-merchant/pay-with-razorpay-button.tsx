@@ -15,9 +15,13 @@
  * The `handler` callback forwards Checkout's success response to
  * `verifyCheckoutAction`, which independently verifies it server-side
  * before any evidence is trusted. This component never claims the payment
- * is captured/complete — the displayed evidence explicitly says "awaiting
- * webhook confirmation" (this task's Section 12 "Merchant Authority
- * Boundary").
+ * is captured/complete on its own authority — the displayed evidence says
+ * "awaiting webhook confirmation" UNLESS the caller-supplied
+ * `webhookConfirmed` prop (derived from the order's actual current webhook
+ * evidence via `isPaymentCaptureConfirmedByRealWebhook` — never from this
+ * component's own ephemeral Checkout-verification result) says a real
+ * webhook has already confirmed capture (this task's Section 12 "Merchant
+ * Authority Boundary"; Phase 2G real-verification UI consistency fix).
  */
 import { useState, useTransition } from "react";
 
@@ -93,8 +97,17 @@ interface VerifiedEvidence {
 
 export function PayWithRazorpayButton({
   paymentAttemptId,
+  webhookConfirmed,
 }: {
   paymentAttemptId: string;
+  /**
+   * True only when the order's actual current webhook evidence
+   * (`isPaymentCaptureConfirmedByRealWebhook`, computed server-side from
+   * fresh order state) already shows a real, processed capture. Required —
+   * never defaulted — so the caller cannot accidentally omit this and fall
+   * back to the stale unconditional "awaiting" claim this fix removes.
+   */
+  webhookConfirmed: boolean;
 }) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -193,8 +206,13 @@ export function PayWithRazorpayButton({
               {verified.razorpayPaymentStatus ?? "Awaiting webhook evidence"}
             </dd>
           </div>
-          <p className="mt-1 font-medium text-foreground">
-            Checkout response verified — awaiting webhook confirmation.
+          <p
+            className="mt-1 font-medium text-foreground"
+            data-testid="checkout-verified-status-message"
+          >
+            {webhookConfirmed
+              ? "Payment capture confirmed by Razorpay Test Mode webhook."
+              : "Checkout response verified — awaiting webhook confirmation."}
           </p>
         </dl>
       )}

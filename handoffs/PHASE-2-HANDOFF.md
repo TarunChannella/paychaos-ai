@@ -3151,3 +3151,116 @@ No full unit suite, no real-Supabase integration suite, no build, and no e2e wer
 ## 290. Recommendation
 
 **PHASE 2G READINESS READY FOR ARCHITECT RE-REVIEW.** The evidence gap identified in Section 285 is resolved with explicit, source-verified automated evidence; no other change was made to the readiness candidate.
+
+---
+
+# PHASE 2G — REAL VERIFICATION UI CONSISTENCY FIX
+
+**2026-08-31. Narrow confirmed bug fix only.** Starting HEAD `320ca263f4a10ea6298c4e4f10b9342b91fd9a84` (confirmed clean working tree before this round — the access-gate/evidence-UI work from Sections 271–290 had by this point been committed by the developer). No payment/business state machine, webhook ingestion, signature verification, normalization, correlation, processor RPC, deduplication, fulfilment logic, RLS, schema, access gate, or webhook configuration was touched.
+
+## 291. Confirmed real Phase 2G payment — first genuine end-to-end success
+
+A genuine new Razorpay Test Mode payment completed successfully through the full deployed Phase 2A–2F chain. Real identifiers (no secrets):
+
+- **Merchant order:** `cdc8c3fc-d78c-4cd9-837d-c41f5cc04a72`
+- **Payment attempt:** `c07f8f9a-0686-4444-9af2-8ddde52221c1`
+- **Razorpay Order:** `order_TU0kWTQfLxhzGs`
+- **Razorpay Payment:** `pay_TU0xvTbsJiOqPI`
+
+**Final merchant state:** `orders.payment_status = PAID`, `orders.business_status = FULFILLED`. **Payment:** `razorpay_payment_status = captured`, `checkout_signature_verified = true`, `captured_at != NULL`, `failed_at = NULL`.
+
+**Real webhook evidence — two events, both genuine:**
+
+| Event              | `razorpay_event_id` | `source_kind`           | `signature_verified` | `processing_status` |
+| ------------------ | ------------------- | ----------------------- | -------------------- | ------------------- |
+| `payment.captured` | `TU0y6FKOjtUFlT`    | `REAL_RAZORPAY_WEBHOOK` | `true`               | `PROCESSED`         |
+| `order.paid`       | `TU0y6h3Vc7Kt3e`    | `REAL_RAZORPAY_WEBHOOK` | `true`               | `PROCESSED`         |
+
+Both correlated `event_processing_attempts` rows: `source_kind = REAL_RAZORPAY_WEBHOOK`, `status = SUCCEEDED`, `error_code = NULL`. Exactly one `fulfilments` row exists, `effect_type = FULFIL_ORDER`.
+
+**Real deployed Vercel request evidence:**
+
+| Event              | HTTP status | `latency_ms` |
+| ------------------ | ----------- | ------------ |
+| `payment.captured` | 200         | 2661         |
+| `order.paid`       | 200         | 3039         |
+
+Both satisfy the `<5000 ms` requirement (Section 283 G12) — the first real confirmation of the timing contract Section 274/285 proved only structurally.
+
+## 292. Confirmed bug
+
+The deployed Demo Merchant card for this order correctly showed all authoritative evidence — Payment State PAID, Business State FULFILLED, Fulfilment 1 effect, Attempt Status CAPTURED, Provider Payment Status captured, Checkout Signature Verified Yes, the "Razorpay Test Mode — Real Event" badge, Signature Verified Yes, Processing State PROCESSED — while simultaneously rendering **"Checkout response verified — awaiting webhook confirmation."**, a claim that was false by the time it was displayed.
+
+## 293. Root cause
+
+`app/demo-merchant/pay-with-razorpay-button.tsx` is a Client Component. Immediately after Razorpay Checkout closes, its `handler` callback calls `verifyCheckoutAction` and stores the result in local `useState` (`verified`). The evidence block it renders from that local state unconditionally displayed the static string "Checkout response verified — awaiting webhook confirmation." whenever `verified` was non-null — this claim was derived ONLY from the button's own ephemeral, point-in-time Checkout-verification result, never from the order's actual current webhook evidence. A real Razorpay webhook is delivered asynchronously, typically a few seconds after Checkout closes (confirmed by this round's own `latency_ms` measurements); once it lands and the merchant-processing transaction commits `captured`/`PAID`/`FULFILLED`, this component's local claim never updates to reflect it — it is structurally incapable of doing so, having no path back to fresh server state.
+
+## 294. Exact fix
+
+The smallest deterministic fix: make the claim a pure function of the order's actual current webhook evidence (already fetched server-side on every render — Phase 2G readiness's own evidence UI addition), passed down as a prop, instead of the button's own stale local state.
+
+- **`lib/demo-merchant/view-model.ts`** — new pure function `isPaymentCaptureConfirmedByRealWebhook(order)`: returns `true` only when `order.paymentStatus === "PAID"` AND `order.latestWebhookEvent !== null` AND its `sourceKind === "REAL_RAZORPAY_WEBHOOK"` AND its `processingStatus === "PROCESSED"`. Requiring `paymentStatus === "PAID"` (not merely "some webhook reached PROCESSED") is deliberate: an `order.paid` event alone can reach `PROCESSED` without itself authorizing capture (Phase 2F `order.paid` semantics, Section 224) — the function must not be fooled by that. `latestWebhookEvent` can only ever be populated from a genuine `webhook_events` row (that table's own `source_kind` CHECK constraint, docs/DATABASE.md Section 13, plus `WebhookEvidenceViewModel.sourceKind`'s own literal type) — so synthetic/test-fixture evidence can never satisfy this function (Case C). The function only inspects the order's current final state, never any notion of arrival order (Case D "webhook-first").
+- **`app/demo-merchant/page.tsx`** — computes `isPaymentCaptureConfirmedByRealWebhook(order)` and passes it as the new required `webhookConfirmed` prop to `<PayWithRazorpayButton>`.
+- **`app/demo-merchant/pay-with-razorpay-button.tsx`** — the previously-unconditional message is now a ternary: `webhookConfirmed ? "Payment capture confirmed by Razorpay Test Mode webhook." : "Checkout response verified — awaiting webhook confirmation."`. `webhookConfirmed` is a required prop (never defaulted), so no call site can silently regress to the old unconditional claim.
+
+No payment/business state machine, webhook ingestion, signature verification, normalization, correlation, processor RPC, deduplication, fulfilment logic, RLS, schema, access gate, or webhook configuration file was touched.
+
+## 295. Case-by-case behavior (as required)
+
+- **Case A** (checkout verified, no real webhook evidence yet): `webhookConfirmed = false` → the waiting message remains, unchanged from before this fix.
+- **Case B** (real webhook evidence confirms captured/processed): `webhookConfirmed = true` → the waiting message is replaced with "Payment capture confirmed by Razorpay Test Mode webhook."; the false contradiction is eliminated.
+- **Case C** (synthetic/test-fixture evidence): structurally cannot satisfy `isPaymentCaptureConfirmedByRealWebhook` — `latestWebhookEvent` is only ever built from a genuine `webhook_events` row, and PayChaos-synthetic evidence (`PAYCHAOS_REPLAY`/`PAYCHAOS_SIMULATION`/`TEST_FIXTURE`) can only ever live in the separate `event_processing_attempts` table, which this projection never reads.
+- **Case D** (webhook-first, Checkout arrives later): the function is timing-agnostic — it evaluates only the order's current final state, so a webhook that already landed before Checkout verification renders the correct confirmed state regardless of arrival order.
+
+## 296. Files changed
+
+**Modified:** `app/demo-merchant/page.tsx`, `app/demo-merchant/pay-with-razorpay-button.tsx`, `lib/demo-merchant/view-model.ts`, `tests/unit/demo-merchant/view-model.test.ts`.
+
+**Added:** `tests/unit/demo-merchant/pay-with-razorpay-button.test.ts`.
+
+**Deleted/database/migration/external config:** none.
+
+## 297. Tests added
+
+Five `it` cases added to `tests/unit/demo-merchant/view-model.test.ts`'s new `describe("isPaymentCaptureConfirmedByRealWebhook ...")` block, proving exactly the five required scenarios: (1) checkout-verified + no real evidence → `false`; (2) PAID + real `PROCESSED` evidence → `true`; (3) `paymentStatus` is required independently of `processingStatus` (an `order.paid`-only `PROCESSED` event with `paymentStatus` still `UNPAID` → `false`; a genuine `payment.captured`-driven PAID+PROCESSED state → `true`) — the "truthful final confirmation" proof; (4) the closest constructible "non-real/incomplete provenance" states (`null` evidence, `RECEIVED`, `FAILED` processing status) all → `false`, since the type system itself already prevents constructing a non-`REAL_RAZORPAY_WEBHOOK` `sourceKind`; (5) a webhook-first-then-Checkout-later fixture → `true`, proving timing-agnosticism.
+
+Three structural `it` cases added in the new `tests/unit/demo-merchant/pay-with-razorpay-button.test.ts` (this codebase has no React component-rendering test dependency — every other client component here is proven the same source-structural way, e.g. the webhook route's own "structural checks" block), proving: the `webhookConfirmed` prop is required and never defaulted; the awaiting message is genuinely conditional (the `webhookConfirmed` condition appears in source before both message branches); both message strings remain present verbatim (the fix never silently drops the waiting message for the not-yet-confirmed case).
+
+## 298. Tests/results
+
+| Command                                                                               | Result                                                                                                                                                                                                                  |
+| ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npx vitest run tests/unit/demo-merchant/view-model.test.ts`                          | **24/24 PASS** (19 pre-existing + 5 new)                                                                                                                                                                                |
+| `npx vitest run tests/unit/demo-merchant/pay-with-razorpay-button.test.ts`            | **3/3 PASS** (new file)                                                                                                                                                                                                 |
+| `npx vitest run tests/unit/demo-merchant/service.test.ts` (relevance re-confirmation) | **50/50 PASS**, unchanged                                                                                                                                                                                               |
+| `npm run lint`                                                                        | **PASS, exit 0**                                                                                                                                                                                                        |
+| `npm run typecheck`                                                                   | **PASS, exit 0**                                                                                                                                                                                                        |
+| `npm run build`                                                                       | see Section 299                                                                                                                                                                                                         |
+| `npx prettier --check` on every changed file                                          | **PASS** after one `--write` on `lib/demo-merchant/view-model.ts` (pre-existing-style wrapping, no logic change), re-verified, then re-ran the affected test files to confirm the reformat changed nothing behaviorally |
+| `git diff --check`                                                                    | **PASS** — only benign LF/CRLF advisories                                                                                                                                                                               |
+
+No full unit suite, no real-Supabase integration suite, and no e2e were re-run this round — none were required; only UI/view-model/test files changed, and this is not a database- or webhook-ingestion-relevant change.
+
+## 299. Build result
+
+`npm run build` (after clearing a stale `.next`/OneDrive lock artifact — the same known Windows condition documented in every prior round, not a product defect) → **PASS**. Route manifest correctly lists `/access`, `/api/access/login`, `/api/access/logout`, `/api/webhooks/razorpay`, `/demo-merchant`, and `ƒ Proxy (Middleware)` — unchanged from the prior round, confirming this fix touched only rendering logic, not the route surface.
+
+## 300. Historical real Phase 2C payment
+
+Untouched by this round. This round did not create a Razorpay Order, did not create a Razorpay payment, and did not open Checkout — it only changed how already-persisted evidence is rendered.
+
+## 301. Explicit non-claims
+
+**No new payment was created by this code-fix round.** No webhook configuration was changed. No database schema changed. No Phase 3 work. Nothing was committed. Nothing was pushed.
+
+## 302. Phase 2G lifecycle (unchanged scope, this round is a UI-only fix)
+
+```
+IMPLEMENTED          PENDING FINAL DEPLOYED UI RE-VERIFY
+TESTED               PENDING FINAL DEPLOYED UI RE-VERIFY
+MANUALLY VERIFIED    PENDING FINAL DEPLOYED UI RE-VERIFY
+DOCUMENTED           CANDIDATE
+APPROVED             PENDING
+```
+
+Phase 2 as a whole remains **NOT APPROVED**. The real payment evidence in Section 291 is a strong positive signal, but final Phase 2G manual verification (re-observing the corrected UI against this same real order, or a fresh one, on the deployed instance) has not yet been performed by this session and cannot be — only the developer can view the live deployed page.
