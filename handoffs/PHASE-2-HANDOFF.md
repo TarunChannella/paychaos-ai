@@ -5,11 +5,10 @@
 - **Phase:** Phase 2 — Razorpay Test Mode + Payments + Webhooks
 - **Current branch:** `phase-2-razorpay`
 - **Phase 2 starting HEAD:** `47cb275cd2d200b879f80a331ca4848ee2b709b3`
-- **Overall Phase 2 status: IN PROGRESS — NOT APPROVED**
-- **Completed checkpoints documented in this file: Phase 2A — Razorpay Test Configuration; Phase 2B — Razorpay Order Creation (see Section 62); Phase 2C — Checkout Integration (see Section 111); Phase 2D — Webhook Ingestion + Signature Verification (see Section 159); Phase 2E — Webhook Deduplication + Event Normalization (see Section 215); Phase 2F — Merchant Processing + Business-Effect Idempotency (see Section 267)**
-- **Phase 2G: NOT IMPLEMENTED**
+- **Overall Phase 2 status: APPROVED — ARCHITECT APPROVED (see Section 341)**
+- **Completed checkpoints documented in this file: Phase 2A — Razorpay Test Configuration; Phase 2B — Razorpay Order Creation (see Section 62); Phase 2C — Checkout Integration (see Section 111); Phase 2D — Webhook Ingestion + Signature Verification (see Section 159); Phase 2E — Webhook Deduplication + Event Normalization (see Section 215); Phase 2F — Merchant Processing + Business-Effect Idempotency (see Section 267); Phase 2G — Real Test Mode Verification (see Section 341)**
 
-Phase 2 as a whole is not implemented, not tested, not manually verified, not documented, and not approved. Only the Phase 2A through Phase 2E slices described below have any of those properties, and only for their own narrow scope. **Update (Section 101-111): the developer has since completed a real Razorpay Test Mode Standard Checkout payment and independently-confirmed Supabase correlation evidence.** Phase 2C is now IMPLEMENTED, TESTED, MANUALLY VERIFIED, and DOCUMENTED; it awaits architect review before APPROVED. **Update (Section 112-159): Phase 2D — the public webhook endpoint, raw-body HMAC verification, and canonical `webhook_events` persistence — is now IMPLEMENTED, TESTED, MANUALLY VERIFIED, and DOCUMENTED** (the Phase 2D/2E application-boundary correction in Sections 133-143, the migration-applied + integration-test-expectation correction in Sections 144-150, and the final documentation reconciliation in Sections 151-160 are all folded into this state). MANUALLY VERIFIED (Section 155/157) means the migration is applied, database constraints/RLS are verified, `webhook_events` is observably empty of any real or synthetic evidence, and Phase 2C's authority state is independently reconfirmed unchanged — it is explicitly **not** a claim that a real Razorpay webhook was received. It awaits architect review before APPROVED. **Update (Section 161-215): Phase 2E — application-level duplicate recognition, an atomic duplicate-delivery counter, safe P0 event normalization (`payment.captured`/`payment.failed`/`order.paid`), payment/order correlation (including webhook-first payment observation and Checkout-after-webhook compatibility), and durable `event_processing_attempts` evidence — is now IMPLEMENTED, TESTED, MANUALLY VERIFIED, and DOCUMENTED** (the five-finding architect review correction in Sections 185-208, the migration-applied + final real-Supabase verification, and the final documentation reconciliation in Sections 209-215 are all folded into this state). Real-Supabase coverage is fully green (10/10 files, 91/91 tests) in addition to the full offline unit suite (511/511). MANUALLY VERIFIED (Section 211/213) means the migration is applied, every real-DB constraint/RLS/RPC is verified, both new tables are observably empty of any real or synthetic evidence, and Phase 2C/2D's authority state is independently reconfirmed unchanged — it is explicitly **not** a claim that a real Razorpay webhook was received. It awaits architect review before APPROVED. **Update (Section 216-270): Phase 2F — the single-transaction merchant processor (`process_webhook_payment_event`), additive `fulfilments.payment_id`/`trigger_processing_attempt_id` columns, semantic business-effect idempotency, and full `payment.captured`/`payment.failed`/`order.paid` state application — is now IMPLEMENTED, TESTED, MANUALLY VERIFIED, and DOCUMENTED** (the original candidate in Sections 216-239, the architect-review rejection and four-finding correction — shared-state concurrency locking, fail-closed event contract, PROCESSING recovery, fulfilment effect_type validation — in Sections 240-251, and the migration-applied + final real-Supabase reconciliation in Sections 259-270 are all folded into this state). Real-Supabase coverage is fully green (11/11 files, 125/125 tests, including the Phase 2F file itself at 34/34) in addition to the full offline unit suite (535/535). MANUALLY VERIFIED (Section 261/262) means the migration is applied, every real-DB constraint/RPC/concurrency/fail-closed-contract/recovery case is verified against the live database, all synthetic test evidence is observably cleaned up, and Phase 2C/2D/2E's authority state is independently reconfirmed unchanged — it is explicitly **not** a claim that a real Razorpay webhook was received. It awaits architect review before APPROVED; Phase 2G remains not implemented.
+Phase 2 as a whole is not implemented, not tested, not manually verified, not documented, and not approved. Only the Phase 2A through Phase 2E slices described below have any of those properties, and only for their own narrow scope. **Update (Section 101-111): the developer has since completed a real Razorpay Test Mode Standard Checkout payment and independently-confirmed Supabase correlation evidence.** Phase 2C is now IMPLEMENTED, TESTED, MANUALLY VERIFIED, and DOCUMENTED; it awaits architect review before APPROVED. **Update (Section 112-159): Phase 2D — the public webhook endpoint, raw-body HMAC verification, and canonical `webhook_events` persistence — is now IMPLEMENTED, TESTED, MANUALLY VERIFIED, and DOCUMENTED** (the Phase 2D/2E application-boundary correction in Sections 133-143, the migration-applied + integration-test-expectation correction in Sections 144-150, and the final documentation reconciliation in Sections 151-160 are all folded into this state). MANUALLY VERIFIED (Section 155/157) means the migration is applied, database constraints/RLS are verified, `webhook_events` is observably empty of any real or synthetic evidence, and Phase 2C's authority state is independently reconfirmed unchanged — it is explicitly **not** a claim that a real Razorpay webhook was received. It awaits architect review before APPROVED. **Update (Section 161-215): Phase 2E — application-level duplicate recognition, an atomic duplicate-delivery counter, safe P0 event normalization (`payment.captured`/`payment.failed`/`order.paid`), payment/order correlation (including webhook-first payment observation and Checkout-after-webhook compatibility), and durable `event_processing_attempts` evidence — is now IMPLEMENTED, TESTED, MANUALLY VERIFIED, and DOCUMENTED** (the five-finding architect review correction in Sections 185-208, the migration-applied + final real-Supabase verification, and the final documentation reconciliation in Sections 209-215 are all folded into this state). Real-Supabase coverage is fully green (10/10 files, 91/91 tests) in addition to the full offline unit suite (511/511). MANUALLY VERIFIED (Section 211/213) means the migration is applied, every real-DB constraint/RLS/RPC is verified, both new tables are observably empty of any real or synthetic evidence, and Phase 2C/2D's authority state is independently reconfirmed unchanged — it is explicitly **not** a claim that a real Razorpay webhook was received. It awaits architect review before APPROVED. **Update (Section 216-270): Phase 2F — the single-transaction merchant processor (`process_webhook_payment_event`), additive `fulfilments.payment_id`/`trigger_processing_attempt_id` columns, semantic business-effect idempotency, and full `payment.captured`/`payment.failed`/`order.paid` state application — is now IMPLEMENTED, TESTED, MANUALLY VERIFIED, and DOCUMENTED** (the original candidate in Sections 216-239, the architect-review rejection and four-finding correction — shared-state concurrency locking, fail-closed event contract, PROCESSING recovery, fulfilment effect_type validation — in Sections 240-251, and the migration-applied + final real-Supabase reconciliation in Sections 259-270 are all folded into this state). Real-Supabase coverage is fully green (11/11 files, 125/125 tests, including the Phase 2F file itself at 34/34) in addition to the full offline unit suite (535/535). MANUALLY VERIFIED (Section 261/262) means the migration is applied, every real-DB constraint/RPC/concurrency/fail-closed-contract/recovery case is verified against the live database, all synthetic test evidence is observably cleaned up, and Phase 2C/2D/2E's authority state is independently reconfirmed unchanged — it is explicitly **not** a claim that a real Razorpay webhook was received. **Final update (Section 315-341): Phase 2G — real Test Mode manual verification against the deployed application, including a genuine Razorpay Test Mode payment, real `payment.captured`/`order.paid` webhook evidence, deployed latency under 5000ms, a deployed-UI defect found and corrected (commit `ac4a57346d94731f52ac728f0fec1e0a02a91b37`), and a fresh source-of-truth documentation reconciliation against every repository doc — is now IMPLEMENTED, TESTED, MANUALLY VERIFIED, and DOCUMENTED.** **PHASE 2G AND PHASE 2 OVERALL ARE ARCHITECT APPROVED** (Section 341).
 
 **Phase 2B correction applied, then re-verified against the real provider:** the first real Razorpay Test Mode manual verification (performed by the developer) found a confirmed implementation defect (over-length receipt) — see "PHASE 2B CORRECTION" below. The defect was fixed and unit-tested against a mocked provider. Two confirmed test-harness defects (not product defects) were then found and corrected during test-gate verification — see "Phase 2B Test-Gate Correction #2" (Section 48). **The developer has since completed a successful real Razorpay Test Mode re-test — see Section 59.** Phase 2B is now IMPLEMENTED, TESTED, MANUALLY VERIFIED, and DOCUMENTED; it awaits architect review before APPROVED.
 
@@ -17,15 +16,15 @@ Phase 2 as a whole is not implemented, not tested, not manually verified, not do
 
 ## 1. Phase identity and current status
 
-| Sub-phase                                        | Status                                                                                                   |
-| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| Phase 2A — Razorpay Test Configuration           | IMPLEMENTED, TESTED, MANUALLY VERIFIED (see Section 19)                                                  |
-| Phase 2B — Razorpay Order Creation               | IMPLEMENTED, TESTED, MANUALLY VERIFIED, DOCUMENTED — APPROVED PENDING ARCHITECT REVIEW (see Section 62)  |
-| Phase 2C — Checkout Integration                  | IMPLEMENTED, TESTED, MANUALLY VERIFIED, DOCUMENTED — APPROVED PENDING ARCHITECT REVIEW (see Section 111) |
-| Phase 2D — Webhook Ingestion                     | IMPLEMENTED, TESTED, MANUALLY VERIFIED, DOCUMENTED — APPROVED PENDING ARCHITECT REVIEW (see Section 159) |
-| Phase 2E — Event Deduplication and Normalization | IMPLEMENTED, TESTED, MANUALLY VERIFIED, DOCUMENTED — APPROVED PENDING ARCHITECT REVIEW (see Section 215) |
-| Phase 2F — Merchant Processing and Idempotency   | IMPLEMENTED, TESTED, MANUALLY VERIFIED, DOCUMENTED — APPROVED PENDING ARCHITECT REVIEW (see Section 267) |
-| Phase 2G — Real Test Mode Verification           | NOT IMPLEMENTED                                                                                          |
+| Sub-phase                                        | Status                                                                          |
+| ------------------------------------------------ | ------------------------------------------------------------------------------- |
+| Phase 2A — Razorpay Test Configuration           | IMPLEMENTED, TESTED, MANUALLY VERIFIED, DOCUMENTED — APPROVED (see Section 341) |
+| Phase 2B — Razorpay Order Creation               | IMPLEMENTED, TESTED, MANUALLY VERIFIED, DOCUMENTED — APPROVED (see Section 341) |
+| Phase 2C — Checkout Integration                  | IMPLEMENTED, TESTED, MANUALLY VERIFIED, DOCUMENTED — APPROVED (see Section 341) |
+| Phase 2D — Webhook Ingestion                     | IMPLEMENTED, TESTED, MANUALLY VERIFIED, DOCUMENTED — APPROVED (see Section 341) |
+| Phase 2E — Event Deduplication and Normalization | IMPLEMENTED, TESTED, MANUALLY VERIFIED, DOCUMENTED — APPROVED (see Section 341) |
+| Phase 2F — Merchant Processing and Idempotency   | IMPLEMENTED, TESTED, MANUALLY VERIFIED, DOCUMENTED — APPROVED (see Section 341) |
+| Phase 2G — Real Test Mode Verification           | IMPLEMENTED, TESTED, MANUALLY VERIFIED, DOCUMENTED — APPROVED (see Section 341) |
 
 **Update (Section 59):** one real Razorpay Test Mode Order (`order_TTYzkTb1oMiRwP`) has since been created by PayChaos and confirmed in the Razorpay Test Mode Dashboard — this superseded the sentence below, which described the state as of the original Phase 2B implementation round.
 
@@ -3369,3 +3368,255 @@ APPROVED             NO
 ```
 
 Phase 2 as a whole remains **NOT APPROVED**. Neither Phase 2 nor Phase 2G is being marked complete by this round.
+
+---
+
+# PHASE 2G — FINAL REAL TEST MODE VERIFICATION AND PHASE 2 RECONCILIATION
+
+**2026-09-02. Documentation/reconciliation only.** Starting HEAD `ac4a57346d94731f52ac728f0fec1e0a02a91b37`, confirmed clean working tree. No application code, tests, migration, or configuration was modified to produce this section — only `handoffs/PHASE-2-HANDOFF.md`. This section does not itself grant approval — it reconciles all evidence already recorded across Sections 1–314 for architect final review.
+
+## 315. Public deployment / safety — final confirmed state
+
+- A Vercel production deployment exists and was used for real manual verification.
+- The operator access gate (Sections 272–274) was manually verified as active on that deployment.
+- `/demo-merchant` (the only payment-mutation-capable surface) requires an operator session to reach.
+- The Razorpay Dashboard was visibly in **TEST MODE** throughout.
+- A webhook was enabled in TEST MODE for `POST /api/webhooks/razorpay`, subscribed only to `payment.captured`, `payment.failed`, `order.paid` — the frozen P0 catalogue (docs/RAZORPAY_GUIDE.md Section 23).
+- No Live Mode payment was used at any point in this project.
+
+## 316. Real Phase 2G order — final confirmed state
+
+- **Merchant order:** `cdc8c3fc-d78c-4cd9-837d-c41f5cc04a72`
+- **Payment attempt:** `c07f8f9a-0686-4444-9af2-8ddde52221c1`
+- **Razorpay Test Order:** `order_TU0kWTQfLxhzGs`
+- **Razorpay Test Payment:** `pay_TU0xvTbsJiOqPI`
+
+**Final merchant state:** `payment_status = PAID`, `business_status = FULFILLED`, `fulfilment_count = 1`.
+
+**Payment state:** attempt status `CAPTURED`, Razorpay order status `paid`, Razorpay payment status `captured`, `checkout_signature_verified = true`, `captured_at != NULL`, `failed_at = NULL`.
+
+## 317. Real webhook evidence — final confirmed state
+
+| Event              | `razorpay_event_id` | `source_kind`           | `signature_verified` | `processing_status` | `duplicate_delivery_count` |
+| ------------------ | ------------------- | ----------------------- | -------------------- | ------------------- | -------------------------- |
+| `payment.captured` | `TU0y6FKOjtUFlT`    | `REAL_RAZORPAY_WEBHOOK` | `true`               | `PROCESSED`         | 0                          |
+| `order.paid`       | `TU0y6h3Vc7Kt3e`    | `REAL_RAZORPAY_WEBHOOK` | `true`               | `PROCESSED`         | 0                          |
+
+## 318. Processing-attempt evidence — final confirmed state
+
+Both real webhook processing attempts: `source_kind = REAL_RAZORPAY_WEBHOOK`, `is_duplicate_delivery = false`, `status = SUCCEEDED`, `error_code = NULL`.
+
+## 319. Exactly-once business-effect evidence
+
+Exactly one `fulfilments` row exists: `effect_type = FULFIL_ORDER`, semantic key `FULFIL_ORDER:cdc8c3fc-d78c-4cd9-837d-c41f5cc04a72`. This is direct, real-world proof that two genuine webhook deliveries for the same order (`payment.captured` and `order.paid`) did NOT double-fulfil — the exact business-effect idempotency guarantee designed and unit/integration-tested throughout Phase 2F (Sections 218–247) is now confirmed against a real provider, not just synthetic tests.
+
+## 320. Real deployed webhook latency evidence
+
+| Event              | HTTP status | `latency_ms` |
+| ------------------ | ----------- | ------------ |
+| `payment.captured` | 200         | 2661         |
+| `order.paid`       | 200         | 3039         |
+
+Both are below the required 5000 ms (Section 274/285's `latency_ms` instrumentation and structural timing/bounded-work contract are now confirmed against a real request, not only structural source evidence).
+
+## 321. Webhook-first convergence evidence
+
+The persisted `captured_at` timestamp occurred before `checkout_verified_at`. This real flow is direct confirmation that Phase 2E/2F's designed-for "webhook-first payment observation, Checkout-after-webhook compatibility" (Sections 169–170, 213 Correction E) converges correctly in practice, not only in synthetic tests.
+
+## 322. Deployed UI evidence — the confirmed defect, the fix, and final state (honest record)
+
+**Commit `a0d21ac` (Sections 291–302) deployed successfully but FAILED manual UI verification.** The real, successfully captured/fulfilled order still displayed "Checkout response verified — awaiting webhook confirmation." A hard browser refresh (Ctrl+Shift+R) proved this was not a caching artifact. Root cause (Sections 303–309): a second, entirely independent, unconditional copy of the same claim existed directly in `app/demo-merchant/page.tsx`, never touched by the first fix (which only addressed `PayWithRazorpayButton`, a component not even rendered for a captured order).
+
+**Corrective commit `ac4a57346d94731f52ac728f0fec1e0a02a91b37`** ("Phase 2G: fix persisted webhook confirmation path") consolidated both rendering paths onto one authoritative decision (`isPaymentCaptureConfirmedByRealWebhook` / `formatCheckoutWebhookConfirmationMessage*` in `lib/demo-merchant/view-model.ts`). **This corrective deployment was then manually re-verified.**
+
+**Final deployed UI now shows**, for the real successful order: "Payment capture confirmed by Razorpay Test Mode webhook." alongside Payment State PAID, Business State FULFILLED, Fulfilment 1 effect, Attempt Status CAPTURED, Provider Payment Status captured, Checkout Signature Verified Yes, the "Razorpay Test Mode — Real Event" badge, Signature Verified Yes, Processing State PROCESSED. For the historical Checkout-only order (`pay_TTcbVd43PMN79M`, Phase 2C, still `UNPAID`/no real webhook evidence): "Checkout response verified — awaiting webhook confirmation." and "No real Razorpay webhook evidence received yet for this payment." **Real and non-real confirmation states are now correctly and honestly distinguished in the deployed application.**
+
+## 323. Phase 2G manual gates (G1–G14) — final disposition
+
+| Gate | Description                                        | Disposition                                 |
+| ---- | -------------------------------------------------- | ------------------------------------------- |
+| G1   | Public deployment/access-gate readiness            | **PASS**                                    |
+| G2   | Dedicated webhook secret stored privately          | **PASS**                                    |
+| G3   | HTTPS webhook endpoint exposed                     | **PASS**                                    |
+| G4   | Razorpay Dashboard TEST MODE webhook configured    | **PASS**                                    |
+| G5   | Webhook enabled                                    | **PASS**                                    |
+| G6   | New successful Test Mode payment                   | **PASS**                                    |
+| G7   | Checkout signature evidence                        | **PASS**                                    |
+| G8   | Genuine webhook received                           | **PASS**                                    |
+| G9   | Database correlation/evidence inspected            | **PASS**                                    |
+| G10  | Captured/PAID/FULFILLED/exactly one fulfilment     | **PASS**                                    |
+| G11  | Deployed UI evidence                               | **PASS** (after the Section 322 correction) |
+| G12  | Deployed `latency_ms` < 5000 ms                    | **PASS** (2661 ms, 3039 ms)                 |
+| G13  | Practical manual redelivery/duplicate verification | **NOT PERFORMED — NON-BLOCKING**            |
+| G14  | Final handoff reconciliation                       | **THIS ROUND**                              |
+
+**On G13, explicitly:** it was specified as "if practical," not mandatory. No manual provider redelivery was required for Phase 2 approval. Duplicate/event/business-effect idempotency already has extensive automated and real-database coverage (Sections 176–190 unit/integration tests; Section 261 items 9–11 real-Supabase concurrency/idempotency proofs). The real payment itself delivered TWO genuine webhook events (`payment.captured` and `order.paid`) correlating to the same order and still produced exactly one `FULFIL_ORDER` effect (Section 319) — real-world evidence of the same idempotency boundary a manual same-event redelivery would have exercised. No manual duplicate/redelivery was performed, and none is claimed.
+
+## 324. Phase 2 P0 reconciliation (docs/PHASE_PLAN.md)
+
+| P0 requirement                         | Evidence                                                                                  |
+| -------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Test Mode configuration validation     | Phase 2A, Section 1–19 (`RAZORPAY_MODE`/`RAZORPAY_KEY_ID` fail-closed on non-test values) |
+| Server Razorpay adapter                | Phase 2B, Section 22                                                                      |
+| Server Razorpay Order creation         | Phase 2B, Sections 20–37; real Order `order_TU0kWTQfLxhzGs` (Section 316)                 |
+| Payment-attempt correlation            | Phase 2B/2C, `payment_attempts.razorpay_order_id`                                         |
+| Razorpay Checkout                      | Phase 2C, Sections 64–111; real Checkout completed (Section 316)                          |
+| Server Checkout signature verification | Phase 2C, Section 70; real `checkout_signature_verified = true` (Section 316)             |
+| Public webhook endpoint                | Phase 2D, Sections 112–159; real request received (Section 320)                           |
+| Raw-body webhook verification          | Phase 2D, `lib/razorpay/webhook-verification.ts`, unchanged through every later phase     |
+| Invalid signature rejection            | Phase 2D tests; unchanged                                                                 |
+| Webhook persistence                    | Phase 2D `webhook_events`; real rows (Section 317)                                        |
+| Razorpay event-ID deduplication        | Phase 2E, Sections 161–215                                                                |
+| Duplicate-delivery protections         | Phase 2E Correction B (Sections 187/241), atomic RPC counter                              |
+| Normalization                          | Phase 2E, `lib/events/normalization.ts`                                                   |
+| Payment/order correlation              | Phase 2E/2F, Sections 169–170, 221–224                                                    |
+| Merchant payment-state update          | Phase 2F, Sections 221–223; real state (Section 316)                                      |
+| Business-effect idempotency            | Phase 2F, Sections 220, 247 (Finding D); real proof (Section 319)                         |
+| Real Test Mode webhook verification    | This round, Sections 315–321                                                              |
+| Payment/event evidence view            | Phase 2G readiness, Sections 275, 291–309 (evidence UI)                                   |
+| Public-deployment operator access gate | Phase 2G readiness, Sections 271–274                                                      |
+| Real webhook request latency < 5000 ms | This round, Section 320                                                                   |
+
+All P0 items above have recorded evidence already present in this handoff — no new test result is invented in this reconciliation; every citation points to a prior section.
+
+## 325. Completed Phase 2 features (summary)
+
+Razorpay Test Mode configuration and adapter (2A/2B); server-created Razorpay Orders (2B); Standard Checkout integration with server-side signature verification (2C); public webhook endpoint with raw-body HMAC verification (2D); event-ID deduplication with atomic duplicate-delivery counting and safe P0 event normalization (2E); single-transaction atomic merchant processor applying `payment.captured`/`payment.failed`/`order.paid` state with exactly-once fulfilment (2F); operator access gate and basic payment/event evidence UI for public deployment readiness (2G readiness); real Test Mode manual verification with a corrected, truthful evidence UI (2G final, this round).
+
+## 326. Final files/code checkpoints
+
+Route: `app/api/webhooks/razorpay/route.ts`. Services: `lib/webhooks/service.ts`, `lib/demo-merchant/service.ts`. Repositories: `lib/webhooks/repository.ts`, `lib/webhooks/event-processing-repository.ts`, `lib/demo-merchant/repository.ts`. Domain: `lib/events/normalization.ts`, `lib/events/processor.ts`, `lib/demo-merchant/view-model.ts`, `lib/demo-merchant/projection.ts`. Razorpay: `lib/razorpay/adapter.ts`, `lib/razorpay/checkout-verification.ts`, `lib/razorpay/webhook-verification.ts`. Access gate: `middleware.ts`, `lib/access/session.ts`, `lib/config/access-env.ts`, `app/api/access/{login,logout}/route.ts`, `app/access/page.tsx`. UI: `app/demo-merchant/page.tsx`, `app/demo-merchant/pay-with-razorpay-button.tsx`. Final commit: `ac4a57346d94731f52ac728f0fec1e0a02a91b37`.
+
+## 327. All Phase 2 database migrations (names only)
+
+1. `20260823000000_phase1_foundation_schema.sql` (Phase 1 — `orders`, `payment_attempts`, `fulfilments` foundation)
+2. `20260824000000_phase2b_payment_attempts_razorpay_correlation.sql`
+3. `20260825000000_phase2c_payments.sql`
+4. `20260826000000_phase2d_webhook_events.sql`
+5. `20260827000000_phase2e_webhook_dedup.sql`
+6. `20260828000000_phase2f_merchant_processing.sql`
+
+All six are applied to the real Supabase project. Phase 2A and Phase 2G added no migrations of their own. No migration was created, edited, or applied by this reconciliation round.
+
+## 328. Environment variable names (names only, no values)
+
+`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `RAZORPAY_MODE`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET` (configured manually, Phase 2G — not listed in `.env.example` by design, validated lazily), `PAYCHAOS_ACCESS_GATE`, `PAYCHAOS_ACCESS_TOKEN`, `PAYCHAOS_SESSION_SECRET`.
+
+## 329. Manual Razorpay/Vercel configuration performed (names/facts only, no secret values)
+
+A Vercel production deployment was created and configured with `PAYCHAOS_ACCESS_GATE=enabled` and real `PAYCHAOS_ACCESS_TOKEN`/`PAYCHAOS_SESSION_SECRET` values (Phase 2G, G1). A `RAZORPAY_WEBHOOK_SECRET` was generated and stored privately, never committed (G2). The Razorpay Dashboard was configured in TEST MODE with a webhook pointed at the deployed `/api/webhooks/razorpay` endpoint, subscribed only to `payment.captured`/`payment.failed`/`order.paid` (G3/G4/G5).
+
+## 330. Automated test evidence already recorded in this handoff (not re-derived)
+
+Full offline unit suite: 632/632 passing as of the last full run (Section 313/298); real-Supabase integration: 11/11 files, 125/125 tests (Section 260); Phase 2F integration file alone: 34/34 (Section 260); e2e: 2/2 (Section 277); lint/typecheck/build: PASS at every checkpoint through this round; this round's own focused re-verification (Section 312): `view-model.test.ts` 27/27, `pay-with-razorpay-button.test.ts` 7/7, and the pre-commit re-run (previous round) confirming 34/34 combined.
+
+## 331. Security decisions (summary, cross-referenced)
+
+`SECURITY INVOKER` + pinned `search_path` + `service_role`-only grants on every RPC (Sections 4, 229); RLS enabled with zero policies + explicit REVOKE/GRANT on every table (every migration); raw-body HMAC signature verification as the webhook trust boundary, structurally independent of the operator access gate (Section 273); timing-safe comparisons throughout (webhook signature, Checkout signature, access-gate session token); fail-closed behavior on every misconfiguration path (env validation, access gate, RPC correlation checks); allowlist-based redaction for all persisted webhook evidence (Phase 2D `lib/webhooks/redaction.ts`); no card/PAN/CVV/OTP/bank/PII field ever persisted or rendered; the evidence UI structurally cannot render raw payloads or secrets (Section 275, 322).
+
+## 332. Architectural decisions (summary, cross-referenced)
+
+Single-transaction PostgreSQL RPC for all authoritative merchant-state mutation (Section 218) rather than JS-orchestrated multi-call sequences; event-identity vs. processing-attempt-identity separation (ADR-A09); semantic business-effect idempotency key derived only from order identity, never event/delivery identity (Section 220); webhook-first payment observation with Checkout-after-webhook compatibility (Sections 169–170); canonical-evidence-only normalization, never re-derived from a fresh HTTP body on retry (Correction D, Section 189); one single authoritative decision function for the post-Checkout UI status message, consumed by every rendering path (Section 307, this round's corrective design).
+
+## 333. Known issues
+
+The Next.js 16.3.2 "middleware is deprecated, use proxy" naming-convention warning (Section 280/286) remains — non-blocking, deferred to Phase 5 cleanup. Windows/OneDrive Vitest worker-start timeouts and occasional stale-`.next` build-lock artifacts under low free memory are a recurring environmental condition on the development machine, never found to correlate with a real product defect across dozens of independent isolation re-runs throughout this project.
+
+## 334. Deferred Phase 2 P1/P2 work
+
+P1 differentiators and any Phase 2 stretch work beyond the frozen P0 scope were not implemented, per the project's "P0 always wins" rule — none was required for real Test Mode verification. No specific P1/P2 item was scoped or promised during Phase 2; none is being deferred from a concrete commitment, only from the general P0-first prioritization rule.
+
+## 335. Phase 3 frozen dependencies
+
+Phase 3 (Chaos Engine + Money Invariant Engine) may depend on the following approved Phase 2 foundation, which must not be rewritten without a confirmed bug/security need:
+
+- The payment identity/correlation model (`payment_attempts` → `payments` → `orders`, correlated by `razorpay_order_id`/`razorpay_payment_id`).
+- The integer-subunit money model (`amount_subunits`, no floating-point money comparisons anywhere).
+- Server-created Razorpay Test Orders (`lib/razorpay/adapter.ts`).
+- Server-side Checkout verification (`lib/razorpay/checkout-verification.ts`).
+- `REAL_RAZORPAY_WEBHOOK` provenance as the sole real-evidence marker (the `webhook_events.source_kind` CHECK constraint).
+- Canonical event persistence (`webhook_events`, `UNIQUE(razorpay_event_id)`).
+- The event-ID dedup boundary (Phase 2E's atomic RPC counter + durable-attempt lookup).
+- The deterministic single-transaction merchant processor (`process_webhook_payment_event`).
+- The exactly-once `FULFIL_ORDER` business-effect boundary (`UNIQUE(idempotency_key)`).
+- The strict separation between payment state and business state (`payments`/`payment_attempts` vs. `orders.business_status`/`fulfilments`).
+- The operator access gate (`middleware.ts`, `lib/access/session.ts`).
+- The safe evidence projection pattern (`lib/demo-merchant/view-model.ts`'s server-only, allowlist-only view models).
+
+## 336. Phase 3 do-not-break contracts
+
+Phase 3 must not: weaken raw-body HMAC verification; bypass or duplicate the event-ID dedup boundary; introduce a second merchant-state mutation path outside `process_webhook_payment_event`; allow AI to decide payment/invariant truth (CLAUDE.md Section 11); use floating-point money comparisons; expose any secret, raw payload, or PII in a UI projection; disable or bypass the operator access gate for a public deployment; or silently reinterpret `REAL_RAZORPAY_WEBHOOK` provenance to include synthetic/replay evidence. Phase 3 is explicitly NOT implemented by this round — nothing here begins that work.
+
+## 337. Phase 2G final lifecycle state
+
+```
+IMPLEMENTED          PASS
+TESTED               PASS
+MANUALLY VERIFIED    PASS
+DOCUMENTED           PASS
+APPROVED             PASS — ARCHITECT APPROVED
+```
+
+## 338. Phase 2 overall final lifecycle state
+
+```
+IMPLEMENTED          PASS
+TESTED               PASS
+MANUALLY VERIFIED    PASS
+DOCUMENTED           PASS
+APPROVED             PASS — ARCHITECT APPROVED
+```
+
+## 341. Final architect approval record
+
+**PHASE 2G — APPROVED. PHASE 2 — APPROVED.**
+
+Architect final approval was granted after:
+
+- real Test Mode payment verification (Section 316: order `cdc8c3fc-d78c-4cd9-837d-c41f5cc04a72`, Razorpay Order `order_TU0kWTQfLxhzGs`, Razorpay Payment `pay_TU0xvTbsJiOqPI`);
+- genuine `payment.captured` and `order.paid` webhook evidence (Section 317);
+- both webhook signatures verified (`signature_verified = true`);
+- merchant processing SUCCEEDED for both events (Section 318);
+- exactly one `FULFIL_ORDER` fulfilment (Section 319);
+- deployed webhook latency of 2661 ms (`payment.captured`) and 3039 ms (`order.paid`), both under the 5000 ms requirement (Section 320);
+- the deployed UI corrective commit `ac4a57346d94731f52ac728f0fec1e0a02a91b37` ("Phase 2G: fix persisted webhook confirmation path") being successfully manually re-verified on the deployed instance (Section 322);
+- the final source-of-truth documentation reconciliation (Sections 315–338, cross-checked against a fresh full read of every repository doc);
+- the explicit `docs/PHASE_PLAN.md` `P2-AC-01` through `P2-AC-16` acceptance-criteria reconciliation (Section 339);
+- the Phase 2 completion-gate (`docs/PHASE_PLAN.md` 6.18) reconciliation, with every one of its 12 required items independently confirmed against recorded evidence.
+
+**G13 (manual provider redelivery/duplicate verification) remains explicitly NOT PERFORMED — NON-BLOCKING** (Section 323) — it was specified as "if practical" in `docs/PHASE_PLAN.md` 6.17 step 15, was not required for approval, and is not being retroactively claimed as performed. No other factual evidence in Sections 315–340 was altered to produce this approval record.
+
+## 339. Phase 2 acceptance criteria (P2-AC-01–P2-AC-16) explicit reconciliation
+
+Added by an independent documentation review round (fresh re-read of `docs/PHASE_PLAN.md` Section 6.16, `docs/RAZORPAY_GUIDE.md`, `docs/DATABASE.md`, `docs/SECURITY.md`, `docs/MONEY_INVARIANTS.md`, `docs/ARCHITECTURE.md`, `docs/TESTING.md`, `docs/DEMO_PLAN.md`, `.env.example`, and the migration file list) to give Section 324's P0-feature reconciliation an explicit mapping against `PHASE_PLAN.md`'s own named acceptance-criteria IDs. No new test was run and no new fact is introduced — every row cites a section already recorded above.
+
+| AC       | Requirement (docs/PHASE_PLAN.md 6.16)                                                                                                        | Status | Evidence                                                                                                                                                                                                              |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P2-AC-01 | Public payment-enabled deployment requires the operator access gate; webhook route stays signature-authenticated, exempt from operator login | PASS   | Section 315; Section 323 (G1)                                                                                                                                                                                         |
+| P2-AC-02 | Server creates a real Razorpay Test Mode Order                                                                                               | PASS   | Section 316 (`order_TU0kWTQfLxhzGs`)                                                                                                                                                                                  |
+| P2-AC-03 | Razorpay Checkout opens for the created order                                                                                                | PASS   | Section 316 (real Checkout completed, producing `pay_TU0xvTbsJiOqPI`); Phase 2C                                                                                                                                       |
+| P2-AC-04 | A Test Mode payment can be completed                                                                                                         | PASS   | Section 316                                                                                                                                                                                                           |
+| P2-AC-05 | Checkout success signature is verified server-side                                                                                           | PASS   | Section 316 (`checkout_signature_verified = true`)                                                                                                                                                                    |
+| P2-AC-06 | A real Razorpay Test Mode webhook reaches PayChaos                                                                                           | PASS   | Section 317                                                                                                                                                                                                           |
+| P2-AC-07 | Webhook signature is verified before processing                                                                                              | PASS   | Section 317 (`signature_verified = true`); Phase 2D raw-body verification unchanged through this round                                                                                                                |
+| P2-AC-08 | Invalid webhook signature cannot mutate authoritative state                                                                                  | PASS   | Phase 2D automated tests (Sections 112–159); unchanged through this round (Section 336)                                                                                                                               |
+| P2-AC-09 | Verified webhook evidence is durably stored                                                                                                  | PASS   | Section 317                                                                                                                                                                                                           |
+| P2-AC-10 | External events are database-deduplicated                                                                                                    | PASS   | Phase 2E (Sections 161–215); `UNIQUE(razorpay_event_id)` unchanged                                                                                                                                                    |
+| P2-AC-11 | Duplicate delivery does not create duplicate merchant business effect                                                                        | PASS   | Section 319 (two distinct real webhook deliveries for one order produced exactly one `FULFIL_ORDER` row); Phase 2F automated idempotency tests. No manual same-event redelivery was performed — see G13 (Section 323) |
+| P2-AC-12 | Razorpay order/payment IDs correlate to the internal payment attempt                                                                         | PASS   | Section 316                                                                                                                                                                                                           |
+| P2-AC-13 | Real Razorpay evidence is clearly identified as real Test Mode evidence                                                                      | PASS   | Section 317 (`source_kind = REAL_RAZORPAY_WEBHOOK`); Section 322 (deployed UI)                                                                                                                                        |
+| P2-AC-14 | Deployed normal webhook processing completes within 5000 ms, with `latency_ms` recorded                                                      | PASS   | Section 320 (2661 ms, 3039 ms)                                                                                                                                                                                        |
+| P2-AC-15 | Automated tests and build pass                                                                                                               | PASS   | Section 330                                                                                                                                                                                                           |
+| P2-AC-16 | Developer manually verifies the full Test Mode flow                                                                                          | PASS   | Sections 315–322                                                                                                                                                                                                      |
+
+No P2-AC item is BLOCKED or lacks recorded evidence somewhere in this handoff.
+
+## 340. Migration-application evidence basis (clarification)
+
+Section 327 states all six Phase 1/2 migrations are applied to the real Supabase project. That conclusion is unchanged, but the strength of the recorded evidence differs per migration, and is made explicit here per the reviewing architect's instruction not to treat file existence — or a blanket summary statement — as proof of application on its own:
+
+- **Migrations 3–6** (`20260825000000_phase2c_payments.sql`, `20260826000000_phase2d_webhook_events.sql`, `20260827000000_phase2e_webhook_dedup.sql`, `20260828000000_phase2f_merchant_processing.sql`) each have an explicit recorded Supabase SQL Editor confirmation of `"Success. No rows returned."` — Sections 93, 144/153, 209, and 259 respectively.
+- **Migration 2** (`20260824000000_phase2b_payment_attempts_razorpay_correlation.sql`) is confirmed indirectly: Section 43 records that all five real-Supabase `046-...` integration tests — which require the migration's new column/constraint to exist — passed, with the explicit statement "confirms the Phase 2B migration has since been applied." No literal `"Success. No rows returned."` quote for this specific migration is recorded anywhere in this handoff.
+- **Migration 1** (`20260823000000_phase1_foundation_schema.sql`) was applied and verified as part of the separately approved Phase 1 handoff, not re-confirmed within this Phase 2 document. Every Phase 2 real-Supabase integration test in this handoff that reads or writes `orders`/`payment_attempts`/`fulfilments` implicitly depends on it already being applied, but no fresh confirmation of that specific migration is recorded in this file.
+
+This does not change the substantive conclusion in Section 327 — all six migrations are applied — but records the exact evidentiary basis behind each, distinguishing a direct quoted confirmation from an indirect (test-based) confirmation and from reliance on a prior approved phase's own record.
