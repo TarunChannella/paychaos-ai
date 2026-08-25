@@ -6,10 +6,10 @@
 - **Current branch:** `phase-2-razorpay`
 - **Phase 2 starting HEAD:** `47cb275cd2d200b879f80a331ca4848ee2b709b3`
 - **Overall Phase 2 status: IN PROGRESS — NOT APPROVED**
-- **Completed checkpoints documented in this file: Phase 2A — Razorpay Test Configuration; Phase 2B — Razorpay Order Creation; Phase 2C — Checkout Integration (candidate — see Section 65); Phase 2D — Webhook Ingestion + Signature Verification (candidate — see Section 112)**
-- **Phase 2E through Phase 2G: NOT IMPLEMENTED**
+- **Completed checkpoints documented in this file: Phase 2A — Razorpay Test Configuration; Phase 2B — Razorpay Order Creation; Phase 2C — Checkout Integration (candidate — see Section 65); Phase 2D — Webhook Ingestion + Signature Verification (candidate — see Section 112); Phase 2E — Webhook Deduplication + Event Normalization (candidate — see Section 161)**
+- **Phase 2F through Phase 2G: NOT IMPLEMENTED**
 
-Phase 2 as a whole is not implemented, not tested, not manually verified, not documented, and not approved. Only the Phase 2A, Phase 2B, Phase 2C, and Phase 2D slices described below have any of those properties, and only for their own narrow scope. **Update (Section 101-111): the developer has since completed a real Razorpay Test Mode Standard Checkout payment and independently-confirmed Supabase correlation evidence.** Phase 2C is now IMPLEMENTED, TESTED, MANUALLY VERIFIED, and DOCUMENTED; it awaits architect review before APPROVED. **Update (Section 112-159): Phase 2D — the public webhook endpoint, raw-body HMAC verification, and canonical `webhook_events` persistence — is now IMPLEMENTED, TESTED, MANUALLY VERIFIED, and DOCUMENTED** (the Phase 2D/2E application-boundary correction in Sections 133-143, the migration-applied + integration-test-expectation correction in Sections 144-150, and the final documentation reconciliation in Sections 151-160 are all folded into this state). Real-Supabase coverage is fully green (9/9 files, 73/73 tests) in addition to the full offline unit suite (426/426). MANUALLY VERIFIED (Section 155/157) means the migration is applied, database constraints/RLS are verified, `webhook_events` is observably empty of any real or synthetic evidence, and Phase 2C's authority state is independently reconfirmed unchanged — it is explicitly **not** a claim that a real Razorpay webhook was received. It awaits architect review before APPROVED.
+Phase 2 as a whole is not implemented, not tested, not manually verified, not documented, and not approved. Only the Phase 2A through Phase 2E slices described below have any of those properties, and only for their own narrow scope. **Update (Section 101-111): the developer has since completed a real Razorpay Test Mode Standard Checkout payment and independently-confirmed Supabase correlation evidence.** Phase 2C is now IMPLEMENTED, TESTED, MANUALLY VERIFIED, and DOCUMENTED; it awaits architect review before APPROVED. **Update (Section 112-159): Phase 2D — the public webhook endpoint, raw-body HMAC verification, and canonical `webhook_events` persistence — is now IMPLEMENTED, TESTED, MANUALLY VERIFIED, and DOCUMENTED** (the Phase 2D/2E application-boundary correction in Sections 133-143, the migration-applied + integration-test-expectation correction in Sections 144-150, and the final documentation reconciliation in Sections 151-160 are all folded into this state). MANUALLY VERIFIED (Section 155/157) means the migration is applied, database constraints/RLS are verified, `webhook_events` is observably empty of any real or synthetic evidence, and Phase 2C's authority state is independently reconfirmed unchanged — it is explicitly **not** a claim that a real Razorpay webhook was received. It awaits architect review before APPROVED. **Update (Section 161-215): Phase 2E — application-level duplicate recognition, an atomic duplicate-delivery counter, safe P0 event normalization (`payment.captured`/`payment.failed`/`order.paid`), payment/order correlation (including webhook-first payment observation and Checkout-after-webhook compatibility), and durable `event_processing_attempts` evidence — is now IMPLEMENTED, TESTED, MANUALLY VERIFIED, and DOCUMENTED** (the five-finding architect review correction in Sections 185-208, the migration-applied + final real-Supabase verification, and the final documentation reconciliation in Sections 209-215 are all folded into this state). Real-Supabase coverage is fully green (10/10 files, 91/91 tests) in addition to the full offline unit suite (511/511). MANUALLY VERIFIED (Section 211/213) means the migration is applied, every real-DB constraint/RLS/RPC is verified, both new tables are observably empty of any real or synthetic evidence, and Phase 2C/2D's authority state is independently reconfirmed unchanged — it is explicitly **not** a claim that a real Razorpay webhook was received. It awaits architect review before APPROVED; Phase 2F–2G remain not implemented.
 
 **Phase 2B correction applied, then re-verified against the real provider:** the first real Razorpay Test Mode manual verification (performed by the developer) found a confirmed implementation defect (over-length receipt) — see "PHASE 2B CORRECTION" below. The defect was fixed and unit-tested against a mocked provider. Two confirmed test-harness defects (not product defects) were then found and corrected during test-gate verification — see "Phase 2B Test-Gate Correction #2" (Section 48). **The developer has since completed a successful real Razorpay Test Mode re-test — see Section 59.** Phase 2B is now IMPLEMENTED, TESTED, MANUALLY VERIFIED, and DOCUMENTED; it awaits architect review before APPROVED.
 
@@ -17,15 +17,15 @@ Phase 2 as a whole is not implemented, not tested, not manually verified, not do
 
 ## 1. Phase identity and current status
 
-| Sub-phase                                        | Status                                                                                                   |
-| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| Phase 2A — Razorpay Test Configuration           | IMPLEMENTED, TESTED, MANUALLY VERIFIED (see Section 19)                                                  |
-| Phase 2B — Razorpay Order Creation               | IMPLEMENTED, TESTED, MANUALLY VERIFIED, DOCUMENTED — APPROVED PENDING ARCHITECT REVIEW (see Section 62)  |
-| Phase 2C — Checkout Integration                  | IMPLEMENTED, TESTED, MANUALLY VERIFIED, DOCUMENTED — APPROVED PENDING ARCHITECT REVIEW (see Section 111) |
-| Phase 2D — Webhook Ingestion                     | IMPLEMENTED, TESTED, MANUALLY VERIFIED, DOCUMENTED — APPROVED PENDING ARCHITECT REVIEW (see Section 159) |
-| Phase 2E — Event Deduplication and Normalization | NOT IMPLEMENTED                                                                                          |
-| Phase 2F — Merchant Processing and Idempotency   | NOT IMPLEMENTED                                                                                          |
-| Phase 2G — Real Test Mode Verification           | NOT IMPLEMENTED                                                                                          |
+| Sub-phase                                        | Status                                                                                                             |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| Phase 2A — Razorpay Test Configuration           | IMPLEMENTED, TESTED, MANUALLY VERIFIED (see Section 19)                                                            |
+| Phase 2B — Razorpay Order Creation               | IMPLEMENTED, TESTED, MANUALLY VERIFIED, DOCUMENTED — APPROVED PENDING ARCHITECT REVIEW (see Section 62)            |
+| Phase 2C — Checkout Integration                  | IMPLEMENTED, TESTED, MANUALLY VERIFIED, DOCUMENTED — APPROVED PENDING ARCHITECT REVIEW (see Section 111)           |
+| Phase 2D — Webhook Ingestion                     | IMPLEMENTED, TESTED, MANUALLY VERIFIED, DOCUMENTED — APPROVED PENDING ARCHITECT REVIEW (see Section 159)           |
+| Phase 2E — Event Deduplication and Normalization | IMPLEMENTED, DOCUMENTED; TESTED = PARTIAL (migration not yet applied); MANUALLY VERIFIED PENDING (see Section 183) |
+| Phase 2F — Merchant Processing and Idempotency   | NOT IMPLEMENTED                                                                                                    |
+| Phase 2G — Real Test Mode Verification           | NOT IMPLEMENTED                                                                                                    |
 
 **Update (Section 59):** one real Razorpay Test Mode Order (`order_TTYzkTb1oMiRwP`) has since been created by PayChaos and confirmed in the Razorpay Test Mode Dashboard — this superseded the sentence below, which described the state as of the original Phase 2B implementation round.
 
@@ -1829,4 +1829,481 @@ NOT APPROVED
 
 ## 160. Remaining Phase 2E–2G work
 
-Unchanged in scope from Sections 92/132: Phase 2E (event normalization/deduplication workflow — `duplicate_delivery_count` increment, processing-attempt records, duplicate-response semantics), Phase 2F (merchant PAID/`CAPTURED` transition, fulfilment, business idempotency driven by verified webhook evidence), Phase 2G (real Razorpay webhook registration, delivery, and end-to-end manual verification, plus final Phase 2 approval). None of this work has been started. HEAD remains exactly `bcfdf6a6895ef5b04c94784d4c5c5e2c2e630a9c`; nothing was committed or pushed by this reconciliation; no `RAZORPAY_WEBHOOK_SECRET` was created; no Razorpay webhook was configured or delivered.
+Unchanged in scope from Sections 92/132 as of the Phase 2D reconciliation. Phase 2E itself is addressed starting in Section 161 below.
+
+---
+
+# PHASE 2E — WEBHOOK DEDUPLICATION + EVENT NORMALIZATION (candidate)
+
+Started from the exact approved Phase 2D checkpoint, HEAD `44393b514deb96fbc54d7972fbdc5ded1601458b` ("Phase 2D: verify Razorpay webhook ingestion"), confirmed clean before any edit. **HEAD remains exactly that commit — nothing in this round was committed, pushed, or auto-applied to the real Supabase project.**
+
+## 161. Objective
+
+Implement the durable chain: verified Razorpay delivery → canonical event-ID uniqueness → duplicate recognition → atomic duplicate-delivery counting → safe P0 event normalization → payment/order correlation → durable normalized processing-attempt evidence → READY FOR PHASE 2F. Deliberately stop there — no merchant/payment/order/fulfilment mutation of any kind (Phase 2F scope).
+
+## 162. Documentation read fresh
+
+Before implementation: `CLAUDE.md`, `docs/PROJECT_CONTEXT.md`, `docs/ARCHITECTURE.md` (ADR-A07/A08/A09, the "Webhook Route → Webhook Verification Service → Event Repository → Event Processor" reference module shape, and the Dependency Direction diagram), `docs/PHASE_PLAN.md` ("Phase 2E — Event Deduplication and Normalization": database-enforced event uniqueness, duplicate recognition, normalized internal event representation, clear event provenance), `docs/RAZORPAY_GUIDE.md` (Section 23 frozen P0 event catalogue `payment.captured`/`payment.failed`/`order.paid`; the `payment.failed`-is-not-terminal caveat; RZP-AC-013 through RZP-AC-018; Section 45's Event/Deduplication/Business-Idempotency/Ordering/Response test catalogues), `docs/DATABASE.md` (Section 14 `event_processing_attempts` full table definition, provenance constraints, duplicate-delivery rules, Phase Ownership split between Phase 2 and Phase 3), `docs/SECURITY.md`, `docs/TESTING.md`, `docs/MONEY_INVARIANTS.md`, and `handoffs/PHASE-2-HANDOFF.md` itself (Sections 1-160). Then inspected every approved Phase 2D runtime/schema/test file listed in this task's Section 1, plus `lib/demo-merchant/repository.ts` and `lib/demo-merchant/service.ts` in full.
+
+No documentation conflict was found; docs/PHASE_PLAN.md's Phase 2E scope, docs/DATABASE.md's Section 14 table definition, and docs/ARCHITECTURE.md's ADR-A08/A09 all agree with this task's instructions.
+
+## 163. Normalized event model
+
+`lib/events/normalization.ts` (new, pure, no I/O, no `server-only` needed): a discriminated union `NormalizedRazorpayEvent` (`NormalizedPaymentCapturedEvent` | `NormalizedPaymentFailedEvent` | `NormalizedOrderPaidEvent`), each carrying `schemaVersion: 1`, `sourceKind: "REAL_RAZORPAY_WEBHOOK"`, `razorpayEventId`, `eventType`, `providerCreatedAt`, plus event-specific fields. `normalizeRazorpayEvent(input)` consumes ONLY the already-redacted `webhook_events.raw_payload_redacted`-shaped evidence (`lib/webhooks/redaction.ts`'s output) — never the raw body, never anything unredacted — and returns one of three outcomes: `{outcome: "normalized", event}`, `{outcome: "unsupported", eventType}`, or `{outcome: "invalid", reason}`. Money fields are validated as positive `Number.isSafeInteger` subunit values; currency must match `^[A-Z]{3}$`; safe `payment.failed` error fields (`errorCode`/`errorSource`/`errorStep`/`errorReason`) are copied only if present, else `null`. Never includes email/contact/VPA/card/bank/method/notes/raw payload — structurally impossible, since the function only ever reads a small fixed set of named fields from the already-redacted evidence object.
+
+## 164. Supported event behavior / unsupported event behavior
+
+Supported P0 catalogue is exactly `payment.captured`, `payment.failed`, `order.paid` (`SUPPORTED_RAZORPAY_EVENT_TYPES`) — matching docs/RAZORPAY_GUIDE.md Section 23 verbatim. `payment.authorized` and any other Razorpay event type (e.g. `refund.processed`) return `{outcome: "unsupported"}`. In `lib/webhooks/service.ts`, an unsupported-but-validly-signed event: preserves the canonical `webhook_events` row exactly as already inserted (Phase 2D's job, unchanged), creates **zero** `event_processing_attempts` rows, fabricates no normalized P0 data, and returns `{outcome: "unsupported_event_accepted"}` → the route responds `200 {"status":"received"}` — never a distinct status that would leak which events are/aren't subscribed. A supported event with a malformed/incomplete payload (`{outcome: "invalid"}`) records a best-effort `FAILED` `event_processing_attempts` row with a safe deterministic `error_code` (`NORMALIZATION_INVALID_PAYLOAD`) and throws `WebhookEventNormalizationInvalidError`, which the route maps to `400` — the same status class as Phase 2D's `WebhookPayloadMalformedError` ("existing contract").
+
+## 165. Duplicate recognition design
+
+`lib/webhooks/repository.ts`'s `insertWebhookEvent` now returns `WebhookEventRow | null` — `null` on a Postgres `23505` (`UNIQUE(razorpay_event_id)`) conflict, mirroring `lib/demo-merchant/repository.ts`'s already-established `insertVerifiedPayment` null-return pattern for the identical race shape, rather than throwing a generic error as Phase 2D's architect-corrected version did. This is not a regression of the 2026-08-26 correction — that correction was about **Phase 2D not yet owning** duplicate recognition; Phase 2E is precisely the phase that owns it (docs/PHASE_PLAN.md), so reinstating the distinction is the intended, on-schedule design, not scope creep. `insertWebhookEvent(...)` attempts the canonical insert first; the database `UNIQUE(razorpay_event_id)` constraint (unchanged since Phase 2D, docs/ARCHITECTURE.md ADR-A08) remains the sole concurrency-safe correctness boundary — there is no `SELECT → if missing INSERT` anywhere in this codebase.
+
+## 166. Atomic duplicate-count design
+
+`supabase/migrations/20260827000000_phase2e_webhook_dedup.sql` adds a narrowly-scoped SQL function `record_webhook_duplicate_delivery(p_razorpay_event_id text) returns webhook_events`: a single parameterized `UPDATE ... SET duplicate_delivery_count = duplicate_delivery_count + 1, updated_at = now() ... RETURNING *` statement. `language sql`, `security invoker` (not `definer` — the only caller, `service_role`, already holds the required `UPDATE` privilege from the Phase 2D migration, so no privilege elevation or `search_path`-hijack surface exists), `search_path` pinned to `public` as defense-in-depth anyway. No dynamic SQL, no arbitrary table/column name input — the only parameter is the event ID value itself. Postgres's default "grant EXECUTE to PUBLIC on new functions" is explicitly reversed: `revoke all on function ... from public;` then `grant execute on function ... to service_role;` only. `lib/webhooks/repository.ts`'s `incrementWebhookDuplicateDeliveryCount` calls this via `client.rpc(...)` — never a `SELECT count → count+1 in JS → UPDATE` pattern, which would lose increments under a genuine concurrent-duplicate race (proven by a dedicated 5-way-concurrent integration test, Section 176).
+
+## 167. Retry-after-normalization-failure behavior
+
+A canonical `webhook_events` row can exist (Phase 2D/2E insert succeeded) while normalization/correlation later failed (e.g. the payment attempt didn't exist yet). `lib/webhooks/service.ts` implements this precisely: on a recognized duplicate, it loads the latest `event_processing_attempts` row for that `webhook_event_id` (`getLatestProcessingAttemptForWebhookEvent`). If the latest attempt's `status === "PENDING"` (already durably, successfully normalized/correlated), it records a `SKIPPED_DUPLICATE` attempt REUSING the exact same stored `normalized_event` — zero re-normalization, zero re-correlation, zero additional lookups of any kind — and returns `{outcome: "duplicate_received"}`. If there is no attempt yet, or the latest one is `FAILED`, it falls through to the exact same normalize → correlate → persist pipeline a fresh event uses, with `isDuplicateDelivery: true` carried into whatever `event_processing_attempts` row results — a fresh success produces a new `PENDING` row; a repeated failure produces a new `FAILED` row and re-throws (route → `500`, safe to retry again later).
+
+## 168. Correlation design
+
+`correlateNormalizeAndPersist` (internal to `lib/webhooks/service.ts`): resolves the internal `payment_attempts` row via `getPaymentAttemptByRazorpayOrderId(normalized.razorpayOrderId)` (new `lib/demo-merchant/repository.ts` function) — no match → records a `FAILED` attempt with `error_code: "CORRELATION_ORDER_NOT_FOUND"` and throws `WebhookEventCorrelationFailedError` (route → `500`, safe to retry). For `payment.captured`/`payment.failed`, resolves/creates the `payments` row by `razorpay_payment_id` (Section 169); if an existing `payments` row's `payment_attempt_id` disagrees with the resolved attempt, records `FAILED`/`CORRELATION_PAYMENT_MISMATCH` and fails closed — the exact "fail closed with a safe correlation error" this task's Section 7 requires. For `order.paid`, correlates to an existing `payments` row ONLY if the safe evidence happens to include a `razorpay_payment_id` AND that row already exists — it is never created from `order.paid` alone (this task's Section 5: "order.paid alone must not become fulfilment authority" / payment-creation authority).
+
+## 169. Webhook-first payment observation
+
+New `lib/demo-merchant/repository.ts` function `insertPaymentFromWebhookEvidence`: inserts a canonical `payments` row from verified webhook evidence when no Checkout callback has created one yet, with `checkout_signature_verified: false` / `checkout_verified_at: null` (explicit, not merely defaulted) and — critically — no `razorpay_payment_status`/`captured_at`/`failed_at` (Phase 2F's exclusive responsibility). Returns `null` on a `razorpay_payment_id` `23505` race (a concurrent duplicate delivery, or a concurrent Checkout callback, won first) — the caller re-reads via `getPaymentByRazorpayPaymentId` exactly like `insertVerifiedPayment` already does.
+
+## 170. Checkout-after-webhook compatibility (Phase 2C minimal change)
+
+Inspected the approved Phase 2C `verifyCheckoutAndPersistPayment` (`lib/demo-merchant/service.ts`): its existing-row branch previously returned an existing `payments` row unconditionally, without ever attaching Checkout verification if the row had been created first by a webhook (`checkout_signature_verified: false`). Minimal, additive fix: if the existing row is not yet Checkout-verified, and this call's own Checkout signature has already been independently verified against the trusted attempt (unchanged prior logic), it now calls a new `attachCheckoutVerificationToPayment(existing.id)` (new `lib/demo-merchant/repository.ts` function — an unconditional `UPDATE` setting `checkout_signature_verified: true` / `checkout_verified_at: now()`, touching no other field) rather than failing or silently ignoring the verification. If the existing row is already Checkout-verified (the pure idempotent-retry case, unchanged), no attach call is made. This is the one and only change to approved Phase 2C code in this round — a genuine, minimal, explicitly-permitted compatibility fix for a real later-phase requirement (out-of-order browser/webhook observation), not a rewrite. Tests added (Section 176).
+
+## 171. `event_processing_attempts` schema / Phase 3 fields deliberately excluded
+
+`supabase/migrations/20260827000000_phase2e_webhook_dedup.sql` creates `public.event_processing_attempts` with exactly the Phase 2 column subset docs/DATABASE.md Section 14 and this task's Section 15 specify: `id`, `webhook_event_id` (nullable FK → `webhook_events.id`, `ON DELETE RESTRICT`), `payment_attempt_id` (nullable FK → `payment_attempts.id`), `payment_id` (nullable FK → `payments.id`), `source_kind` (CHECK-fixed to exactly `'REAL_RAZORPAY_WEBHOOK'` for Phase 2 — the other three docs-approved provenance values remain reserved for Phase 3), `is_duplicate_delivery`, `status` (CHECK enum includes the full approved lifecycle `PENDING`/`HELD`/`PROCESSING`/`SUCCEEDED`/`FAILED`/`SKIPPED_DUPLICATE` even though Phase 2E itself only ever inserts `PENDING`/`FAILED`/`SKIPPED_DUPLICATE`), `normalized_event` (jsonb, CHECK object-typed), `error_code`, `error_message_redacted`, `started_at`, `finished_at`. A compound CHECK enforces `webhook_event_id IS NOT NULL` whenever `source_kind = 'REAL_RAZORPAY_WEBHOOK'` (docs/DATABASE.md's Provenance Constraints). Deliberately **excluded**: `chaos_run_id`, `fault_action`, `state_before`, `state_after` — all four are pre-approved Phase 3 additive columns per docs/DATABASE.md Section 14 "Phase Ownership," not part of this migration. Six indexes match docs/DATABASE.md's required list minus the not-yet-existing `chaos_run_id` index. RLS enabled, zero policies, `anon`/`authenticated` explicitly revoked, `service_role` explicit CRUD grant — the same model as every prior P0 table.
+
+## 172. Files added
+
+- `supabase/migrations/20260827000000_phase2e_webhook_dedup.sql` — additive migration (Sections 166, 171). **NOT APPLIED YET.**
+- `lib/events/normalization.ts` — pure normalization module (Section 163).
+- `lib/webhooks/event-processing-repository.ts` — server-only repository for `event_processing_attempts` (`insertEventProcessingAttempt`, `getLatestProcessingAttemptForWebhookEvent`).
+- `tests/unit/events/normalization.test.ts` (21 tests), `tests/unit/webhooks/event-processing-repository.test.ts` (7 tests) — new.
+- `tests/integration/supabase/049-event-processing-attempts.integration.test.ts` (18 tests) — new, real-Supabase coverage (Section 178; currently blocked by the not-yet-applied migration).
+
+## 173. Files modified
+
+- `lib/webhooks/repository.ts` — `insertWebhookEvent` returns `WebhookEventRow | null` on `23505` (Section 165); added `getWebhookEventByRazorpayEventId`, `incrementWebhookDuplicateDeliveryCount` (RPC wrapper, Section 166), `updateWebhookEventDerivedFields` (updates ONLY `razorpay_order_id`/`razorpay_payment_id`/`payment_attempt_id`/`payment_id`/`amount_subunits`/`currency`/`razorpay_payment_status`/`updated_at` — never the immutable evidence fields, never `processing_status`/`processed_at`, which stay `RECEIVED`/`NULL` through Phase 2E per this task's Section 10).
+- `lib/webhooks/service.ts` — `ingestRazorpayWebhook` fully re-orchestrated per Sections 161-170 above; new typed errors `WebhookEventNormalizationInvalidError` (400) and `WebhookEventCorrelationFailedError` (500, carries a `CorrelationFailureCode`); result type is now a 3-way discriminated union (`processed`/`duplicate_received`/`unsupported_event_accepted`).
+- `lib/demo-merchant/repository.ts` — added `getPaymentAttemptByRazorpayOrderId`, `insertPaymentFromWebhookEvidence`, `attachCheckoutVerificationToPayment` (Sections 168-170).
+- `lib/demo-merchant/service.ts` — `verifyCheckoutAndPersistPayment`'s existing-row branch now attaches Checkout verification to a webhook-first payment rather than returning it unchanged (Section 170) — the only change to this file.
+- `app/api/webhooks/razorpay/route.ts` — success body is now `{"status": result.outcome === "duplicate_received" ? "duplicate_received" : "received"}`; imports and maps the two new error types (400/500); header doc comment updated to "Phase 2D/2E".
+- `lib/supabase/types.ts` — added the `event_processing_attempts` table type (Phase 2 subset only) and a `Functions.record_webhook_duplicate_delivery` entry (previously `Record<string, never>`).
+- `tests/unit/webhooks/{repository,service}.test.ts`, `tests/unit/demo-merchant/{repository,service}.test.ts`, `tests/unit/api/webhooks-razorpay-route.test.ts`, `tests/unit/supabase/{migration,server}.test.ts` — extended/updated per Sections 176/179.
+
+## 174. Files deleted
+
+None.
+
+## 175. Dependencies changed
+
+None. `package.json`/lockfile unchanged — no new npm package; the atomic increment is a Postgres function called via the already-used `@supabase/supabase-js` `.rpc()` method.
+
+## 176. Tests added — results
+
+| Area                                                                                                                           | File                                                                           | Tests           | Result                                                                          |
+| ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ | --------------- | ------------------------------------------------------------------------------- |
+| Normalization (18 required scenarios + 3 extra)                                                                                | `tests/unit/events/normalization.test.ts`                                      | 21              | PASS                                                                            |
+| Webhook repository (dedup/RPC/derived-fields)                                                                                  | `tests/unit/webhooks/repository.test.ts`                                       | 12              | PASS                                                                            |
+| Event-processing repository                                                                                                    | `tests/unit/webhooks/event-processing-repository.test.ts`                      | 7               | PASS                                                                            |
+| Webhook service orchestration (dedup/retry/correlation/webhook-first/zero-mutation)                                            | `tests/unit/webhooks/service.test.ts`                                          | 25              | PASS                                                                            |
+| Demo-merchant repository (3 new correlation functions)                                                                         | `tests/unit/demo-merchant/repository.test.ts`                                  | 39 (12 new)     | PASS                                                                            |
+| Demo-merchant service (Checkout-after-webhook compatibility)                                                                   | `tests/unit/demo-merchant/service.test.ts`                                     | 47 (2 new)      | PASS                                                                            |
+| Webhook route (duplicate/unsupported/new-error mapping)                                                                        | `tests/unit/api/webhooks-razorpay-route.test.ts`                               | 26 (5 new)      | PASS                                                                            |
+| Structural guards (6 approved tables, Phase 3 columns forbidden, function grant)                                               | `tests/unit/supabase/{migration,server}.test.ts`                               | 69 (both files) | PASS                                                                            |
+| Real-Supabase (18 event_processing_attempts scenarios + concurrency test; 6 anon-denial; 5 RPC scenarios in a second describe) | `tests/integration/supabase/049-event-processing-attempts.integration.test.ts` | 18              | 6/18 PASS (anon-denial), 12/18 blocked by the unapplied migration (Section 178) |
+
+Every focused file was independently run in isolation and confirmed passing before the full regression gate.
+
+## 177. Regression gate — full results
+
+| Command                                            | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run typecheck`                                | exit 0                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `npm run lint`                                     | exit 0 (one `no-unused-vars` warning found and fixed during this round — a runtime array kept only for type derivation was replaced with a direct union type)                                                                                                                                                                                                                                                                                                          |
+| `npm run test` (full unit suite)                   | **29/29 files, 489/489 tests, exit 0** — two retries needed across this round due to this session's already-documented severe Windows/OneDrive memory pressure (worker-startup timeouts and one cross-test mock-state artifact from an adjacent timed-out test); every affected file was independently re-confirmed passing in isolation before and after each retry; no test configuration was changed                                                                |
+| `npm run build`                                    | exit 0, after one documented stale-`.next` `EPERM` cleanup/retry (known pattern, unrelated to this round's code); `/api/webhooks/razorpay` still registers as `ƒ` (dynamic)                                                                                                                                                                                                                                                                                            |
+| Client-bundle secret scan (`.next/static/**/*.js`) | no matches for `RAZORPAY_WEBHOOK_SECRET`/`RAZORPAY_KEY_SECRET`/`SUPABASE_SERVICE_ROLE_KEY`                                                                                                                                                                                                                                                                                                                                                                             |
+| `npm run test:integration:supabase`                | **9/10 files pass, 79/91 tests pass, exit 1.** All 12 failures are confined to the new `049-event-processing-attempts...` file and are exactly `PGRST205`("Could not find the table 'public.event_processing_attempts'") or `PGRST202` ("Could not find the function public.record_webhook_duplicate_delivery") — the migration is genuinely not yet applied (Section 178). All 8 pre-existing Phase 2A-2D integration files remain green, confirming zero regression. |
+| `npm run e2e`                                      | 2/2, exit 0                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Prettier                                           | all changed/added TS files clean (one `--write` pass; the new `.sql` migration file is outside this repo's own Prettier glob, matching every prior migration round)                                                                                                                                                                                                                                                                                                    |
+| `git diff --check`                                 | clean (only benign LF/CRLF warnings, unchanged pattern from every prior round)                                                                                                                                                                                                                                                                                                                                                                                         |
+
+## 178. Elevated-severity known issue — apply the migration before further local use
+
+Consistent with the identical situation at the equivalent point in every prior phase (Sections 46/85/125): `supabase/migrations/20260827000000_phase2e_webhook_dedup.sql` has not been applied to the real Supabase project. This does not break any existing approved page or flow — nothing in Phase 2A-2D reads/writes `event_processing_attempts` or calls the new RPC. It fully blocks: the 12 real-Supabase assertions in `049-event-processing-attempts...` that depend on the table/function existing, and (once a real webhook is eventually configured in Phase 2G) any actual normalization/correlation persistence, since `insertEventProcessingAttempt` would fail against a nonexistent table and the whole request would correctly, safely return `500` (Razorpay would retry).
+
+**Recommended developer action, after architect review approves this candidate: apply `supabase/migrations/20260827000000_phase2e_webhook_dedup.sql`** to the real Supabase project, then re-run `npm run test:integration:supabase` to confirm it returns to 10/10 files fully green.
+
+## 179. Security review
+
+- Test Mode only; no Live Mode path introduced or touched.
+- `RAZORPAY_WEBHOOK_SECRET` handling (lazy validation, ≥32 chars, distinct from `RAZORPAY_KEY_SECRET`) is completely unchanged from Phase 2D — this round touches no config/secret module.
+- Raw signature, raw body, and webhook secret are never logged anywhere in the new/changed code — confirmed by the unchanged Phase 2D verification path plus a dedicated "no logged event contains the signature" test extended to cover the new duplicate/correlation paths.
+- Normalized events and `event_processing_attempts.normalized_event` contain no PII/instrument data — proven by dedicated tests injecting email/contact/VPA/card/bank/method into the safe-evidence fixture and asserting none of it survives normalization (Section 176).
+- No browser-authoritative write path exists anywhere in this round — every new repository function is `server-only` and reachable only from `lib/webhooks/service.ts`/`lib/demo-merchant/service.ts`, never from a Client Component or Server Action directly.
+- RLS enabled with zero policies on `event_processing_attempts`; `anon`/`authenticated` explicitly revoked, `service_role`-only grant — confirmed both structurally (migration test) and against the real project for the anon-denial subset (6/6 passing even before the migration exists, since RLS denial naturally holds regardless).
+- The `record_webhook_duplicate_delivery` RPC is not public — Postgres's default PUBLIC-execute grant is explicitly revoked, then re-granted only to `service_role`; confirmed structurally and (once applied) by a dedicated anon-denial integration test.
+- No Live Mode support, no merchant-state mutation, no fulfilment, no AI, no arbitrary target, and no fake/synthetic event is ever presented as real Razorpay evidence anywhere in this round's code or tests (every test ID is a `taggedValue()`-tagged synthetic placeholder or a fully-mocked unit fixture).
+
+## 180. Merchant-state zero-mutation proof
+
+Confirmed by direct code review and by a dedicated structural test (`tests/unit/webhooks/service.test.ts`, "this module never imports order/fulfilment mutation functions"): `lib/webhooks/service.ts`'s source contains no reference to `markPaymentAttemptOrderCreated`, `markPaymentAttemptFailedObserved`, `markPaymentAttemptCheckoutInProgress`, `insertOrder(`, or `insertFulfilment`. No path in this round ever sets `orders.payment_status = 'PAID'`/`'FAILED_OBSERVED'`, `orders.business_status = 'FULFILLED'`, `payment_attempts.status = 'CAPTURED'`/`'FAILED_OBSERVED'`, `payments.razorpay_payment_status`/`captured_at`/`failed_at`, or creates any `fulfilments` row — every write this round performs is scoped to exactly `webhook_events`' derived fields, `event_processing_attempts`, and (only for webhook-first observation or Checkout-attach) `payments`' `checkout_signature_verified`/`checkout_verified_at`/money-identity fields, never its provider-status fields.
+
+## 181. Existing real Phase 2C payment remains unchanged
+
+The known manually-verified Phase 2C payment (merchant order `eabed2c4-5d48-4f20-8cc9-67248564648a`, Razorpay Order `order_TTYzkTb1oMiRwP`, Razorpay Payment `pay_TTcbVd43PMN79M`) was not touched by any automated test in this round — every test uses either fully mocked repositories (unit tests) or exact-`taggedValue()`-tagged synthetic rows with exact-ID cleanup (integration tests). No code in this round runs against the real Supabase project as part of this implementation/test-writing round (the integration suite was run and reported honestly, per Section 176/178, but touches only synthetic tagged rows). This developer/manual row's authoritative state (`orders.payment_status = UNPAID`, `business_status = OPEN`, `payment_attempt.status = CHECKOUT_IN_PROGRESS`, `payments.checkout_signature_verified = true`, `razorpay_payment_status = NULL`, `captured_at = NULL`, `failed_at = NULL`, fulfilment count `0`) is unaffected.
+
+## 182. Scope audit — no Phase 2F/2G/Phase 3 work
+
+No merchant/payment authoritative-state application (Phase 2F); no real `RAZORPAY_WEBHOOK_SECRET` created or configured, no Razorpay Dashboard webhook registered, no real webhook delivered, no new Razorpay payment created (Phase 2G, explicitly deferred per this task's Section 24); no chaos/invariant/diagnosis/scoring code, no `chaos_runs`/`invariant_results`/`findings`/`regression_runs` table, no Phase 3-only `event_processing_attempts` column (Section 171/Phase Ownership).
+
+## 183. Phase 2E lifecycle state (candidate)
+
+```
+IMPLEMENTED          PASS
+TESTED               PARTIAL — offline coverage full (100 new/changed unit tests across
+                     7 files, all passing; full suite 489/489); real-Supabase coverage
+                     for the new table/RPC is blocked ONLY by the not-yet-applied
+                     migration (Section 178) — 6/18 anon-denial assertions in the new
+                     file already pass even now; the other 8 pre-existing integration
+                     files remain fully green (79/91 total this round)
+MANUALLY VERIFIED    PENDING — not attempted this round
+DOCUMENTED           CANDIDATE (this section, Sections 161-184)
+APPROVED             PENDING ARCHITECT REVIEW
+```
+
+Phase 2 overall:
+
+```
+IN PROGRESS
+NOT APPROVED
+```
+
+## 184. Phase 2E acceptance criteria (2E-AC-01 through 2E-AC-52)
+
+| #        | Criterion                                                                 | Result  | Evidence                                                                                                      |
+| -------- | ------------------------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------- |
+| 2E-AC-01 | Started from exact approved Phase 2D commit                               | PASS    | HEAD verified `44393b51...` before and after                                                                  |
+| 2E-AC-02 | Razorpay remains Test Mode-only                                           | PASS    | No config/secret module touched this round                                                                    |
+| 2E-AC-03 | Existing webhook raw-body/HMAC boundary unchanged                         | PASS    | `lib/razorpay/webhook-verification.ts` untouched; envelope-validation tests in `service.test.ts` re-confirmed |
+| 2E-AC-04 | Database `UNIQUE(razorpay_event_id)` remains authoritative                | PASS    | Migration file (Phase 2D) untouched; Section 165                                                              |
+| 2E-AC-05 | `23505` is recognized as a duplicate logical event                        | PASS    | Section 165, 176                                                                                              |
+| 2E-AC-06 | Duplicate creates no second canonical webhook row                         | PASS    | `insertWebhookEvent` returns `null`, never inserts twice                                                      |
+| 2E-AC-07 | `duplicate_delivery_count` increments                                     | PASS    | Section 166, RPC                                                                                              |
+| 2E-AC-08 | Duplicate increment is atomic                                             | PASS    | Section 166; 5-way concurrency integration test (blocked pending migration, Section 178)                      |
+| 2E-AC-09 | Expected duplicate may return safe 2xx                                    | PASS    | Route maps `duplicate_received` → 200                                                                         |
+| 2E-AC-10 | Failed prior normalization can be retried on redelivery                   | PASS    | Section 167                                                                                                   |
+| 2E-AC-11 | Supported catalogue is exactly payment.captured/payment.failed/order.paid | PASS    | Section 164                                                                                                   |
+| 2E-AC-12 | Unsupported authenticated events not fabricated as supported              | PASS    | Section 164                                                                                                   |
+| 2E-AC-13 | payment.captured normalization deterministic                              | PASS    | Section 176, normalization tests                                                                              |
+| 2E-AC-14 | payment.failed normalization deterministic                                | PASS    | Section 176                                                                                                   |
+| 2E-AC-15 | order.paid normalization deterministic                                    | PASS    | Section 176                                                                                                   |
+| 2E-AC-16 | Normalized evidence is PII/instrument-safe                                | PASS    | Section 179                                                                                                   |
+| 2E-AC-17 | Normalized provenance is explicit REAL_RAZORPAY_WEBHOOK                   | PASS    | Section 163                                                                                                   |
+| 2E-AC-18 | Order ID correlation is server/database derived                           | PASS    | `getPaymentAttemptByRazorpayOrderId`                                                                          |
+| 2E-AC-19 | Payment ID correlation is server/database derived                         | PASS    | `getPaymentByRazorpayPaymentId`                                                                               |
+| 2E-AC-20 | Payment/order mismatch fails closed                                       | PASS    | `CORRELATION_PAYMENT_MISMATCH`, Section 168                                                                   |
+| 2E-AC-21 | Webhook-first payment observation supported                               | PASS    | Section 169                                                                                                   |
+| 2E-AC-22 | Webhook-first payment does not claim Checkout verification                | PASS    | `checkout_signature_verified: false` explicit                                                                 |
+| 2E-AC-23 | Later verified Checkout can merge into same canonical payment             | PASS    | Section 170                                                                                                   |
+| 2E-AC-24 | webhook_events derived columns populated after normalization              | PASS    | `updateWebhookEventDerivedFields`                                                                             |
+| 2E-AC-25 | webhook_events immutable evidence never rewritten                         | PASS    | `updateWebhookEventDerivedFields`'s param type structurally excludes them                                     |
+| 2E-AC-26 | event_processing_attempts exists as separate attempt identity             | PASS    | Section 171                                                                                                   |
+| 2E-AC-27 | Fresh normalized event creates PENDING attempt                            | PASS    | Section 176                                                                                                   |
+| 2E-AC-28 | Known duplicate creates SKIPPED_DUPLICATE attempt when appropriate        | PASS    | Section 167                                                                                                   |
+| 2E-AC-29 | Phase 3-only processing columns not added                                 | PASS    | Section 171                                                                                                   |
+| 2E-AC-30 | No order PAID transition occurs                                           | PASS    | Section 180                                                                                                   |
+| 2E-AC-31 | No order FAILED_OBSERVED transition occurs                                | PASS    | Section 180                                                                                                   |
+| 2E-AC-32 | No payment provider status applied                                        | PASS    | Section 169, 180                                                                                              |
+| 2E-AC-33 | No captured_at/failed_at applied                                          | PASS    | Section 169, 180                                                                                              |
+| 2E-AC-34 | No payment_attempt CAPTURED mutation occurs                               | PASS    | Section 180                                                                                                   |
+| 2E-AC-35 | No fulfilment occurs                                                      | PASS    | Section 180                                                                                                   |
+| 2E-AC-36 | Existing real Phase 2C payment remains unchanged                          | PASS    | Section 181                                                                                                   |
+| 2E-AC-37 | RLS denies browser access to processing evidence                          | PASS    | Section 171, 179                                                                                              |
+| 2E-AC-38 | Duplicate RPC not executable by anon/authenticated                        | PASS    | Section 166, 179                                                                                              |
+| 2E-AC-39 | Focused unit tests pass                                                   | PASS    | Section 176                                                                                                   |
+| 2E-AC-40 | Full unit regression passes                                               | PASS    | 489/489, Section 177                                                                                          |
+| 2E-AC-41 | Existing pre-2E Supabase integration remains green                        | PASS    | 8/8 pre-existing files, Section 177                                                                           |
+| 2E-AC-42 | New Supabase integration passes after manual migration application        | PENDING | Blocked on developer action, Section 178                                                                      |
+| 2E-AC-43 | Playwright regression passes                                              | PASS    | 2/2, Section 177                                                                                              |
+| 2E-AC-44 | lint passes                                                               | PASS    | exit 0                                                                                                        |
+| 2E-AC-45 | typecheck passes                                                          | PASS    | exit 0                                                                                                        |
+| 2E-AC-46 | production build passes                                                   | PASS    | exit 0                                                                                                        |
+| 2E-AC-47 | Prettier/format checks pass                                               | PASS    | Section 177                                                                                                   |
+| 2E-AC-48 | client-bundle secret scan remains clean                                   | PASS    | Section 177                                                                                                   |
+| 2E-AC-49 | git diff --check has no whitespace errors                                 | PASS    | only benign LF/CRLF warnings                                                                                  |
+| 2E-AC-50 | No real webhook configured or claimed                                     | PASS    | Section 182                                                                                                   |
+| 2E-AC-51 | No Phase 2F/2G/Phase 3 work implemented                                   | PASS    | Section 182                                                                                                   |
+| 2E-AC-52 | HEAD remains exactly `44393b514deb96fbc54d7972fbdc5ded1601458b`           | PASS    | confirmed before and after                                                                                    |
+
+Phase 2E is **not** claimed as MANUALLY VERIFIED or APPROVED. HEAD remains exactly `44393b514deb96fbc54d7972fbdc5ded1601458b`; nothing was committed or pushed. The migration remains unapplied. No `RAZORPAY_WEBHOOK_SECRET` was created and no Razorpay webhook was configured or delivered. Phase 2F–2G remain fully deferred.
+
+---
+
+# PHASE 2E — ARCHITECT REVIEW CORRECTION
+
+Corrects the existing uncommitted Phase 2E candidate (Sections 161–184 above, preserved unedited as history). HEAD remains exactly `44393b514deb96fbc54d7972fbdc5ded1601458b` throughout — this round only edits the already-uncommitted working tree.
+
+## 185. Architect review result
+
+Five correctness defects were found in the original candidate. All five are corrected below. This is a targeted correction, not a redesign — every "DO NOT CHANGE" item from the review (the `UNIQUE(razorpay_event_id)` boundary, the atomic RPC, the P0 event catalogue, the RLS/privilege model, webhook-first payment support, Checkout-after-webhook support, etc.) remains untouched.
+
+## 186. Correction A — `PENDING` must not be finished
+
+**Root cause:** `insertEventProcessingAttempt` unconditionally stamped `finished_at = now()` for every insert, including `PENDING` — but `docs/DATABASE.md` defines `finished_at` as "Completion time," and a `PENDING` attempt has not completed.
+
+**Fix:** `lib/webhooks/event-processing-repository.ts` now derives `finished_at` from `status` via a small `TERMINAL_STATUSES` set (`FAILED`, `SKIPPED_DUPLICATE`, `SUCCEEDED`) and a `deriveFinishedAt()` helper — `PENDING`/`HELD`/`PROCESSING` always insert with `finished_at = NULL`; terminal statuses always get a timestamp. `SUCCEEDED` is included only so this repository stays correct once Phase 2F starts using it; Phase 2E itself still only ever inserts `PENDING`/`FAILED`/`SKIPPED_DUPLICATE`. No caller ever supplies `finished_at` directly — it was never browser input to begin with, so "never trust browser input" was already structurally satisfied; the fix is purely about not conflating "row was inserted" with "row is finished."
+
+**Tests added (A1-A4):** `tests/unit/webhooks/event-processing-repository.test.ts` — a `PENDING` insert has `finished_at` `NULL`; a `FAILED` insert has a non-null `finished_at`; a `SKIPPED_DUPLICATE` insert has a non-null `finished_at`; `PROCESSING`/`HELD` have `NULL`, `SUCCEEDED` has a non-null timestamp (Phase 2F compatibility, exercised now even though Phase 2E never inserts those statuses itself).
+
+## 187. Correction B — duplicate lookup must not use only the latest attempt
+
+**Root cause:** `getLatestProcessingAttemptForWebhookEvent` returned the single most-recent row regardless of status, and the service only skipped re-normalization when that latest row's `status === "PENDING"`. A second duplicate delivery, arriving after the first duplicate had already created a `SKIPPED_DUPLICATE` row, would see THAT row as "latest" (not `PENDING`) and incorrectly retry normalization — potentially creating a second, redundant `PENDING` row for the same logical event. It also would have broken Phase 2F compatibility: once a `PENDING` row advances to `PROCESSING`/`SUCCEEDED`, a later duplicate must still recognize it as "already durably handled," not retry.
+
+**Fix:** Replaced the function with `getDurableNormalizedAttemptForWebhookEvent`, which queries `event_processing_attempts` directly filtered to `status IN ('PENDING', 'HELD', 'PROCESSING', 'SUCCEEDED')` (a `DURABLE_NORMALIZED_STATUSES` constant), ordered by `started_at` descending, limit 1 — a database-level selection of an eligible row, not "load one row and reason about it in application code." `FAILED` and `SKIPPED_DUPLICATE` are structurally excluded from ever being returned as the eligible attempt, so neither can hide an earlier eligible row. `lib/webhooks/service.ts`'s duplicate branch now calls this function and skips re-normalization whenever it returns a row at all (regardless of which of the four eligible statuses), retrying only when it returns `null`.
+
+**Tests added (B1-B10):** `tests/unit/webhooks/service.test.ts` — an original `PENDING` attempt followed by three consecutive duplicate deliveries all skip re-normalization, each incrementing the duplicate counter exactly once and creating its own `SKIPPED_DUPLICATE` record with zero re-invocation of any correlation function (B1-B3, B10, one combined test); a parameterized test proves `SUCCEEDED`/`PROCESSING`/`HELD` existing attempts all cause a skip (B4-B6); two tests prove that when the repository lookup correctly returns `null` (no eligible attempt — whether none exists at all, or the only attempt is `FAILED`), the service retries normalization from scratch (B9); a retry-fails-again test confirms a fresh `FAILED` record is created and the request still fails safely. (B7/B8's "SKIPPED_DUPLICATE/FAILED must not hide an eligible earlier attempt" is a database-query correctness property, proven directly at the repository level in `event-processing-repository.test.ts`'s "does NOT include FAILED or SKIPPED_DUPLICATE in the eligible-status filter" test; the service-level tests above prove the service correctly trusts and acts on whatever the repository returns, with no additional in-memory reasoning that could reintroduce the bug.)
+
+## 188. Correction C — derived webhook update must be durable before `PENDING` readiness is claimed
+
+**Root cause:** `correlateNormalizeAndPersist` created the `PENDING` `event_processing_attempts` row FIRST, then attempted `updateWebhookEventDerivedFields`, and — on failure — logged and swallowed the error, returning success anyway. Since Correction B's eligible-attempt lookup treats any `PENDING` row as "durably handled," a later duplicate would see that `PENDING` row and skip re-normalization forever, permanently stranding `webhook_events` with missing `razorpay_order_id`/`razorpay_payment_id`/`payment_attempt_id`/`payment_id`/`amount_subunits`/`currency`/`razorpay_payment_status` — with no path left to repair it.
+
+**Fix:** Reordered to: resolve payment attempt → resolve/validate/create payment (Correction E) → `updateWebhookEventDerivedFields` → **only once that succeeds** → `insertEventProcessingAttempt(status: "PENDING")`. A derived-field-update failure is now fatal: it records a best-effort `FAILED` attempt (`NORMALIZATION_PERSISTENCE_FAILED`) and throws `WebhookEventCorrelationFailedError`, which the route maps to a safe `500` — no `PENDING` row is ever created in this path. Since `FAILED` is excluded from the eligible-attempt set (Correction B), a later duplicate delivery correctly finds no durable attempt yet and retries the whole correlation, including re-running the (idempotent) derived-field update — naturally self-healing. A `PENDING`-insertion failure occurring AFTER a successful derived-field update is likewise a safe `500`, per the task's explicit instruction, with the same best-effort `FAILED`-record attempt.
+
+**Tests added (C1-C7):** `tests/unit/webhooks/service.test.ts` — a derived-field-update failure throws and creates no `PENDING` attempt (C1/C2); no merchant-state mutation function exists to call regardless (C3, structural); a first delivery that fails the derived-field update, followed by a duplicate redelivery that succeeds, creates exactly one `PENDING` attempt total (C4/C5); a `PENDING`-insertion failure occurring after a successful derived-field update still throws a safe, redacted `WebhookEventCorrelationFailedError` that never leaks the raw underlying error text, with the derived-field update itself confirmed to have run exactly once (C6/C7).
+
+## 189. Correction D — duplicate retry must use canonical event evidence, never the incoming delivery's own body
+
+**Root cause:** After detecting a duplicate and deciding to retry normalization, the code still normalized using `eventType`/`providerCreatedAt`/`rawPayloadRedacted` — local variables computed from THIS specific incoming delivery's own parsed body — rather than the immutable canonical `webhook_events` row already on file. A malicious or malformed redelivery using the same `razorpay_event_id` could therefore influence the normalized logical event (amount, payment ID, status, etc.) on a retry, which violates canonical event identity.
+
+**Fix:** `ingestRazorpayWebhook` now calls `normalizeRazorpayEvent` using `webhookEventRow.razorpay_event_id`/`.event_type`/`.provider_created_at`/`.raw_payload_redacted` — the canonical persisted row — for BOTH the fresh-insert path (where these are identical to the local variables by construction) and the duplicate-retry path (where they are NOT, and must not be). One unified call site, one source of truth. The local request-derived variables remain in use only for what they must legitimately drive: HMAC verification, the `raw_body_sha256` computed for a fresh insert, and (new, optional, non-rejecting hardening) a structured `webhook_duplicate_evidence_mismatch` log line when a duplicate's own raw-body hash or event type differs from the canonical row — visibility only, never a rejection, never storing the new body, never overwriting canonical evidence. No new rejection policy was invented, per the task's explicit instruction.
+
+**Tests added (D1-D6):** `tests/unit/webhooks/service.test.ts` — a fresh event normalizes from the canonical persisted row (D1); a duplicate retry normalizes from the canonical `raw_payload_redacted` even when the incoming delivery's own body claims a different amount (D2/D3); a duplicate whose incoming body claims a different event type cannot redefine the canonical `event_type` (D4); `updateWebhookEventDerivedFields`'s payload structurally never carries `rawPayloadRedacted`/`razorpayEventId`/`eventType` — the canonical evidence is never rewritten (D5); a duplicate with mismatched incoming evidence still safely returns `duplicate_received` (never rejected) while logging the mismatch without exposing the new body's content (D6).
+
+## 190. Correction E — canonical payment identity must fully agree
+
+**Root cause:** Existing-payment correlation for `payment.captured`/`payment.failed` (and the post-webhook-first-insert race-winner reread) checked only `payment.payment_attempt_id === resolvedAttempt.id`, accepting a row that could still disagree on `razorpay_payment_id`/`amount_subunits`/`currency`. The Checkout-after-webhook merge path (`lib/demo-merchant/service.ts`) had the identical gap — it checked only `payment_attempt_id` before deciding whether to idempotently return or attach verification, never money terms.
+
+**Fix:** Added `paymentIdentityAgrees()` in `lib/webhooks/service.ts` — a pure 4-field comparator (`payment_attempt_id`, `razorpay_payment_id`, `amount_subunits`, `currency`) — applied to both the pre-existing-payment branch and the post-race-winner-reread branch for `payment.captured`/`payment.failed` correlation; any disagreement records a `FAILED` attempt and throws `WebhookEventCorrelationFailedError("PAYMENT_EVIDENCE_CONFLICT", ...)`, never overwriting the conflicting row. `order.paid`'s simpler existing-payment correlation (attempt-id only) was deliberately left unchanged — it does not itself describe a single payment's money terms the way `payment.captured`/`payment.failed` do, and extending the 4-field check there was outside this task's explicit scope (Correction E's own text: "For payment.captured/payment.failed correlation"). In `lib/demo-merchant/service.ts`, `verifyCheckoutAndPersistPayment`'s existing-row branch (both the pre-insert-attempt check and the post-race-winner-reread check) now also validates `amount_subunits`/`currency` agreement (in addition to the pre-existing `payment_attempt_id` check) before deciding to idempotently return or attach Checkout verification — `razorpay_payment_id` agreement is structurally guaranteed there already, since the row was looked up BY that exact value.
+
+Per the task's explicit clarification, this is a **consistency-of-identity** check on one already-identified canonical row, not an early Money Invariant/amount-tolerance evaluation (Phase 3's job) — a genuine disagreement means the row does not actually describe the same payment this event is evidence for.
+
+**Tests added (E1-E9):** `tests/unit/webhooks/service.test.ts` — agreement on all four fields is accepted (E1); mismatched attempt/amount/currency on an existing payment are each rejected with `PAYMENT_EVIDENCE_CONFLICT` (E2-E4); the same three mismatches on a race-winning reread are rejected (E5/E6, attempt-mismatch already covered structurally by the shared comparator); no update/overwrite function exists in the mocked module surface to call on a conflict (E7, structural); the thrown error's message never leaks the conflicting raw amount value (E8). `tests/unit/demo-merchant/service.test.ts` — four new tests cover the identical amount/currency rejection on both the existing-payment and race-winner-reread branches of the Checkout-merge path, plus an explicit end-to-end "webhook-first payment agreeing on all fields, later merged by a verified Checkout" happy-path test (E9).
+
+## 191. Migration change assessment
+
+**No migration change was made or is required.** Correction A (`finished_at`) was fully addressed in repository application logic — `deriveFinishedAt()` computes the value before the insert; the column itself (`timestamptz`, nullable, no default) already supports `NULL` correctly, exactly as originally authored. Corrections B through E are pure application-logic/query-shape changes (a different `WHERE`/`.in()` filter, reordered function calls, an added in-memory comparator) — none require a schema change. `supabase/migrations/20260827000000_phase2e_webhook_dedup.sql` is byte-for-byte unchanged from the original Phase 2E candidate (confirmed via `git status --short` showing it still as a single untracked file with no modification marker across this correction round). It remains **NOT APPLIED**.
+
+## 192. Files modified this correction
+
+- `lib/webhooks/event-processing-repository.ts` — Corrections A, B (`deriveFinishedAt`, `TERMINAL_STATUSES`, `getDurableNormalizedAttemptForWebhookEvent` replacing `getLatestProcessingAttemptForWebhookEvent`, `DURABLE_NORMALIZED_STATUSES`).
+- `lib/webhooks/service.ts` — Corrections B, C, D, E (duplicate-branch gate, `correlateNormalizeAndPersist` reordering, canonical-row normalization, `paymentIdentityAgrees`); module header doc comment updated to describe all five corrections.
+- `lib/demo-merchant/service.ts` — Correction E (amount/currency agreement added to `verifyCheckoutAndPersistPayment`'s existing-row and race-winner-reread branches).
+- `tests/unit/webhooks/event-processing-repository.test.ts` — Correction A/B tests, `.in()` mock support added.
+- `tests/unit/webhooks/service.test.ts` — substantially rewritten: all five correction describe-blocks added (B/C/D/E), fixtures updated so the canonical `webhook_events` row itself carries `raw_payload_redacted`/`provider_created_at` (Correction D requires this).
+- `tests/unit/demo-merchant/service.test.ts` — four new Correction E tests plus an explicit E9 test.
+
+## 193. Files newly added this correction
+
+None — this round only corrects files already introduced by the original Phase 2E candidate (Section 172).
+
+## 194. Tests added/changed — summary
+
+47 new/rewritten test cases across the five corrections (11 in `event-processing-repository.test.ts`, 38 in the rewritten `service.test.ts` full run, 4 new in `demo-merchant/service.test.ts`) — see Sections 186-190 for the itemized mapping to each architect finding.
+
+## 195. Focused results
+
+`event-processing-repository.test.ts`: 11/11 PASS. `service.test.ts` (webhooks): 38/38 PASS. `demo-merchant/service.test.ts`: 52/52 PASS. Every file independently run in isolation before the full regression gate.
+
+## 196. Full unit result
+
+**29/29 files, 511/511 tests, exit 0** (one retry needed for three files' known 5000ms worker-startup timeouts under this session's already-documented severe memory pressure — `instrumentation.test.ts`, `demo-merchant/service.test.ts`'s unrelated `createDemoMerchantOrder` test, `supabase/server.test.ts` — none touched by this correction; the retry was fully clean).
+
+## 197. Supabase integration result
+
+**9/10 files pass, 79/91 tests pass, exit 1** — identical to the pre-correction round. All 12 failures remain confined to the new `049-event-processing-attempts...` file and remain exactly `PGRST205`/`PGRST202` (table/function not found) — confirmed no new real-DB failure cause was introduced by this correction (per the task's explicit instruction to investigate, not auto-attribute, any new failure). All 8 pre-existing Phase 2A-2D files remain green.
+
+## 198. e2e result
+
+2/2, exit 0, no retry needed this round.
+
+## 199. lint result
+
+exit 0.
+
+## 200. typecheck result
+
+exit 0.
+
+## 201. build result
+
+exit 0, no stale-`.next` issue this round; `/api/webhooks/razorpay` still registers as `ƒ` (dynamic).
+
+## 202. Prettier result
+
+All 6 changed files clean after one `--write` pass on the two rewritten test files; re-verified clean.
+
+## 203. Client-bundle secret scan
+
+No matches for `RAZORPAY_WEBHOOK_SECRET`/`RAZORPAY_KEY_SECRET`/`SUPABASE_SERVICE_ROLE_KEY`.
+
+## 204. Security audit (recheck)
+
+`RAZORPAY_MODE` remains test-only; no config/secret module touched. No secret printed/read from `.env.local` this round. No secret entered the client bundle (Section 203). The webhook raw-body/HMAC boundary is completely unchanged — `lib/razorpay/webhook-verification.ts` untouched, envelope-validation tests re-confirmed passing. An invalid signature still creates zero trusted evidence (unchanged). Canonical `webhook_events` immutable fields remain immutable — Correction D's own normalization source change makes this even more explicit (D5 test). A duplicate delivery never becomes a second `webhook_events` row (unchanged `UNIQUE` constraint, Section 191). The browser cannot write authoritative event-processing evidence — no new client-reachable path was introduced. No `orders.payment_status`/`business_status` transition, no `payment_attempt` `CAPTURED` transition, no `payments` provider-status/`captured_at`/`failed_at` update, no fulfilment (Section 205). No webhook configured. No Phase 2F/2G/Phase 3 work.
+
+## 205. Merchant-state zero-mutation proof (recheck)
+
+Unchanged from the original candidate (Section 180) and re-confirmed by the same structural test, still passing: `lib/webhooks/service.ts` contains no reference to any order/attempt/fulfilment mutation function. The five corrections added code only within the existing webhook-evidence/correlation/processing-attempt boundary — none introduce a new import or a new write target.
+
+## 206. Original AC-01 through AC-52 result
+
+Unchanged — all findings from Section 184 remain PASS except 2E-AC-42 (Supabase integration after migration application), which remains PENDING on developer action, exactly as before. None of the five corrections downgrade any previously-PASS criterion; several (AC-05 through AC-10, AC-24-AC-28) are now backed by strictly stronger evidence per Sections 186-190.
+
+## 207. AR-01 through AR-15 result (architect-review-specific)
+
+| #        | Check                                                                                     | Result | Evidence                                                              |
+| -------- | ----------------------------------------------------------------------------------------- | ------ | --------------------------------------------------------------------- |
+| 2E-AR-01 | `PENDING` processing attempt has `finished_at` `NULL`                                     | PASS   | Section 186, test A1                                                  |
+| 2E-AR-02 | `FAILED`/`SKIPPED_DUPLICATE` terminal attempts have `finished_at`                         | PASS   | Section 186, tests A2/A3                                              |
+| 2E-AR-03 | Second and third duplicate deliveries do not re-normalize                                 | PASS   | Section 187, tests B1-B3                                              |
+| 2E-AR-04 | `PENDING`/`HELD`/`PROCESSING`/`SUCCEEDED` count as an existing durable normalized attempt | PASS   | Section 187, tests B4-B6                                              |
+| 2E-AR-05 | `FAILED`/`SKIPPED_DUPLICATE` do not hide an older eligible durable attempt                | PASS   | Section 187 (repository-level query test + service-level trust tests) |
+| 2E-AR-06 | Derived webhook fields persist before `PENDING` readiness is claimed                      | PASS   | Section 188, ordering enforced and tested                             |
+| 2E-AR-07 | Derived-field persistence failure creates no `PENDING` attempt                            | PASS   | Section 188, tests C1/C2                                              |
+| 2E-AR-08 | A duplicate can repair a previous derived-field persistence failure                       | PASS   | Section 188, tests C4/C5                                              |
+| 2E-AR-09 | Duplicate normalization uses canonical stored webhook evidence                            | PASS   | Section 189, tests D1/D2                                              |
+| 2E-AR-10 | Duplicate incoming payload cannot redefine the canonical logical event                    | PASS   | Section 189, tests D3/D4                                              |
+| 2E-AR-11 | Existing canonical payment amount mismatch fails closed                                   | PASS   | Section 190, test E3                                                  |
+| 2E-AR-12 | Existing canonical payment currency mismatch fails closed                                 | PASS   | Section 190, test E4                                                  |
+| 2E-AR-13 | Race-winning canonical payment validated on attempt/id/amount/currency                    | PASS   | Section 190, tests E5/E6                                              |
+| 2E-AR-14 | Valid webhook-first → Checkout-after-webhook remains compatible                           | PASS   | Section 190, test E9                                                  |
+| 2E-AR-15 | No Phase 2F state/effect mutation was introduced                                          | PASS   | Section 205                                                           |
+
+All 15 PASS.
+
+## 208. Final Phase 2E lifecycle state (post-correction)
+
+```
+IMPLEMENTED          PASS (corrections A-E complete)
+TESTED               PARTIAL — full offline unit suite 511/511 green, including 47
+                     new/rewritten correction tests; real-Supabase coverage for the new
+                     table/RPC still blocked only by the not-yet-applied migration
+                     (unchanged, Section 197); 8 pre-existing integration files remain
+                     green
+MANUALLY VERIFIED    PENDING — not attempted this round
+DOCUMENTED           CANDIDATE (Sections 161-208)
+APPROVED             PENDING ARCHITECT REVIEW
+```
+
+Phase 2 overall:
+
+```
+IN PROGRESS
+NOT APPROVED
+```
+
+Phase 2E is **not** claimed as APPROVED. HEAD remains exactly `44393b514deb96fbc54d7972fbdc5ded1601458b`; nothing was committed or pushed. The migration remains unapplied and byte-for-byte unchanged. No `RAZORPAY_WEBHOOK_SECRET` was created and no Razorpay webhook was configured or delivered. Phase 2F has not been started.
+
+---
+
+# PHASE 2E — FINAL DOCUMENTATION RECONCILIATION (pre-approval)
+
+This section is a documentation-only reconciliation of everything established across Sections 161–208 into Phase 2E's final pre-approval state, following the migration application and final real-Supabase verification. No application code, test, migration, config, or dependency was touched in this round — only this file.
+
+## 209. Migration status — final
+
+`supabase/migrations/20260827000000_phase2e_webhook_dedup.sql` has been manually applied to the real Supabase project (Supabase reported "Success. No rows returned"). **Migration status is APPLIED ✅ — no longer pending.** The migration file itself was never modified — neither to apply it nor in response to any of the five architect-review corrections (Section 191).
+
+## 210. Real Supabase integration — final result
+
+Following migration application, the developer ran `npm run test:integration:supabase` and reported **10/10 files, 91/91 tests, PASS.** This resolves the Sections 178/197 blocker. Confirmed real-DB evidence now includes: `event_processing_attempts` exists and is usable; service-role CRUD succeeds; RLS/anon denial holds on both the table and the `record_webhook_duplicate_delivery` RPC; all `event_processing_attempts` CHECK/FK constraints reject invalid data exactly as designed; the duplicate-increment RPC exists, increases the count by exactly one per call, by exactly two across two sequential calls, and loses zero updates under concurrent calls against the same row; the immutable `webhook_events` evidence fields are unchanged by an increment; the derived correlation fields can be updated post-insert; and all pre-existing Phase 2A–2D integration files remain green alongside the new ones.
+
+The Sections 178/197 `PGRST205`/`PGRST202` failures ("table not found" / "function not found") are preserved as resolved history — they were never a schema or application defect (Section 146's identical root-cause pattern from the Phase 2D round: the table/function genuinely did not exist yet, by design, until this manual application step) — and are now superseded by the 10/10, 91/91 result above.
+
+## 211. Manual safety verification (real Supabase, read-only, post-migration)
+
+After the migration was applied and the full real-Supabase suite passed, the developer ran a final read-only verification, independently reflecting the current authoritative state:
+
+| Field                                 | Observed value         |
+| ------------------------------------- | ---------------------- |
+| `webhook_events` row count            | `0`                    |
+| `event_processing_attempts` row count | `0`                    |
+| Merchant `payment_status`             | `UNPAID`               |
+| Merchant `business_status`            | `OPEN`                 |
+| Payment attempt `status`              | `CHECKOUT_IN_PROGRESS` |
+| `razorpay_payment_id`                 | `pay_TTcbVd43PMN79M`   |
+| `razorpay_payment_status`             | `NULL`                 |
+| `checkout_signature_verified`         | `true`                 |
+| `captured_at`                         | `NULL`                 |
+| `failed_at`                           | `NULL`                 |
+| Fulfilment count                      | `0`                    |
+
+This confirms: (1) every Phase 2E integration test's exact-ID-tracked synthetic rows were fully cleaned up — zero residue in either new table; (2) no fake/locally-signed evidence was ever left behind labelled as real `REAL_RAZORPAY_WEBHOOK`/`event_processing_attempts` evidence; (3) Phase 2E did not mark the merchant `PAID`; (4) Phase 2E did not apply provider `captured`/`failed` state; (5) Phase 2E did not alter `payment_attempts.status`; (6) Phase 2E did not create any fulfilment; (7) the Phase 2F authority boundary remains fully intact — every write Phase 2E is capable of making is confined to `webhook_events`' derived fields, `event_processing_attempts`, and (only for webhook-first observation or Checkout-attach) `payments`' identity/verification fields, never any provider-status or merchant-authoritative field. This is what "MANUALLY VERIFIED" means for Phase 2E specifically — **not** a claim that a real Razorpay webhook was received (Section 213).
+
+## 212. Architect review corrections — final state (cross-reference)
+
+Preserved and unchanged from Sections 185–208: all five architect findings (A–E) were corrected and independently test-verified.
+
+- **A** — `PENDING` `event_processing_attempts` rows have `finished_at = NULL`; terminal Phase 2E rows (`FAILED`, `SKIPPED_DUPLICATE`) have `finished_at` populated (Section 186).
+- **B** — Duplicate recognition uses a direct database-level lookup for a durable eligible attempt (`PENDING`/`HELD`/`PROCESSING`/`SUCCEEDED`), never merely "the latest row"; `FAILED`/`SKIPPED_DUPLICATE` cannot hide an earlier eligible attempt; second/third duplicate deliveries do not re-normalize (Section 187).
+- **C** — `webhook_events`' derived correlation fields are persisted BEFORE a `PENDING` processor-ready attempt is created; a derived-field-update failure is fatal/retryable and creates no `PENDING` row (Section 188).
+- **D** — Fresh and duplicate normalization both use the canonical persisted `webhook_events` evidence; a duplicate delivery's own incoming body can never redefine the already-canonical logical event (Section 189).
+- **E** — Canonical payment identity is validated on `payment_attempt_id`, `razorpay_payment_id`, `amount_subunits`, and `currency` before evidence is accepted, for both the existing-payment and race-winning-reread paths; Checkout-after-webhook compatibility remains supported (Section 190).
+
+All 15 architect-review-specific acceptance checks (2E-AR-01 through 2E-AR-15, Section 207) remain PASS.
+
+## 213. No real webhook claim (explicit, final)
+
+Explicitly, for the record, at this final pre-approval checkpoint:
+
+- No `RAZORPAY_WEBHOOK_SECRET` has been created or configured anywhere.
+- No webhook URL has been registered in the Razorpay Test Mode Dashboard.
+- No real Razorpay webhook has ever been received by `POST /api/webhooks/razorpay`.
+- No fake/locally-HMAC-signed request has ever been stored as real `REAL_RAZORPAY_WEBHOOK` evidence — Section 211 independently reconfirms zero rows remain in either new table.
+- No new Razorpay payment was created in this or any prior Phase 2E round.
+- No Phase 2F work (merchant/payment authoritative-state application, business-effect idempotency) has been started.
+
+MANUALLY VERIFIED for Phase 2E (Section 211) is a claim that the migration is applied, every real-DB constraint/RLS/RPC behaves as designed, both new tables are observably empty of any real or synthetic evidence, and the Phase 2C/2D authority state is independently reconfirmed unchanged — it is explicitly **not** a claim that a real webhook was received or manually verified.
+
+## 214. Final Phase 2E lifecycle state
+
+```
+IMPLEMENTED          PASS
+TESTED               PASS (Section 210 — full offline unit suite 511/511; full
+                     real-Supabase integration suite 91/91, both fully green; the
+                     known Windows/OneDrive memory-pressure retry history from
+                     earlier rounds is preserved as environmental, not a product
+                     defect — see Sections 177/196)
+MANUALLY VERIFIED    PASS (Section 211 — migration applied; every real-DB
+                     constraint/RLS/RPC verified against the real project; both new
+                     tables observably empty of any real or synthetic evidence;
+                     Phase 2C/2D authority state independently reconfirmed
+                     unchanged. This is NOT a claim that a real Razorpay webhook
+                     was received — see Section 213.)
+DOCUMENTED           PASS (Sections 161–214)
+APPROVED             PENDING ARCHITECT REVIEW — not self-approved, per this
+                     project's standing rule that only architect/project review
+                     grants final approval
+```
+
+Phase 2 overall remains:
+
+```
+IN PROGRESS
+NOT APPROVED
+```
+
+## 215. Remaining Phase 2F–2G work
+
+Unchanged in scope from Sections 132/160/182: Phase 2F (merchant PAID/`CAPTURED` transition, provider-status application, fulfilment, business-effect idempotency driven by verified webhook evidence), Phase 2G (real Razorpay webhook registration, delivery, and end-to-end manual verification, plus final Phase 2 approval). Neither has been started. HEAD remains exactly `44393b514deb96fbc54d7972fbdc5ded1601458b`; nothing was committed or pushed by this reconciliation; no `RAZORPAY_WEBHOOK_SECRET` was created; no Razorpay webhook was configured or delivered.

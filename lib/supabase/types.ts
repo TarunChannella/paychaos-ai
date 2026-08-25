@@ -1,5 +1,5 @@
 /**
- * Phase 1C-A/2B/2C/2D — minimal Supabase `Database` type.
+ * Phase 1C-A/2B/2C/2D/2E — minimal Supabase `Database` type.
  *
  * Scoped EXACTLY to the tables that exist after the approved Phase 1
  * migration (`orders`, `payment_attempts`, `fulfilments` — see
@@ -9,13 +9,19 @@
  * `razorpay_order_status` columns
  * (supabase/migrations/20260824000000_phase2b_payment_attempts_razorpay_correlation.sql),
  * the Phase 2C additive `payments` table
- * (supabase/migrations/20260825000000_phase2c_payments.sql), and the
+ * (supabase/migrations/20260825000000_phase2c_payments.sql), the
  * Phase 2D additive `webhook_events` table
- * (supabase/migrations/20260826000000_phase2d_webhook_events.sql).
+ * (supabase/migrations/20260826000000_phase2d_webhook_events.sql), and the
+ * Phase 2E additive `event_processing_attempts` table plus the
+ * `record_webhook_duplicate_delivery` RPC
+ * (supabase/migrations/20260827000000_phase2e_webhook_dedup.sql).
  *
- * Do NOT add Phase 2E+ tables here (`event_processing_attempts`,
- * `chaos_runs`, `invariant_results`, `findings`, `regression_runs`) —
- * those are created and typed by the phases that own them.
+ * Do NOT add Phase 2F+ tables here (`chaos_runs`, `invariant_results`,
+ * `findings`, `regression_runs`) — those are created and typed by the
+ * phases that own them. `event_processing_attempts` here is deliberately
+ * the Phase 2 SUBSET ONLY — no `chaos_run_id`/`fault_action`/
+ * `state_before`/`state_after` (docs/DATABASE.md Section 14 "Phase
+ * Ownership" pre-approves those as later, separate additive columns).
  *
  * `fulfilments` intentionally has no `payment_id` /
  * `trigger_processing_attempt_id` fields here — those columns do not exist
@@ -38,6 +44,14 @@ export type PaymentAttemptStatus =
   | "CAPTURED";
 
 export type FulfilmentEffectType = "FULFIL_ORDER";
+
+export type EventProcessingAttemptStatus =
+  | "PENDING"
+  | "HELD"
+  | "PROCESSING"
+  | "SUCCEEDED"
+  | "FAILED"
+  | "SKIPPED_DUPLICATE";
 
 export interface Database {
   public: {
@@ -282,6 +296,73 @@ export interface Database {
           },
         ];
       };
+      event_processing_attempts: {
+        Row: {
+          id: string;
+          webhook_event_id: string | null;
+          payment_attempt_id: string | null;
+          payment_id: string | null;
+          source_kind: "REAL_RAZORPAY_WEBHOOK";
+          is_duplicate_delivery: boolean;
+          status: EventProcessingAttemptStatus;
+          normalized_event: Record<string, unknown>;
+          error_code: string | null;
+          error_message_redacted: string | null;
+          started_at: string;
+          finished_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          webhook_event_id?: string | null;
+          payment_attempt_id?: string | null;
+          payment_id?: string | null;
+          source_kind?: "REAL_RAZORPAY_WEBHOOK";
+          is_duplicate_delivery?: boolean;
+          status?: EventProcessingAttemptStatus;
+          normalized_event?: Record<string, unknown>;
+          error_code?: string | null;
+          error_message_redacted?: string | null;
+          started_at?: string;
+          finished_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          webhook_event_id?: string | null;
+          payment_attempt_id?: string | null;
+          payment_id?: string | null;
+          source_kind?: "REAL_RAZORPAY_WEBHOOK";
+          is_duplicate_delivery?: boolean;
+          status?: EventProcessingAttemptStatus;
+          normalized_event?: Record<string, unknown>;
+          error_code?: string | null;
+          error_message_redacted?: string | null;
+          started_at?: string;
+          finished_at?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "event_processing_attempts_webhook_event_id_fkey";
+            columns: ["webhook_event_id"];
+            isOneToOne: false;
+            referencedRelation: "webhook_events";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "event_processing_attempts_payment_attempt_id_fkey";
+            columns: ["payment_attempt_id"];
+            isOneToOne: false;
+            referencedRelation: "payment_attempts";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "event_processing_attempts_payment_id_fkey";
+            columns: ["payment_id"];
+            isOneToOne: false;
+            referencedRelation: "payments";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
       fulfilments: {
         Row: {
           id: string;
@@ -319,7 +400,12 @@ export interface Database {
       };
     };
     Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Functions: {
+      record_webhook_duplicate_delivery: {
+        Args: { p_razorpay_event_id: string };
+        Returns: Database["public"]["Tables"]["webhook_events"]["Row"];
+      };
+    };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;
   };

@@ -1,5 +1,5 @@
 /**
- * Phase 2D — public Razorpay Test Mode webhook endpoint.
+ * Phase 2D/2E — public Razorpay Test Mode webhook endpoint.
  *
  * `POST /api/webhooks/razorpay` (docs/RAZORPAY_GUIDE.md Section 14). This
  * route's trust boundary is the Razorpay webhook HMAC signature, NOT an
@@ -29,7 +29,9 @@ import { EnvValidationError } from "@/lib/config/env-validation";
 import { logEvent } from "@/lib/security/logger";
 import {
   ingestRazorpayWebhook,
+  WebhookEventCorrelationFailedError,
   WebhookEventIdMissingError,
+  WebhookEventNormalizationInvalidError,
   WebhookPayloadMalformedError,
   WebhookPayloadTooLargeError,
   WebhookSignatureInvalidError,
@@ -68,12 +70,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const eventIdHeader = request.headers.get("x-razorpay-event-id");
 
   try {
-    // A successful Phase 2D ingest always means one fresh row was durably
-    // inserted — there is no "already recorded" outcome at this phase. A
-    // `UNIQUE(razorpay_event_id)` conflict flows through the generic error
-    // path below instead (2026-08-26 architect review correction — see
-    // handoffs/PHASE-2-HANDOFF.md).
-    await ingestRazorpayWebhook({
+    // Phase 2E: a `UNIQUE(razorpay_event_id)` conflict is now recognized
+    // (`outcome: "duplicate_received"`) rather than flowing through the
+    // generic error path — application-level duplicate recognition is
+    // this phase's job (docs/PHASE_PLAN.md "Phase 2E").
+    const result = await ingestRazorpayWebhook({
       rawBody,
       signatureHeader,
       eventIdHeader,
@@ -85,9 +86,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       // Guaranteed non-null here: ingestion only succeeds once the event
       // ID header has already been validated as present.
       razorpay_event_id: eventIdHeader,
+      outcome: result.outcome,
     });
 
-    return NextResponse.json({ status: "received" }, { status: 200 });
+    return NextResponse.json(
+      {
+        status:
+          result.outcome === "duplicate_received"
+            ? "duplicate_received"
+            : "received",
+      },
+      { status: 200 },
+    );
   } catch (err) {
     const latencyMs = Date.now() - startedAt;
 
@@ -104,7 +114,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       err instanceof WebhookSignatureMissingError ||
       err instanceof WebhookSignatureInvalidError ||
       err instanceof WebhookEventIdMissingError ||
-      err instanceof WebhookPayloadMalformedError
+      err instanceof WebhookPayloadMalformedError ||
+      err instanceof WebhookEventNormalizationInvalidError
     ) {
       logEvent("webhook_request_completed", {
         http_status: 400,
@@ -113,6 +124,19 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         body_fingerprint: safeBodyFingerprint(rawBody),
       });
       return safeErrorResponse(400);
+    }
+
+    if (err instanceof WebhookEventCorrelationFailedError) {
+      // Normalization/correlation/persistence failure — always safe to
+      // retry (this task's Section 18/30); Razorpay redelivers later.
+      // Never expose `err.code` or `err.message` in the response.
+      logEvent("webhook_request_completed", {
+        http_status: 500,
+        latency_ms: latencyMs,
+        error_name: err.name,
+        correlation_failure_code: err.code,
+      });
+      return safeErrorResponse(500);
     }
 
     if (err instanceof EnvValidationError) {

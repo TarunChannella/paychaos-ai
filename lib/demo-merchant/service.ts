@@ -57,6 +57,7 @@ import {
 } from "./order";
 import { DEMO_MERCHANT_PRODUCT } from "./product";
 import {
+  attachCheckoutVerificationToPayment,
   countFulfilmentsForOrderIds,
   getLatestPaymentAttemptForOrder,
   getOrderById,
@@ -522,13 +523,41 @@ export async function verifyCheckoutAndPersistPayment(
 
   const existing = await getPaymentByRazorpayPaymentId(input.razorpayPaymentId);
   if (existing) {
-    if (existing.payment_attempt_id !== attempt.id) {
+    // Full canonical-identity agreement (2026-08-27 architect review
+    // correction "Correction E", mirrored from lib/webhooks/service.ts's
+    // equivalent check): attempt id alone was insufficient — a row
+    // sharing the same attempt could still disagree on money terms. This
+    // is required specifically for Checkout-after-webhook compatibility:
+    // the row may have been created by a verified webhook using its own
+    // observed amount/currency, and this Checkout response must agree
+    // with it before verification is ever attached.
+    if (
+      existing.payment_attempt_id !== attempt.id ||
+      existing.amount_subunits !== attempt.amount_subunits ||
+      existing.currency !== attempt.currency
+    ) {
       throw new RazorpayPaymentIdentityConflictError();
     }
-    // Idempotent: the same verified Checkout response reached the server
-    // again (browser retry/re-render). Return the already-verified
-    // canonical row rather than inserting a duplicate.
-    return toPaymentViewModel(existing);
+    if (existing.checkout_signature_verified) {
+      // Idempotent: the same verified Checkout response reached the
+      // server again (browser retry/re-render). Return the
+      // already-verified canonical row rather than inserting a duplicate.
+      return toPaymentViewModel(existing);
+    }
+    // Phase 2E "Checkout-after-webhook compatibility": a verified webhook
+    // observed and persisted this exact payment FIRST
+    // (checkout_signature_verified = false) — out-of-order browser/webhook
+    // observation is a genuine requirement, so this Checkout response,
+    // whose signature has already been verified above against the same
+    // trusted attempt, attaches its verification to that existing
+    // canonical row rather than failing.
+    const attached = await attachCheckoutVerificationToPayment(existing.id);
+    logEvent("razorpay_checkout_verification_attached_to_webhook_payment", {
+      merchant_order_id: attempt.order_id,
+      payment_attempt_id: attempt.id,
+      razorpay_payment_id: input.razorpayPaymentId,
+    });
+    return toPaymentViewModel(attached);
   }
 
   const inserted = await insertVerifiedPayment({
@@ -547,7 +576,14 @@ export async function verifyCheckoutAndPersistPayment(
   if (!payment) {
     throw new DemoMerchantOrderNotFoundError(attempt.order_id);
   }
-  if (payment.payment_attempt_id !== attempt.id) {
+  // The race-winning reread is validated on the SAME full identity as the
+  // `existing` branch above (Correction E) — not merely re-checked for
+  // presence.
+  if (
+    payment.payment_attempt_id !== attempt.id ||
+    payment.amount_subunits !== attempt.amount_subunits ||
+    payment.currency !== attempt.currency
+  ) {
     throw new RazorpayPaymentIdentityConflictError();
   }
 

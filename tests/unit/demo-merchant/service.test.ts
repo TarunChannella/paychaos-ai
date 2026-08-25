@@ -20,6 +20,7 @@ const markPaymentAttemptCheckoutInProgressMock = vi.fn();
 const getPaymentByRazorpayPaymentIdMock = vi.fn();
 const insertVerifiedPaymentMock = vi.fn();
 const listLatestPaymentsForAttemptIdsMock = vi.fn();
+const attachCheckoutVerificationToPaymentMock = vi.fn();
 
 vi.mock("@/lib/demo-merchant/repository", () => ({
   insertOrder: insertOrderMock,
@@ -38,6 +39,7 @@ vi.mock("@/lib/demo-merchant/repository", () => ({
   getPaymentByRazorpayPaymentId: getPaymentByRazorpayPaymentIdMock,
   insertVerifiedPayment: insertVerifiedPaymentMock,
   listLatestPaymentsForAttemptIds: listLatestPaymentsForAttemptIdsMock,
+  attachCheckoutVerificationToPayment: attachCheckoutVerificationToPaymentMock,
 }));
 
 const verifyCheckoutSignatureMock = vi.fn();
@@ -154,6 +156,7 @@ beforeEach(() => {
   markPaymentAttemptCheckoutInProgressMock.mockReset();
   getPaymentByRazorpayPaymentIdMock.mockReset();
   insertVerifiedPaymentMock.mockReset();
+  attachCheckoutVerificationToPaymentMock.mockReset();
   listLatestPaymentsForAttemptIdsMock.mockReset().mockResolvedValue(new Map());
   createRazorpayOrderMock.mockReset();
   verifyCheckoutSignatureMock.mockReset();
@@ -1149,6 +1152,49 @@ describe("verifyCheckoutAndPersistPayment", () => {
     expect(result.id).toBe(existing.id);
   });
 
+  it("Phase 2E Checkout-after-webhook compatibility: attaches verification to an existing payment the webhook observed first (checkout_signature_verified=false), rather than failing", async () => {
+    getPaymentAttemptByIdMock.mockResolvedValue(eligibleAttempt());
+    const webhookFirstPayment = paymentRow({
+      payment_attempt_id: VALID_ATTEMPT_ID,
+      checkout_signature_verified: false,
+      checkout_verified_at: null,
+    });
+    getPaymentByRazorpayPaymentIdMock.mockResolvedValue(webhookFirstPayment);
+    const attached = paymentRow({
+      payment_attempt_id: VALID_ATTEMPT_ID,
+      checkout_signature_verified: true,
+      checkout_verified_at: "2026-01-01T00:00:00.000Z",
+    });
+    attachCheckoutVerificationToPaymentMock.mockResolvedValue(attached);
+    verifyCheckoutSignatureMock.mockReturnValue(true);
+
+    const { verifyCheckoutAndPersistPayment } =
+      await import("@/lib/demo-merchant/service");
+    const result = await verifyCheckoutAndPersistPayment(validInput);
+
+    expect(attachCheckoutVerificationToPaymentMock).toHaveBeenCalledWith(
+      webhookFirstPayment.id,
+    );
+    expect(insertVerifiedPaymentMock).not.toHaveBeenCalled();
+    expect(result.id).toBe(attached.id);
+  });
+
+  it("does NOT attempt to attach verification when the existing payment is already checkout_signature_verified=true (pure idempotent retry)", async () => {
+    getPaymentAttemptByIdMock.mockResolvedValue(eligibleAttempt());
+    const existing = paymentRow({
+      payment_attempt_id: VALID_ATTEMPT_ID,
+      checkout_signature_verified: true,
+    });
+    getPaymentByRazorpayPaymentIdMock.mockResolvedValue(existing);
+    verifyCheckoutSignatureMock.mockReturnValue(true);
+
+    const { verifyCheckoutAndPersistPayment } =
+      await import("@/lib/demo-merchant/service");
+    await verifyCheckoutAndPersistPayment(validInput);
+
+    expect(attachCheckoutVerificationToPaymentMock).not.toHaveBeenCalled();
+  });
+
   it("rejects (integrity error) when the razorpay_payment_id already belongs to a DIFFERENT payment attempt — never silently reassigned", async () => {
     getPaymentAttemptByIdMock.mockResolvedValue(eligibleAttempt());
     getPaymentByRazorpayPaymentIdMock.mockResolvedValue(
@@ -1165,6 +1211,118 @@ describe("verifyCheckoutAndPersistPayment", () => {
       RazorpayPaymentIdentityConflictError,
     );
     expect(insertVerifiedPaymentMock).not.toHaveBeenCalled();
+  });
+
+  it("Correction E: rejects (integrity error) when the existing payment's amount disagrees with the trusted attempt", async () => {
+    getPaymentAttemptByIdMock.mockResolvedValue(eligibleAttempt());
+    getPaymentByRazorpayPaymentIdMock.mockResolvedValue(
+      paymentRow({
+        payment_attempt_id: VALID_ATTEMPT_ID,
+        amount_subunits: 12345,
+      }),
+    );
+    verifyCheckoutSignatureMock.mockReturnValue(true);
+
+    const {
+      verifyCheckoutAndPersistPayment,
+      RazorpayPaymentIdentityConflictError,
+    } = await import("@/lib/demo-merchant/service");
+
+    await expect(verifyCheckoutAndPersistPayment(validInput)).rejects.toThrow(
+      RazorpayPaymentIdentityConflictError,
+    );
+    expect(attachCheckoutVerificationToPaymentMock).not.toHaveBeenCalled();
+  });
+
+  it("Correction E: rejects (integrity error) when the existing payment's currency disagrees with the trusted attempt", async () => {
+    getPaymentAttemptByIdMock.mockResolvedValue(eligibleAttempt());
+    getPaymentByRazorpayPaymentIdMock.mockResolvedValue(
+      paymentRow({ payment_attempt_id: VALID_ATTEMPT_ID, currency: "USD" }),
+    );
+    verifyCheckoutSignatureMock.mockReturnValue(true);
+
+    const {
+      verifyCheckoutAndPersistPayment,
+      RazorpayPaymentIdentityConflictError,
+    } = await import("@/lib/demo-merchant/service");
+
+    await expect(verifyCheckoutAndPersistPayment(validInput)).rejects.toThrow(
+      RazorpayPaymentIdentityConflictError,
+    );
+    expect(attachCheckoutVerificationToPaymentMock).not.toHaveBeenCalled();
+  });
+
+  it("Correction E: a race-winning reread with a mismatched amount is rejected", async () => {
+    getPaymentAttemptByIdMock.mockResolvedValue(eligibleAttempt());
+    getPaymentByRazorpayPaymentIdMock
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(
+        paymentRow({
+          payment_attempt_id: VALID_ATTEMPT_ID,
+          amount_subunits: 1,
+        }),
+      );
+    insertVerifiedPaymentMock.mockResolvedValue(null);
+    verifyCheckoutSignatureMock.mockReturnValue(true);
+
+    const {
+      verifyCheckoutAndPersistPayment,
+      RazorpayPaymentIdentityConflictError,
+    } = await import("@/lib/demo-merchant/service");
+
+    await expect(verifyCheckoutAndPersistPayment(validInput)).rejects.toThrow(
+      RazorpayPaymentIdentityConflictError,
+    );
+  });
+
+  it("Correction E: a race-winning reread with a mismatched currency is rejected", async () => {
+    getPaymentAttemptByIdMock.mockResolvedValue(eligibleAttempt());
+    getPaymentByRazorpayPaymentIdMock
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(
+        paymentRow({ payment_attempt_id: VALID_ATTEMPT_ID, currency: "USD" }),
+      );
+    insertVerifiedPaymentMock.mockResolvedValue(null);
+    verifyCheckoutSignatureMock.mockReturnValue(true);
+
+    const {
+      verifyCheckoutAndPersistPayment,
+      RazorpayPaymentIdentityConflictError,
+    } = await import("@/lib/demo-merchant/service");
+
+    await expect(verifyCheckoutAndPersistPayment(validInput)).rejects.toThrow(
+      RazorpayPaymentIdentityConflictError,
+    );
+  });
+
+  it("E9: a valid webhook-first payment (agreeing on attempt/amount/currency) followed by a later verified Checkout still merges successfully", async () => {
+    getPaymentAttemptByIdMock.mockResolvedValue(eligibleAttempt());
+    const webhookFirstPayment = paymentRow({
+      payment_attempt_id: VALID_ATTEMPT_ID,
+      amount_subunits: 50000,
+      currency: "INR",
+      checkout_signature_verified: false,
+      checkout_verified_at: null,
+    });
+    getPaymentByRazorpayPaymentIdMock.mockResolvedValue(webhookFirstPayment);
+    const attached = paymentRow({
+      payment_attempt_id: VALID_ATTEMPT_ID,
+      amount_subunits: 50000,
+      currency: "INR",
+      checkout_signature_verified: true,
+      checkout_verified_at: "2026-01-01T00:00:00.000Z",
+    });
+    attachCheckoutVerificationToPaymentMock.mockResolvedValue(attached);
+    verifyCheckoutSignatureMock.mockReturnValue(true);
+
+    const { verifyCheckoutAndPersistPayment } =
+      await import("@/lib/demo-merchant/service");
+    const result = await verifyCheckoutAndPersistPayment(validInput);
+
+    expect(attachCheckoutVerificationToPaymentMock).toHaveBeenCalledWith(
+      webhookFirstPayment.id,
+    );
+    expect(result.id).toBe(attached.id);
   });
 
   it("resolves a concurrent-insert race safely: insertVerifiedPayment returning null (DB unique-constraint race) re-reads and returns the winning row", async () => {

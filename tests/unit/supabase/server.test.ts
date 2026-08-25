@@ -236,23 +236,23 @@ describe("Phase 1C-A: no service-role name leaks into client-importable code (#3
   });
 });
 
-describe("Phase 1C-A/2C/2D: Database type is scoped to exactly the 5 approved tables", () => {
+describe("Phase 1C-A/2C/2D/2E: Database type is scoped to exactly the 6 approved tables", () => {
   const typesSource = fs.readFileSync(
     path.join(repoRoot, "lib", "supabase", "types.ts"),
     "utf-8",
   );
 
-  it("declares the 5 approved table keys (Phase 1: orders/payment_attempts/fulfilments; Phase 2C: payments; Phase 2D: webhook_events)", () => {
+  it("declares the 6 approved table keys (Phase 1: orders/payment_attempts/fulfilments; Phase 2C: payments; Phase 2D: webhook_events; Phase 2E: event_processing_attempts)", () => {
     expect(typesSource).toMatch(/\borders:\s*{/);
     expect(typesSource).toMatch(/\bpayment_attempts:\s*{/);
     expect(typesSource).toMatch(/\bpayments:\s*{/);
     expect(typesSource).toMatch(/\bfulfilments:\s*{/);
     expect(typesSource).toMatch(/\bwebhook_events:\s*{/);
+    expect(typesSource).toMatch(/\bevent_processing_attempts:\s*{/);
   });
 
-  it("declares no Phase 2E+/3+/4+ table", () => {
+  it("declares no Phase 3+/4+ table", () => {
     const forbidden = [
-      "event_processing_attempts",
       "chaos_runs",
       "invariant_results",
       "findings",
@@ -260,6 +260,22 @@ describe("Phase 1C-A/2C/2D: Database type is scoped to exactly the 5 approved ta
     ];
     for (const name of forbidden) {
       expect(typesSource).not.toMatch(new RegExp(`\\b${name}:\\s*{`));
+    }
+  });
+
+  it("event_processing_attempts declares no Phase 3-only field (chaos_run_id/fault_action/state_before/state_after)", () => {
+    const match = typesSource.match(
+      /\bevent_processing_attempts:\s*\{[\s\S]*?\n {6}\};/,
+    );
+    expect(match).not.toBeNull();
+    const block = match![0]!;
+    for (const forbidden of [
+      "chaos_run_id",
+      "fault_action",
+      "state_before",
+      "state_after",
+    ]) {
+      expect(block).not.toMatch(new RegExp(`\\b${forbidden}\\b`));
     }
   });
 

@@ -395,6 +395,33 @@ export async function markPaymentAttemptCheckoutInProgress(
   return data;
 }
 
+/**
+ * Reads one `payment_attempts` row by its trusted Razorpay Order ID, or
+ * `null` if none exists. Phase 2E uses this to correlate an incoming
+ * verified webhook event's `razorpay_order_id` to the internal payment
+ * attempt it belongs to (this task's Section 7) — never the reverse.
+ */
+export async function getPaymentAttemptByRazorpayOrderId(
+  razorpayOrderId: string,
+): Promise<PaymentAttemptRow | null> {
+  const client = getSupabaseServerClient();
+
+  const { data, error } = await client
+    .from("payment_attempts")
+    .select("*")
+    .eq("razorpay_order_id", razorpayOrderId)
+    .maybeSingle();
+
+  if (error) {
+    throw new DemoMerchantRepositoryError(
+      "PAYMENT_ATTEMPT_LOOKUP_FAILED",
+      "Failed to load the payment attempt by Razorpay Order ID.",
+    );
+  }
+
+  return data;
+}
+
 export type PaymentRow = Database["public"]["Tables"]["payments"]["Row"];
 
 /** Reads one canonical `payments` row by its Razorpay Payment ID, or `null` if none exists. */
@@ -512,6 +539,115 @@ export async function insertVerifiedPayment(
     throw new DemoMerchantRepositoryError(
       "PAYMENT_INSERT_FAILED",
       "Failed to persist the verified payment.",
+    );
+  }
+
+  return data;
+}
+
+export interface InsertPaymentFromWebhookEvidenceInput {
+  readonly paymentAttemptId: string;
+  readonly razorpayPaymentId: string;
+  readonly amountSubunits: number;
+  readonly currency: string;
+}
+
+/**
+ * Phase 2E — "webhook-first payment observation" (this task's Section 8).
+ * A core reason webhooks exist is that the browser Checkout callback may
+ * be lost, so a verified `payment.captured`/`payment.failed` webhook must
+ * be able to create the canonical `payments` row itself, WITHOUT
+ * requiring a prior Phase 2C Checkout callback.
+ *
+ * Deliberately does NOT set `checkout_signature_verified` to `true` — it
+ * is left at its database default (`false`, with `checkout_verified_at`
+ * `NULL`), because no Checkout HMAC signature was ever verified here; only
+ * the webhook's own HMAC signature was verified
+ * (`lib/razorpay/webhook-verification.ts`), which is a DIFFERENT
+ * cryptographic claim. Also deliberately does NOT set
+ * `razorpay_payment_status`/`captured_at`/`failed_at` — applying
+ * authoritative provider state to the canonical payment record is Phase
+ * 2F scope, not Phase 2E's.
+ *
+ * Returns `null` instead of throwing on a `razorpay_payment_id`
+ * unique-constraint violation (Postgres error code `23505`) — the same
+ * race-safety pattern as `insertVerifiedPayment`: if a concurrent path
+ * (another duplicate webhook delivery, or a concurrent Checkout callback)
+ * created the canonical row first, the caller re-reads the now-existing
+ * row via `getPaymentByRazorpayPaymentId` rather than treating this as a
+ * failure.
+ */
+export async function insertPaymentFromWebhookEvidence(
+  input: InsertPaymentFromWebhookEvidenceInput,
+): Promise<PaymentRow | null> {
+  const client = getSupabaseServerClient();
+
+  const { data, error } = await client
+    .from("payments")
+    .insert({
+      payment_attempt_id: input.paymentAttemptId,
+      razorpay_payment_id: input.razorpayPaymentId,
+      amount_subunits: input.amountSubunits,
+      currency: input.currency,
+      checkout_signature_verified: false,
+      checkout_verified_at: null,
+    })
+    .select()
+    .single();
+
+  if (error) {
+    if (error.code === "23505") {
+      return null;
+    }
+    throw new DemoMerchantRepositoryError(
+      "PAYMENT_INSERT_FAILED",
+      "Failed to persist the payment observed from webhook evidence.",
+    );
+  }
+  if (!data) {
+    throw new DemoMerchantRepositoryError(
+      "PAYMENT_INSERT_FAILED",
+      "Failed to persist the payment observed from webhook evidence.",
+    );
+  }
+
+  return data;
+}
+
+/**
+ * Phase 2E — Checkout-after-webhook compatibility (this task's Section 9).
+ * Attaches a NOW-verified Checkout signature to an EXISTING canonical
+ * `payments` row that a verified webhook already created first
+ * (`checkout_signature_verified = false`). Out-of-order browser/webhook
+ * observation is a genuine requirement — the Checkout path must not fail
+ * solely because the webhook observed the payment first.
+ *
+ * Unconditional, like `markPaymentAttemptOrderCreated` — the caller
+ * (`lib/demo-merchant/service.ts`) has already independently verified the
+ * Checkout HMAC signature and confirmed this row belongs to the same
+ * payment attempt before calling this. Never overwrites any other field —
+ * money terms, Razorpay Payment ID, and any Phase 2F-applied provider
+ * state are left untouched.
+ */
+export async function attachCheckoutVerificationToPayment(
+  paymentId: string,
+): Promise<PaymentRow> {
+  const client = getSupabaseServerClient();
+
+  const { data, error } = await client
+    .from("payments")
+    .update({
+      checkout_signature_verified: true,
+      checkout_verified_at: new Date().toISOString(),
+    })
+    .eq("id", paymentId)
+    .select()
+    .single();
+
+  if (error || !data) {
+    throw new DemoMerchantRepositoryError(
+      "PAYMENT_UPDATE_FAILED",
+      "Failed to attach Checkout verification to the existing payment.",
     );
   }
 

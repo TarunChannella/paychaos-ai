@@ -1,16 +1,28 @@
 /**
- * Phase 2D — server-only persistence boundary for `webhook_events`.
+ * Phase 2D/2E — server-only persistence boundary for `webhook_events`.
  *
  * Structural guarantee: `import "server-only"` (same pattern as
  * `lib/demo-merchant/repository.ts`) makes a client-bundle import of this
  * module fail at build time.
  *
  * This module is the ONLY place `webhook_events` is written/read. It
- * performs no signature verification, no JSON parsing, and no redaction —
- * its input must already be fully verified/validated/redacted by the
- * caller (`lib/webhooks/service.ts`). This mirrors
+ * performs no signature verification, no JSON parsing, no redaction, and
+ * no event normalization/correlation — its input must already be fully
+ * verified/validated/redacted/normalized by the caller
+ * (`lib/webhooks/service.ts`). This mirrors
  * `lib/demo-merchant/repository.ts`'s existing boundary: repositories are
  * pure persistence, domain/security logic lives one layer up.
+ *
+ * Phase 2E now owns application-level duplicate recognition (deferred
+ * from Phase 2D by the 2026-08-26 architect review correction — see
+ * handoffs/PHASE-2-HANDOFF.md): `insertWebhookEvent` returns `null` on a
+ * `UNIQUE(razorpay_event_id)` conflict (Postgres `23505`) rather than
+ * throwing, mirroring the exact pattern already established by
+ * `lib/demo-merchant/repository.ts`'s `insertVerifiedPayment` for the
+ * identical race shape. The caller re-reads the existing canonical row via
+ * `getWebhookEventByRazorpayEventId` and records the duplicate atomically
+ * via `incrementWebhookDuplicateDeliveryCount` (docs/DATABASE.md Section
+ * 13 "Duplicate Delivery Rules").
  */
 import "server-only";
 
@@ -45,17 +57,26 @@ export interface InsertWebhookEventInput {
  *
  * Deliberately accepts no `razorpay_order_id`/`razorpay_payment_id`/
  * `payment_attempt_id`/`payment_id`/`amount_subunits`/`currency`/
- * `razorpay_payment_status` field — Phase 2D leaves every
- * normalization/correlation column `NULL` (database default); populating
- * them is Phase 2E's event-normalization responsibility
- * (docs/DATABASE.md Section 13 Phase Ownership). `signature_verified` is
- * always `true` here — this function is only ever called after
- * verification has already succeeded (the table's own CHECK constraint
- * also enforces this independently of application code).
+ * `razorpay_payment_status` field at insert time — those are DERIVED
+ * fields, only ever populated afterward, by `updateWebhookEventDerivedFields`,
+ * once Phase 2E normalization/correlation has actually succeeded.
+ * `signature_verified` is always `true` here — this function is only ever
+ * called after verification has already succeeded (the table's own CHECK
+ * constraint also enforces this independently of application code).
+ *
+ * Returns `null` instead of throwing on a `razorpay_event_id`
+ * unique-constraint violation (Postgres error code `23505`) — a genuine
+ * Razorpay at-least-once redelivery of an event this table already holds.
+ * The database `UNIQUE(razorpay_event_id)` constraint (docs/ARCHITECTURE.md
+ * ADR-A08) is the final race-safety boundary against two concurrent
+ * deliveries of the same logical event both observing "no existing row"
+ * before either inserts — the caller re-reads the now-existing row rather
+ * than treating this as a failure, exactly like
+ * `lib/demo-merchant/repository.ts`'s `insertVerifiedPayment`.
  */
 export async function insertWebhookEvent(
   input: InsertWebhookEventInput,
-): Promise<WebhookEventRow> {
+): Promise<WebhookEventRow | null> {
   const client = getSupabaseServerClient();
 
   const { data, error } = await client
@@ -72,14 +93,9 @@ export async function insertWebhookEvent(
     .single();
 
   if (error) {
-    // Phase 2D treats every insert failure identically, including a
-    // `UNIQUE(razorpay_event_id)` conflict (Postgres `23505`) — a real
-    // Razorpay redelivery of an event this table has already recorded.
-    // Recognizing and safely acknowledging that specific case is Phase
-    // 2E's duplicate-delivery workflow (`duplicate_delivery_count`,
-    // normalized duplicate handling); Phase 2D deliberately does not
-    // interpret 23505 specially (2026-08-26 architect review correction —
-    // see handoffs/PHASE-2-HANDOFF.md).
+    if (error.code === "23505") {
+      return null;
+    }
     throw new WebhookRepositoryError(
       "WEBHOOK_EVENT_INSERT_FAILED",
       "Failed to persist the webhook event.",
@@ -89,6 +105,110 @@ export async function insertWebhookEvent(
     throw new WebhookRepositoryError(
       "WEBHOOK_EVENT_INSERT_FAILED",
       "Failed to persist the webhook event.",
+    );
+  }
+
+  return data;
+}
+
+/** Reads one canonical `webhook_events` row by its Razorpay event ID, or `null` if none exists. */
+export async function getWebhookEventByRazorpayEventId(
+  razorpayEventId: string,
+): Promise<WebhookEventRow | null> {
+  const client = getSupabaseServerClient();
+
+  const { data, error } = await client
+    .from("webhook_events")
+    .select("*")
+    .eq("razorpay_event_id", razorpayEventId)
+    .maybeSingle();
+
+  if (error) {
+    throw new WebhookRepositoryError(
+      "WEBHOOK_EVENT_LOOKUP_FAILED",
+      "Failed to load the webhook event.",
+    );
+  }
+
+  return data;
+}
+
+/**
+ * Atomically increments `webhook_events.duplicate_delivery_count` for one
+ * `razorpay_event_id` via the `record_webhook_duplicate_delivery` SQL
+ * function (`supabase/migrations/20260827000000_phase2e_webhook_dedup.sql`)
+ * and returns the updated canonical row. Deliberately NOT implemented as a
+ * SELECT-then-increment-in-application-code-then-UPDATE — that would lose
+ * increments under two genuinely concurrent duplicate deliveries; the RPC
+ * performs a single atomic `UPDATE ... SET count = count + 1` server-side.
+ */
+export async function incrementWebhookDuplicateDeliveryCount(
+  razorpayEventId: string,
+): Promise<WebhookEventRow> {
+  const client = getSupabaseServerClient();
+
+  const { data, error } = await client.rpc(
+    "record_webhook_duplicate_delivery",
+    { p_razorpay_event_id: razorpayEventId },
+  );
+
+  if (error || !data) {
+    throw new WebhookRepositoryError(
+      "WEBHOOK_EVENT_DUPLICATE_INCREMENT_FAILED",
+      "Failed to record the duplicate webhook delivery.",
+    );
+  }
+
+  return data;
+}
+
+export interface UpdateWebhookEventDerivedFieldsInput {
+  readonly razorpayOrderId: string | null;
+  readonly razorpayPaymentId: string | null;
+  readonly paymentAttemptId: string | null;
+  readonly paymentId: string | null;
+  readonly amountSubunits: number | null;
+  readonly currency: string | null;
+  readonly razorpayPaymentStatus: string | null;
+}
+
+/**
+ * Updates ONLY the derived correlation fields on one canonical
+ * `webhook_events` row, after Phase 2E normalization/correlation has
+ * succeeded (this task's Section 10). Never touches the immutable evidence
+ * fields (`razorpay_event_id`/`event_type`/`source_kind`/
+ * `signature_verified`/`received_at`/`provider_created_at`/
+ * `raw_body_sha256`/`raw_payload_redacted`) — this function's parameter
+ * type structurally cannot carry any of them. Also never touches
+ * `processing_status`/`processed_at` — those stay `RECEIVED`/`NULL`
+ * through Phase 2E; Phase 2F owns transitioning them.
+ */
+export async function updateWebhookEventDerivedFields(
+  id: string,
+  input: UpdateWebhookEventDerivedFieldsInput,
+): Promise<WebhookEventRow> {
+  const client = getSupabaseServerClient();
+
+  const { data, error } = await client
+    .from("webhook_events")
+    .update({
+      razorpay_order_id: input.razorpayOrderId,
+      razorpay_payment_id: input.razorpayPaymentId,
+      payment_attempt_id: input.paymentAttemptId,
+      payment_id: input.paymentId,
+      amount_subunits: input.amountSubunits,
+      currency: input.currency,
+      razorpay_payment_status: input.razorpayPaymentStatus,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", id)
+    .select()
+    .single();
+
+  if (error || !data) {
+    throw new WebhookRepositoryError(
+      "WEBHOOK_EVENT_DERIVED_UPDATE_FAILED",
+      "Failed to update the webhook event's derived fields.",
     );
   }
 

@@ -636,6 +636,180 @@ describe("insertVerifiedPayment", () => {
   });
 });
 
+describe("getPaymentAttemptByRazorpayOrderId", () => {
+  it("looks up by razorpay_order_id and returns the row", async () => {
+    const attemptRow = {
+      id: "attempt-1",
+      order_id: "order-1",
+      razorpay_order_id: "order_fake_id",
+    };
+    const builder = makeQueryBuilder({ data: attemptRow, error: null });
+    fromMock.mockReturnValue(builder);
+
+    const { getPaymentAttemptByRazorpayOrderId } =
+      await import("@/lib/demo-merchant/repository");
+    const result = await getPaymentAttemptByRazorpayOrderId("order_fake_id");
+
+    expect(fromMock).toHaveBeenCalledWith("payment_attempts");
+    expect(builder.eq).toHaveBeenCalledWith(
+      "razorpay_order_id",
+      "order_fake_id",
+    );
+    expect(result).toEqual(attemptRow);
+  });
+
+  it("returns null when no attempt correlates to that Razorpay Order ID", async () => {
+    const builder = makeQueryBuilder({ data: null, error: null });
+    fromMock.mockReturnValue(builder);
+
+    const { getPaymentAttemptByRazorpayOrderId } =
+      await import("@/lib/demo-merchant/repository");
+    expect(await getPaymentAttemptByRazorpayOrderId("order_none")).toBeNull();
+  });
+
+  it("throws DemoMerchantRepositoryError on a query error", async () => {
+    const builder = makeQueryBuilder({
+      data: null,
+      error: { message: "connection string leaked here" },
+    });
+    fromMock.mockReturnValue(builder);
+
+    const { getPaymentAttemptByRazorpayOrderId, DemoMerchantRepositoryError } =
+      await import("@/lib/demo-merchant/repository");
+    await expect(
+      getPaymentAttemptByRazorpayOrderId("order_fake_id"),
+    ).rejects.toThrow(DemoMerchantRepositoryError);
+  });
+});
+
+describe("insertPaymentFromWebhookEvidence", () => {
+  it("inserts using exactly the trusted fields, with checkout_signature_verified false and checkout_verified_at null — webhook-first observation", async () => {
+    const persistedRow = {
+      id: "payment-1",
+      payment_attempt_id: "attempt-1",
+      razorpay_payment_id: "pay_fake_id",
+      checkout_signature_verified: false,
+      checkout_verified_at: null,
+      razorpay_payment_status: null,
+      captured_at: null,
+      failed_at: null,
+    };
+    const builder = makeQueryBuilder({ data: persistedRow, error: null });
+    fromMock.mockReturnValue(builder);
+
+    const { insertPaymentFromWebhookEvidence } =
+      await import("@/lib/demo-merchant/repository");
+    const result = await insertPaymentFromWebhookEvidence({
+      paymentAttemptId: "attempt-1",
+      razorpayPaymentId: "pay_fake_id",
+      amountSubunits: 50000,
+      currency: "INR",
+    });
+
+    expect(fromMock).toHaveBeenCalledWith("payments");
+    const insertPayload = builder.insert.mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(insertPayload).toEqual({
+      payment_attempt_id: "attempt-1",
+      razorpay_payment_id: "pay_fake_id",
+      amount_subunits: 50000,
+      currency: "INR",
+      checkout_signature_verified: false,
+      checkout_verified_at: null,
+    });
+    // Never sets razorpay_payment_status/captured_at/failed_at — applying
+    // authoritative provider state is Phase 2F scope.
+    for (const forbidden of [
+      "razorpay_payment_status",
+      "captured_at",
+      "failed_at",
+    ]) {
+      expect(insertPayload).not.toHaveProperty(forbidden);
+    }
+    expect(result).toEqual(persistedRow);
+  });
+
+  it("returns null (not a throw) on a unique-constraint violation (23505) — concurrent-insert race", async () => {
+    const builder = makeQueryBuilder({
+      data: null,
+      error: { code: "23505", message: "duplicate key value" },
+    });
+    fromMock.mockReturnValue(builder);
+
+    const { insertPaymentFromWebhookEvidence } =
+      await import("@/lib/demo-merchant/repository");
+    const result = await insertPaymentFromWebhookEvidence({
+      paymentAttemptId: "attempt-1",
+      razorpayPaymentId: "pay_fake_id",
+      amountSubunits: 50000,
+      currency: "INR",
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("throws DemoMerchantRepositoryError (never leaks the raw Supabase error) on any other insert failure", async () => {
+    const builder = makeQueryBuilder({
+      data: null,
+      error: { code: "XX000", message: "connection string leaked here" },
+    });
+    fromMock.mockReturnValue(builder);
+
+    const { insertPaymentFromWebhookEvidence, DemoMerchantRepositoryError } =
+      await import("@/lib/demo-merchant/repository");
+    await expect(
+      insertPaymentFromWebhookEvidence({
+        paymentAttemptId: "attempt-1",
+        razorpayPaymentId: "pay_fake_id",
+        amountSubunits: 50000,
+        currency: "INR",
+      }),
+    ).rejects.toThrow(DemoMerchantRepositoryError);
+  });
+});
+
+describe("attachCheckoutVerificationToPayment", () => {
+  it("sets checkout_signature_verified=true and a non-null checkout_verified_at, targeting the exact payment id", async () => {
+    const updatedRow = {
+      id: "payment-1",
+      checkout_signature_verified: true,
+      checkout_verified_at: "2026-01-01T00:00:00.000Z",
+    };
+    const builder = makeQueryBuilder({ data: updatedRow, error: null });
+    fromMock.mockReturnValue(builder);
+
+    const { attachCheckoutVerificationToPayment } =
+      await import("@/lib/demo-merchant/repository");
+    const result = await attachCheckoutVerificationToPayment("payment-1");
+
+    expect(fromMock).toHaveBeenCalledWith("payments");
+    const updatePayload = builder.update.mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(updatePayload.checkout_signature_verified).toBe(true);
+    expect(updatePayload.checkout_verified_at).toEqual(expect.any(String));
+    expect(builder.eq).toHaveBeenCalledWith("id", "payment-1");
+    expect(result).toEqual(updatedRow);
+  });
+
+  it("throws DemoMerchantRepositoryError (never leaks the raw Supabase error) on an update failure", async () => {
+    const builder = makeQueryBuilder({
+      data: null,
+      error: { message: "connection string leaked here" },
+    });
+    fromMock.mockReturnValue(builder);
+
+    const { attachCheckoutVerificationToPayment, DemoMerchantRepositoryError } =
+      await import("@/lib/demo-merchant/repository");
+    await expect(
+      attachCheckoutVerificationToPayment("payment-1"),
+    ).rejects.toThrow(DemoMerchantRepositoryError);
+  });
+});
+
 describe("lib/demo-merchant/repository.ts — structural server-only boundary", () => {
   const source = fs.readFileSync(
     path.resolve(
