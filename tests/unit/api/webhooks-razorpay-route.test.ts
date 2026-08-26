@@ -543,10 +543,19 @@ describe("webhook critical path — timing / bounded-work contract (Phase 2G rea
   });
 
   it("B: the success-path latency_ms measurement is computed only AFTER ingestRazorpayWebhook (the full verify -> persist/dedup -> normalize/correlate -> merchant-process chain) has resolved", () => {
-    const ingestCallIndex = routeSource.indexOf(
+    // Line-ending agnostic (architect correction): `routeSource` is read raw
+    // via `fs.readFileSync`, which does not normalize line endings, so on a
+    // Windows checkout with `core.autocrlf=true` the file's actual bytes use
+    // CRLF even though the multi-line literal below is authored with LF.
+    // Normalizing here (only for this multi-line structural match) keeps the
+    // assertion identical in intent — still proving `ingestRazorpayWebhook`
+    // is called strictly before the success-path `latency_ms` log — while
+    // making it independent of the checkout's line-ending representation.
+    const normalizedRouteSource = routeSource.replace(/\r\n/g, "\n");
+    const ingestCallIndex = normalizedRouteSource.indexOf(
       "const result = await ingestRazorpayWebhook(",
     );
-    const successLatencyLogIndex = routeSource.indexOf(
+    const successLatencyLogIndex = normalizedRouteSource.indexOf(
       'logEvent("webhook_request_completed", {\n      http_status: 200,\n      latency_ms: Date.now() - startedAt,',
     );
     expect(ingestCallIndex).toBeGreaterThan(-1);
