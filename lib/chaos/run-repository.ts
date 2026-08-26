@@ -325,6 +325,200 @@ export async function failRunningC01RunExecution(
 }
 
 /**
+ * Phase 3D-A — atomically transitions one eligible PENDING C03 run to the
+ * execution-time BLOCKED shape frozen by Phase 3D-0
+ * (`supabase/migrations/20260831000000_phase3d_execution_safety.sql`):
+ * `execution_block_code = 'PRE-SEC-007'`, `failed_precheck_id = NULL`,
+ * `started_at = NULL`. The single conditional `UPDATE ... WHERE ...
+ * RETURNING` requires `id`/`status = PENDING`/`scenario_id = C03`/
+ * `fault_type = INVALID_SIGNATURE_TEST`/`data_classification =
+ * SYNTHETIC_DEMO` all match — the same atomic-conditional-UPDATE idiom as
+ * every other lifecycle transition in this module. `execution_block_code`
+ * is always the hardcoded literal `'PRE-SEC-007'` — never a caller-supplied
+ * value. `fault_config`/`fault_state` are left untouched (whatever the
+ * PENDING row already had — always `{}` per `createPendingChaosRun`).
+ *
+ * Returns `null` (never throws for this case) when zero rows matched — the
+ * run does not exist, or is not an eligible PENDING C03 row. The caller must
+ * never treat a `null` return as "blocked successfully".
+ */
+export async function blockPendingC03RunForPreSec007(
+  id: string,
+  safeReason: string,
+  now: () => Date = () => new Date(),
+): Promise<ChaosRunRow | null> {
+  const client = getSupabaseServerClient();
+  const timestamp = now().toISOString();
+
+  const { data, error } = await client
+    .from("chaos_runs")
+    .update({
+      status: "COMPLETED",
+      outcome: "BLOCKED",
+      failed_precheck_id: null,
+      execution_block_code: "PRE-SEC-007",
+      error_message_redacted: safeReason,
+      started_at: null,
+      completed_at: timestamp,
+      updated_at: timestamp,
+    })
+    .eq("id", id)
+    .eq("status", "PENDING")
+    .eq("scenario_id", "C03")
+    .eq("fault_type", "INVALID_SIGNATURE_TEST")
+    .eq("data_classification", "SYNTHETIC_DEMO")
+    .select()
+    .maybeSingle();
+
+  if (error) {
+    throw new ChaosRunRepositoryError(
+      "CHAOS_RUN_C03_BLOCK_FAILED",
+      "Failed to persist the PRE-SEC-007 blocked chaos run.",
+    );
+  }
+
+  return data;
+}
+
+/**
+ * Phase 3D-A — atomically claims one eligible PENDING C03/
+ * `INVALID_SIGNATURE_TEST`/`SYNTHETIC_DEMO` chaos run for execution:
+ * `PENDING -> RUNNING`, exactly once. Same atomic-conditional-UPDATE idiom
+ * as `startPendingC01RunAtomically` — a single conditional `UPDATE ...
+ * WHERE ... RETURNING`, never a `SELECT` followed by an unconditional
+ * `UPDATE`. No scenario/fault-type parameter is accepted from a caller —
+ * both are fixed literals matching C03's own registry entry.
+ *
+ * Returns `null` (never throws for this case) when zero rows matched — the
+ * run does not exist, is not `C03`, is not `INVALID_SIGNATURE_TEST`, is not
+ * `SYNTHETIC_DEMO`, does not have `outcome IS NULL`, or (the expected steady
+ * state under a genuine race) has already been claimed by a concurrent
+ * caller and is no longer `PENDING`. The caller must never execute the C03
+ * mechanism when this returns `null`.
+ */
+export async function startPendingC03RunAtomically(
+  id: string,
+  now: () => Date = () => new Date(),
+): Promise<ChaosRunRow | null> {
+  const client = getSupabaseServerClient();
+  const timestamp = now().toISOString();
+
+  const { data, error } = await client
+    .from("chaos_runs")
+    .update({
+      status: "RUNNING",
+      started_at: timestamp,
+      updated_at: timestamp,
+    })
+    .eq("id", id)
+    .eq("scenario_id", "C03")
+    .eq("status", "PENDING")
+    .eq("fault_type", "INVALID_SIGNATURE_TEST")
+    .eq("data_classification", "SYNTHETIC_DEMO")
+    .is("outcome", null)
+    .select()
+    .maybeSingle();
+
+  if (error) {
+    throw new ChaosRunRepositoryError(
+      "CHAOS_RUN_C03_START_FAILED",
+      "Failed to atomically start the C03 chaos run.",
+    );
+  }
+
+  return data;
+}
+
+/**
+ * Phase 3D-A — generic terminal helper: completes a successfully-executed
+ * RUNNING run of ANY scenario: `RUNNING -> COMPLETED`/`UNKNOWN`. Accepts
+ * only a server-constructed safe `fault_state` object — never arbitrary
+ * caller/browser JSON, never a `status`/`outcome`/`scenario`/`fault type`/
+ * `execution_block_code` override (this task's Section 8C). `status =
+ * COMPLETED` means the chaos mechanism execution completed; `outcome =
+ * UNKNOWN` means no deterministic Money Invariant evaluation has run yet
+ * (a later phase's job) — this is NOT a merchant reliability verdict. The
+ * conditional `WHERE status = 'RUNNING'` means this can only ever transition
+ * a run this same execution path already atomically claimed; returns `null`
+ * if that precondition does not hold.
+ */
+export async function completeRunningChaosRunUnknown(
+  id: string,
+  faultState: Record<string, unknown>,
+  now: () => Date = () => new Date(),
+): Promise<ChaosRunRow | null> {
+  const client = getSupabaseServerClient();
+  const timestamp = now().toISOString();
+
+  const { data, error } = await client
+    .from("chaos_runs")
+    .update({
+      status: "COMPLETED",
+      outcome: "UNKNOWN",
+      completed_at: timestamp,
+      updated_at: timestamp,
+      fault_state: faultState,
+      error_message_redacted: null,
+    })
+    .eq("id", id)
+    .eq("status", "RUNNING")
+    .select()
+    .maybeSingle();
+
+  if (error) {
+    throw new ChaosRunRepositoryError(
+      "CHAOS_RUN_COMPLETE_UNKNOWN_FAILED",
+      "Failed to persist chaos run completion.",
+    );
+  }
+
+  return data;
+}
+
+/**
+ * Phase 3D-A — generic terminal helper: records a technical execution
+ * failure on a RUNNING run of ANY scenario: `RUNNING -> FAILED`/`ERROR`.
+ * This is NEVER how a merchant reliability FAIL is represented (that is
+ * `COMPLETED`/`FAIL`, a later deterministic invariant-evaluation outcome) —
+ * `FAILED`/`ERROR` means mechanism execution itself could not complete for a
+ * technical reason. Accepts only a fixed safe `safeReason` string — never a
+ * raw DB/Postgres error, secret, or raw payload, and no
+ * `status`/`outcome`/`scenario`/`fault type`/`execution_block_code`
+ * override.
+ */
+export async function failRunningChaosRunExecution(
+  id: string,
+  safeReason: string,
+  now: () => Date = () => new Date(),
+): Promise<ChaosRunRow | null> {
+  const client = getSupabaseServerClient();
+  const timestamp = now().toISOString();
+
+  const { data, error } = await client
+    .from("chaos_runs")
+    .update({
+      status: "FAILED",
+      outcome: "ERROR",
+      completed_at: timestamp,
+      updated_at: timestamp,
+      error_message_redacted: safeReason,
+    })
+    .eq("id", id)
+    .eq("status", "RUNNING")
+    .select()
+    .maybeSingle();
+
+  if (error) {
+    throw new ChaosRunRepositoryError(
+      "CHAOS_RUN_FAIL_EXECUTION_FAILED",
+      "Failed to persist chaos run technical failure.",
+    );
+  }
+
+  return data;
+}
+
+/**
  * Read-only lookup by internal id. Returns `null` if no such row exists.
  * Throws `ChaosRunRepositoryError` on a genuine DB failure — never returns
  * `null` to mean "the database errored", so a caller cannot mistake an

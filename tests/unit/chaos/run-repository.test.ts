@@ -99,7 +99,7 @@ describe("lib/chaos/run-repository.ts — module surface", () => {
     expect(source).toMatch(/import\s+["']server-only["']/);
   });
 
-  it("exposes exactly the six approved P0 persistence/lifecycle functions (Phase 3B's original three, plus Phase 3C's three narrow C01 lifecycle transitions) — no speculative generic lifecycle function", async () => {
+  it("exposes exactly the ten approved P0 persistence/lifecycle functions (Phase 3B's original three, Phase 3C's three narrow C01 lifecycle transitions, and Phase 3D-A's C03 lifecycle transitions plus two safe-shaped generic terminal helpers) — no speculative unconstrained lifecycle function", async () => {
     const mod = await import("@/lib/chaos/run-repository");
     // `ChaosRunRepositoryError` is a class, which is also `typeof === "function"`
     // in JS — excluded here deliberately since it is an error type, not a
@@ -117,11 +117,21 @@ describe("lib/chaos/run-repository.ts — module surface", () => {
         "startPendingC01RunAtomically",
         "completeRunningC01RunUnknown",
         "failRunningC01RunExecution",
+        "blockPendingC03RunForPreSec007",
+        "startPendingC03RunAtomically",
+        "completeRunningChaosRunUnknown",
+        "failRunningChaosRunExecution",
       ].sort(),
     );
-    // Generic/speculative names Phase 3B explicitly avoided remain absent —
-    // Phase 3C added only the three narrow, scenario-scoped transitions
-    // above, never a generic transitionRun/updateFaultState.
+    // Generic/speculative names Phase 3B explicitly avoided remain absent.
+    // `completeRunningChaosRunUnknown`/`failRunningChaosRunExecution` are
+    // NOT the forbidden shape below — architect-approved Phase 3D-A "generic
+    // terminal helpers" that accept only a fixed COMPLETED/UNKNOWN or
+    // FAILED/ERROR shape and a safe fault_state/reason string, never an
+    // arbitrary caller-supplied status/outcome/scenario/fault
+    // type/execution_block_code (this task's Section 8C) — unlike a
+    // forbidden `transitionRun`/`updateFaultState`, which would accept an
+    // arbitrary target state.
     for (const forbidden of ["transitionRun", "updateFaultState"]) {
       expect(mod).not.toHaveProperty(forbidden);
     }
