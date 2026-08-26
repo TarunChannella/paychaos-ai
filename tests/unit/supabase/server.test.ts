@@ -287,6 +287,23 @@ describe("Phase 1C-A/2C/2D/2E/2F/3B: Database type is scoped to exactly the 7 ap
     expect(typesSource).not.toMatch(/"TEST_FIXTURE"/);
   });
 
+  it("Phase 3D-0: chaos_runs DOES declare execution_block_code as a nullable narrow-union field", () => {
+    const match = typesSource.match(/\bchaos_runs:\s*\{[\s\S]*?\n {6}\};/);
+    expect(match).not.toBeNull();
+    const block = match![0]!;
+    expect(block).toMatch(
+      /execution_block_code:\s*ChaosRunExecutionBlockCode\s*\|\s*null/,
+    );
+  });
+
+  it("Phase 3D-0: ChaosRunExecutionBlockCode is scoped to exactly PRE-SEC-007, not a generic security-code catalogue", () => {
+    expect(typesSource).toMatch(
+      /ChaosRunExecutionBlockCode\s*=\s*"PRE-SEC-007"/,
+    );
+    expect(typesSource).not.toMatch(/"PRE-SEC-010"/);
+    expect(typesSource).not.toMatch(/"PRE-SEC-011"/);
+  });
+
   it("Phase 2F: fulfilments DOES declare payment_id and trigger_processing_attempt_id (additive columns)", () => {
     // Scoped to ONLY the `fulfilments:` table block — the Phase 2C
     // `payments` table legitimately declares an unrelated

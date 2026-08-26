@@ -1319,3 +1319,150 @@ describe("Phase 3C migration — controlled replay compatibility (architect-appr
     ]);
   });
 });
+
+describe("Phase 3D-0 migration — execution-block audit + C07 concurrency schema foundation", () => {
+  const phase3dMigration = migrations.find((m) => m.name.includes("phase3d"));
+  const phase3bMigration = migrations.find((m) => m.name.includes("phase3b"));
+  const phase3cMigration = migrations.find((m) => m.name.includes("phase3c"));
+
+  it("1: the new migration file exists", () => {
+    expect(phase3dMigration).toBeDefined();
+  });
+
+  it("2: does not edit the historical Phase 3B or Phase 3C migration files (both remain byte-for-byte present with their own original CREATE TABLE/CREATE FUNCTION statements, not this file's)", () => {
+    expect(phase3bMigration).toBeDefined();
+    expect(phase3cMigration).toBeDefined();
+    expect(phase3bMigration!.sql).toMatch(/create table\s+public\.chaos_runs/i);
+    expect(phase3cMigration!.sql).toMatch(
+      /create or replace function public\.process_webhook_payment_event/i,
+    );
+    expect(phase3dMigration!.sql).not.toMatch(/create\s+table/i);
+    expect(phase3dMigration!.sql).not.toMatch(/create\s+function/i);
+  });
+
+  it("3: execution_block_code column is added to chaos_runs", () => {
+    expect(phase3dMigration!.sql).toMatch(
+      /alter table public\.chaos_runs\s+add column execution_block_code text;/i,
+    );
+  });
+
+  it("4: chaos_runs_execution_block_code_valid allows NULL or exactly PRE-SEC-007", () => {
+    const constraintMatch = phase3dMigration!.sql.match(
+      /add constraint chaos_runs_execution_block_code_valid check \(([\s\S]*?)\);/i,
+    );
+    expect(constraintMatch).not.toBeNull();
+    const body = constraintMatch![1]!;
+    expect(body).toMatch(/execution_block_code is null or/i);
+    expect(body).toMatch(/execution_block_code in \('PRE-SEC-007'\)/i);
+  });
+
+  it("5: does not accept PRE-SEC-010 or PRE-SEC-011 as a valid execution_block_code value — the CHECK constraint's value list is exactly ('PRE-SEC-007'); the column comment legitimately names both by string literal only to explain why they are excluded, so only the constraint's own value-list body is checked here, not the whole file", () => {
+    const constraintMatch = phase3dMigration!.sql.match(
+      /add constraint chaos_runs_execution_block_code_valid check \(([\s\S]*?)\);/i,
+    );
+    expect(constraintMatch).not.toBeNull();
+    const body = constraintMatch![1]!;
+    expect(body).not.toMatch(/PRE-SEC-010/);
+    expect(body).not.toMatch(/PRE-SEC-011/);
+  });
+
+  it("6: chaos_runs_blocked_state_consistent is dropped and recreated encoding XOR semantics between failed_precheck_id and execution_block_code", () => {
+    expect(phase3dMigration!.sql).toMatch(
+      /drop constraint chaos_runs_blocked_state_consistent;/i,
+    );
+    const constraintMatch = phase3dMigration!.sql.match(
+      /add constraint chaos_runs_blocked_state_consistent check \(([\s\S]*?)\n {2}\);/i,
+    );
+    expect(constraintMatch).not.toBeNull();
+    const body = constraintMatch![1]!;
+    expect(body).toMatch(
+      /failed_precheck_id is not null and execution_block_code is null/i,
+    );
+    expect(body).toMatch(
+      /failed_precheck_id is null and execution_block_code is not null/i,
+    );
+  });
+
+  it("7: non-BLOCKED rows require both failed_precheck_id and execution_block_code NULL", () => {
+    const constraintMatch = phase3dMigration!.sql.match(
+      /add constraint chaos_runs_blocked_state_consistent check \(([\s\S]*?)\n {2}\);/i,
+    );
+    expect(constraintMatch).not.toBeNull();
+    const body = constraintMatch![1]!;
+    expect(body).toMatch(
+      /outcome is distinct from 'BLOCKED'\s*\n\s*and failed_precheck_id is null\s*\n\s*and execution_block_code is null/i,
+    );
+  });
+
+  it("8: chaos_runs_pending_state_consistent is dropped and recreated requiring execution_block_code IS NULL for PENDING", () => {
+    expect(phase3dMigration!.sql).toMatch(
+      /drop constraint chaos_runs_pending_state_consistent;/i,
+    );
+    const constraintMatch = phase3dMigration!.sql.match(
+      /add constraint chaos_runs_pending_state_consistent check \(([\s\S]*?)\n {2}\);/i,
+    );
+    expect(constraintMatch).not.toBeNull();
+    const body = constraintMatch![1]!;
+    expect(body).toMatch(/outcome is null/i);
+    expect(body).toMatch(/failed_precheck_id is null/i);
+    expect(body).toMatch(/execution_block_code is null/i);
+    expect(body).toMatch(/started_at is null/i);
+    expect(body).toMatch(/completed_at is null/i);
+  });
+
+  it("9: a partial UNIQUE index enforces at most one RUNNING C07/DROP_CLIENT_CONFIRMATION run per order", () => {
+    expect(phase3dMigration!.sql).toMatch(
+      /create unique index chaos_runs_one_active_c07_fault_per_order_idx\s+on public\.chaos_runs \(order_id\)/i,
+    );
+  });
+
+  it("10: the index predicate is exactly scoped to scenario_id=C07, fault_type=DROP_CLIENT_CONFIRMATION, status=RUNNING, order_id IS NOT NULL", () => {
+    const indexMatch = phase3dMigration!.sql.match(
+      /create unique index chaos_runs_one_active_c07_fault_per_order_idx[\s\S]*?where([\s\S]*?);/i,
+    );
+    expect(indexMatch).not.toBeNull();
+    const predicate = indexMatch![1]!;
+    expect(predicate).toMatch(/scenario_id = 'C07'/i);
+    expect(predicate).toMatch(/fault_type = 'DROP_CLIENT_CONFIRMATION'/i);
+    expect(predicate).toMatch(/status = 'RUNNING'/i);
+    expect(predicate).toMatch(/order_id is not null/i);
+  });
+
+  it("11: does not touch any other table, RLS, or GRANT surface (no CREATE POLICY, no GRANT, no ENABLE ROW LEVEL SECURITY, no ALTER TABLE on a table other than chaos_runs)", () => {
+    expect(phase3dMigration!.sql).not.toMatch(/create policy/i);
+    expect(phase3dMigration!.sql).not.toMatch(/\bgrant\b/i);
+    expect(phase3dMigration!.sql).not.toMatch(/enable row level security/i);
+    const alterTableMatches = [
+      ...phase3dMigration!.sql.matchAll(/alter table\s+public\.(\w+)/gi),
+    ];
+    expect(alterTableMatches.length).toBeGreaterThan(0);
+    for (const match of alterTableMatches) {
+      expect(match[1]!.toLowerCase()).toBe("chaos_runs");
+    }
+  });
+
+  it("12: does not add C03/C07/C11 production behavior — no new table, no new function, no fixture/invariant/finding schema", () => {
+    for (const forbidden of [
+      "invariant_results",
+      "findings",
+      "regression_runs",
+    ]) {
+      expect(phase3dMigration!.sql).not.toMatch(
+        new RegExp(`create table\\s+public\\.${forbidden}`, "i"),
+      );
+    }
+  });
+
+  it("13: the migration set still creates exactly the same 7 approved tables — Phase 3D-0 adds no new table", () => {
+    const tableNames = extractCreateTableNames(combinedSql);
+    expect([...tableNames].sort()).toEqual([
+      "chaos_runs",
+      "event_processing_attempts",
+      "fulfilments",
+      "orders",
+      "payment_attempts",
+      "payments",
+      "webhook_events",
+    ]);
+  });
+});

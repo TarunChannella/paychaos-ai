@@ -103,6 +103,17 @@ export type ChaosRunFailedPrecheckId =
 export type ChaosRunDataClassification =
   "RECORDED_TEST_EVIDENCE" | "SYNTHETIC_DEMO";
 
+/**
+ * Phase 3D-0 — the only execution-time PRE-SEC-xxx block currently
+ * supported (docs/SECURITY.md), matching
+ * `chaos_runs_execution_block_code_valid` exactly. Distinct from
+ * `ChaosRunFailedPrecheckId` (a Phase 3A creation-time PRECHECK-01..10
+ * block). PRE-SEC-010/011 are deliberately excluded — see this migration's
+ * own column comment in
+ * supabase/migrations/20260831000000_phase3d_execution_safety.sql.
+ */
+export type ChaosRunExecutionBlockCode = "PRE-SEC-007";
+
 export interface Database {
   public: {
     Tables: {
@@ -490,6 +501,7 @@ export interface Database {
           outcome: ChaosRunOutcome | null;
           fault_type: ChaosRunFaultType | null;
           failed_precheck_id: ChaosRunFailedPrecheckId | null;
+          execution_block_code: ChaosRunExecutionBlockCode | null;
           fault_config: Record<string, unknown>;
           fault_state: Record<string, unknown>;
           data_classification: ChaosRunDataClassification;
@@ -510,6 +522,7 @@ export interface Database {
           outcome?: ChaosRunOutcome | null;
           fault_type?: ChaosRunFaultType | null;
           failed_precheck_id?: ChaosRunFailedPrecheckId | null;
+          execution_block_code?: ChaosRunExecutionBlockCode | null;
           fault_config?: Record<string, unknown>;
           fault_state?: Record<string, unknown>;
           // Required, NOT optional: the database column has NO DEFAULT
@@ -534,6 +547,7 @@ export interface Database {
           outcome?: ChaosRunOutcome | null;
           fault_type?: ChaosRunFaultType | null;
           failed_precheck_id?: ChaosRunFailedPrecheckId | null;
+          execution_block_code?: ChaosRunExecutionBlockCode | null;
           fault_config?: Record<string, unknown>;
           fault_state?: Record<string, unknown>;
           data_classification?: ChaosRunDataClassification;
