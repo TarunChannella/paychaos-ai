@@ -259,20 +259,32 @@ describe("Phase 1C-A/2C/2D/2E/2F/3B: Database type is scoped to exactly the 7 ap
     }
   });
 
-  it("event_processing_attempts declares no Phase 3-only field (chaos_run_id/fault_action/state_before/state_after)", () => {
+  it("event_processing_attempts declares no still-deferred Phase 3 field (fault_action/state_before/state_after) — chaos_run_id is now implemented (Phase 3C)", () => {
     const match = typesSource.match(
       /\bevent_processing_attempts:\s*\{[\s\S]*?\n {6}\};/,
     );
     expect(match).not.toBeNull();
     const block = match![0]!;
-    for (const forbidden of [
-      "chaos_run_id",
-      "fault_action",
-      "state_before",
-      "state_after",
-    ]) {
+    for (const forbidden of ["fault_action", "state_before", "state_after"]) {
       expect(block).not.toMatch(new RegExp(`\\b${forbidden}\\b`));
     }
+  });
+
+  it("Phase 3C: event_processing_attempts DOES declare chaos_run_id (additive column)", () => {
+    const match = typesSource.match(
+      /\bevent_processing_attempts:\s*\{[\s\S]*?\n {6}\};/,
+    );
+    expect(match).not.toBeNull();
+    const block = match![0]!;
+    expect(block).toMatch(/\bchaos_run_id:\s*string\s*\|\s*null/);
+  });
+
+  it("Phase 3C: event_processing_attempts.source_kind is scoped to exactly REAL_RAZORPAY_WEBHOOK/PAYCHAOS_REPLAY, not the full four-value target vocabulary", () => {
+    expect(typesSource).toMatch(
+      /EventProcessingAttemptSourceKind\s*=\s*\n?\s*"REAL_RAZORPAY_WEBHOOK"\s*\|\s*"PAYCHAOS_REPLAY"/,
+    );
+    expect(typesSource).not.toMatch(/"PAYCHAOS_SIMULATION"/);
+    expect(typesSource).not.toMatch(/"TEST_FIXTURE"/);
   });
 
   it("Phase 2F: fulfilments DOES declare payment_id and trigger_processing_attempt_id (additive columns)", () => {

@@ -1260,6 +1260,39 @@ PAYCHAOS_SIMULATION
 TEST_FIXTURE
 ```
 
+This is the **complete, final** approved provenance vocabulary. Not every value is currently accepted by
+the database — see "Column/Value Phasing Note" below.
+
+---
+
+## Column/Value Phasing Note (added Phase 3C)
+
+The Table Definition and `source_kind` Values above describe the **complete, final** approved schema.
+As of the Phase 3C migration (`supabase/migrations/20260830000000_phase3c_controlled_replay.sql`), the
+`event_processing_attempts_source_kind_valid` CHECK constraint currently accepts exactly:
+
+```text
+REAL_RAZORPAY_WEBHOOK
+PAYCHAOS_REPLAY
+```
+
+`PAYCHAOS_SIMULATION` and `TEST_FIXTURE` remain **approved future target values** — real, pre-approved
+provenance kinds this table's final design accounts for — but they are **not yet enabled by the current
+CHECK constraint**. They stay unimplemented surface until the later phases that actually produce them
+(C07/C11 fault mechanisms; fixture work) exist, per the same "do not widen unused attack surface merely
+because a future phase might need it" reasoning the original Phase 2E migration used to defer all three
+non-`REAL_RAZORPAY_WEBHOOK` values in the first place.
+
+Similarly, `chaos_run_id` is now a real column (Phase 3C), but `fault_action`/`state_before`/
+`state_after` remain deferred — they belong to Phase 3E's evidence-snapshot work, not Phase 3C's
+controlled-replay work.
+
+A `PAYCHAOS_REPLAY` row must additionally satisfy the new
+`event_processing_attempts_replay_provenance_valid` CHECK: `webhook_event_id IS NOT NULL`,
+`chaos_run_id IS NOT NULL`, and `is_duplicate_delivery = false` — a replay references genuine canonical
+evidence but is explicitly **not** a genuine duplicate HTTP delivery from Razorpay, so it must never
+increment `webhook_events.duplicate_delivery_count` or be counted as one.
+
 ---
 
 ## `status` Values
@@ -1356,18 +1389,34 @@ Required:
 
 ### Phase 2
 
-Creates processing-attempt tracking for genuine webhook processing.
+Creates processing-attempt tracking for genuine webhook processing. `source_kind` is CHECK-fixed to
+exactly `REAL_RAZORPAY_WEBHOOK`; `chaos_run_id`/`fault_action`/`state_before`/`state_after` do not exist
+yet.
 
-### Phase 3
+### Phase 3B
 
-Adds/uses:
+Adds `chaos_runs` (a separate table). Does not modify `event_processing_attempts` at all.
 
-- `chaos_run_id`;
-- replay/simulation source kinds;
-- fault information;
-- before/after evidence snapshots.
+### Phase 3C
 
-These Phase 3 extensions are pre-approved.
+Adds, via a new additive migration (never editing the Phase 2E/2F migration files):
+
+- `chaos_run_id` (nullable FK → `chaos_runs.id`, `ON DELETE RESTRICT`) plus its index;
+- widens `source_kind` to `REAL_RAZORPAY_WEBHOOK` + `PAYCHAOS_REPLAY` only (not the full four-value
+  target vocabulary — see "Column/Value Phasing Note" above);
+- the `event_processing_attempts_replay_provenance_valid` CHECK;
+- a narrow, signature-preserving revision of the `process_webhook_payment_event` transaction's
+  processing-attempt provenance admission gate (`supabase/migrations/20260828000000_phase2f_merchant_processing.sql`'s
+  function body is never edited on disk — the revision lives entirely in the new Phase 3C migration via
+  `CREATE OR REPLACE FUNCTION` with the identical signature).
+
+### Later Phase 3 (deferred)
+
+- `PAYCHAOS_SIMULATION` / `TEST_FIXTURE` source kinds;
+- `fault_action`;
+- `state_before` / `state_after` evidence snapshots (Phase 3E).
+
+These remain pre-approved but unimplemented until the phases that actually produce them exist.
 
 ---
 

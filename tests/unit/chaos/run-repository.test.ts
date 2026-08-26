@@ -17,15 +17,19 @@ interface MockResult {
 }
 
 type InsertFn = (payload: Record<string, unknown>) => FakeQueryBuilder;
+type UpdateFn = (payload: Record<string, unknown>) => FakeQueryBuilder;
 type SelectFn = (columns?: string) => FakeQueryBuilder;
 type EqFn = (column: string, value: unknown) => FakeQueryBuilder;
+type IsFn = (column: string, value: unknown) => FakeQueryBuilder;
 type SingleFn = () => Promise<MockResult>;
 type MaybeSingleFn = () => Promise<MockResult>;
 
 interface FakeQueryBuilder extends PromiseLike<MockResult> {
   insert: Mock<InsertFn>;
+  update: Mock<UpdateFn>;
   select: Mock<SelectFn>;
   eq: Mock<EqFn>;
+  is: Mock<IsFn>;
   single: Mock<SingleFn>;
   maybeSingle: Mock<MaybeSingleFn>;
 }
@@ -33,8 +37,10 @@ interface FakeQueryBuilder extends PromiseLike<MockResult> {
 function makeQueryBuilder(result: MockResult): FakeQueryBuilder {
   const builder: FakeQueryBuilder = {
     insert: vi.fn<InsertFn>(() => builder),
+    update: vi.fn<UpdateFn>(() => builder),
     select: vi.fn<SelectFn>(() => builder),
     eq: vi.fn<EqFn>(() => builder),
+    is: vi.fn<IsFn>(() => builder),
     single: vi.fn<SingleFn>(async () => result),
     maybeSingle: vi.fn<MaybeSingleFn>(async () => result),
     then: (onfulfilled, onrejected) =>
@@ -93,7 +99,7 @@ describe("lib/chaos/run-repository.ts — module surface", () => {
     expect(source).toMatch(/import\s+["']server-only["']/);
   });
 
-  it("exposes exactly the three approved P0 persistence functions — no speculative Phase 3C+ lifecycle function", async () => {
+  it("exposes exactly the six approved P0 persistence/lifecycle functions (Phase 3B's original three, plus Phase 3C's three narrow C01 lifecycle transitions) — no speculative generic lifecycle function", async () => {
     const mod = await import("@/lib/chaos/run-repository");
     // `ChaosRunRepositoryError` is a class, which is also `typeof === "function"`
     // in JS — excluded here deliberately since it is an error type, not a
@@ -108,15 +114,15 @@ describe("lib/chaos/run-repository.ts — module surface", () => {
         "createBlockedChaosRun",
         "createPendingChaosRun",
         "getChaosRunById",
+        "startPendingC01RunAtomically",
+        "completeRunningC01RunUnknown",
+        "failRunningC01RunExecution",
       ].sort(),
     );
-    for (const forbidden of [
-      "startRun",
-      "transitionRun",
-      "completeRun",
-      "failRun",
-      "updateFaultState",
-    ]) {
+    // Generic/speculative names Phase 3B explicitly avoided remain absent —
+    // Phase 3C added only the three narrow, scenario-scoped transitions
+    // above, never a generic transitionRun/updateFaultState.
+    for (const forbidden of ["transitionRun", "updateFaultState"]) {
       expect(mod).not.toHaveProperty(forbidden);
     }
   });
@@ -501,5 +507,168 @@ describe("getChaosRunById", () => {
     } catch (err) {
       expect((err as Error).message).not.toContain("leaked-secret-detail");
     }
+  });
+});
+
+describe("startPendingC01RunAtomically (Phase 3C)", () => {
+  it("issues a single atomic conditional UPDATE scoped to id/scenario_id/status/fault_type/outcome — never a SELECT-then-UPDATE", async () => {
+    const builder = makeQueryBuilder({
+      data: fakeChaosRunRow({ status: "RUNNING" }),
+      error: null,
+    });
+    fromMock.mockReturnValue(builder);
+    const { startPendingC01RunAtomically } =
+      await import("@/lib/chaos/run-repository");
+    const fixedNow = new Date("2026-03-03T00:00:00.000Z");
+
+    await startPendingC01RunAtomically(RUN_ID, () => fixedNow);
+
+    expect(fromMock).toHaveBeenCalledWith("chaos_runs");
+    expect(builder.update).toHaveBeenCalledWith({
+      status: "RUNNING",
+      started_at: fixedNow.toISOString(),
+      updated_at: fixedNow.toISOString(),
+    });
+    expect(builder.eq).toHaveBeenCalledWith("id", RUN_ID);
+    expect(builder.eq).toHaveBeenCalledWith("scenario_id", "C01");
+    expect(builder.eq).toHaveBeenCalledWith("status", "PENDING");
+    expect(builder.eq).toHaveBeenCalledWith("fault_type", "REPLAY_EVENT");
+    expect(builder.is).toHaveBeenCalledWith("outcome", null);
+  });
+
+  it("returns the claimed row on success", async () => {
+    const row = fakeChaosRunRow({ status: "RUNNING" });
+    fromMock.mockReturnValue(makeQueryBuilder({ data: row, error: null }));
+    const { startPendingC01RunAtomically } =
+      await import("@/lib/chaos/run-repository");
+    expect(await startPendingC01RunAtomically(RUN_ID)).toEqual(row);
+  });
+
+  it("returns null (never throws) when zero rows matched — already claimed or not eligible", async () => {
+    fromMock.mockReturnValue(makeQueryBuilder({ data: null, error: null }));
+    const { startPendingC01RunAtomically } =
+      await import("@/lib/chaos/run-repository");
+    expect(await startPendingC01RunAtomically(RUN_ID)).toBeNull();
+  });
+
+  it("throws ChaosRunRepositoryError on a Supabase error, never leaking the raw error", async () => {
+    fromMock.mockReturnValue(
+      makeQueryBuilder({
+        data: null,
+        error: { message: "leaked-secret-detail" },
+      }),
+    );
+    const { startPendingC01RunAtomically, ChaosRunRepositoryError } =
+      await import("@/lib/chaos/run-repository");
+    await expect(startPendingC01RunAtomically(RUN_ID)).rejects.toBeInstanceOf(
+      ChaosRunRepositoryError,
+    );
+  });
+});
+
+describe("completeRunningC01RunUnknown (Phase 3C)", () => {
+  it("updates status=COMPLETED/outcome=UNKNOWN/error_message_redacted=NULL, scoped to status=RUNNING only", async () => {
+    const builder = makeQueryBuilder({
+      data: fakeChaosRunRow({ status: "COMPLETED", outcome: "UNKNOWN" }),
+      error: null,
+    });
+    fromMock.mockReturnValue(builder);
+    const { completeRunningC01RunUnknown } =
+      await import("@/lib/chaos/run-repository");
+    const fixedNow = new Date("2026-03-03T01:00:00.000Z");
+
+    await completeRunningC01RunUnknown(RUN_ID, () => fixedNow);
+
+    expect(builder.update).toHaveBeenCalledWith({
+      status: "COMPLETED",
+      outcome: "UNKNOWN",
+      completed_at: fixedNow.toISOString(),
+      updated_at: fixedNow.toISOString(),
+      error_message_redacted: null,
+    });
+    expect(builder.eq).toHaveBeenCalledWith("id", RUN_ID);
+    expect(builder.eq).toHaveBeenCalledWith("status", "RUNNING");
+  });
+
+  it("returns null when the run is not RUNNING", async () => {
+    fromMock.mockReturnValue(makeQueryBuilder({ data: null, error: null }));
+    const { completeRunningC01RunUnknown } =
+      await import("@/lib/chaos/run-repository");
+    expect(await completeRunningC01RunUnknown(RUN_ID)).toBeNull();
+  });
+
+  it("throws ChaosRunRepositoryError on a Supabase error, never leaking the raw error", async () => {
+    fromMock.mockReturnValue(
+      makeQueryBuilder({
+        data: null,
+        error: { message: "leaked-secret-detail" },
+      }),
+    );
+    const { completeRunningC01RunUnknown, ChaosRunRepositoryError } =
+      await import("@/lib/chaos/run-repository");
+    await expect(completeRunningC01RunUnknown(RUN_ID)).rejects.toBeInstanceOf(
+      ChaosRunRepositoryError,
+    );
+  });
+});
+
+describe("failRunningC01RunExecution (Phase 3C)", () => {
+  it("updates status=FAILED/outcome=ERROR with the given safe reason, scoped to status=RUNNING only", async () => {
+    const builder = makeQueryBuilder({
+      data: fakeChaosRunRow({ status: "FAILED", outcome: "ERROR" }),
+      error: null,
+    });
+    fromMock.mockReturnValue(builder);
+    const { failRunningC01RunExecution } =
+      await import("@/lib/chaos/run-repository");
+    const fixedNow = new Date("2026-03-03T02:00:00.000Z");
+
+    await failRunningC01RunExecution(
+      RUN_ID,
+      "Chaos replay execution failed before the intended scenario could complete.",
+      () => fixedNow,
+    );
+
+    expect(builder.update).toHaveBeenCalledWith({
+      status: "FAILED",
+      outcome: "ERROR",
+      completed_at: fixedNow.toISOString(),
+      updated_at: fixedNow.toISOString(),
+      error_message_redacted:
+        "Chaos replay execution failed before the intended scenario could complete.",
+    });
+    expect(builder.eq).toHaveBeenCalledWith("id", RUN_ID);
+    expect(builder.eq).toHaveBeenCalledWith("status", "RUNNING");
+  });
+
+  it("never persists a raw error object as the reason — only the safe string the caller supplies", async () => {
+    const builder = makeQueryBuilder({
+      data: fakeChaosRunRow({ status: "FAILED", outcome: "ERROR" }),
+      error: null,
+    });
+    fromMock.mockReturnValue(builder);
+    const { failRunningC01RunExecution } =
+      await import("@/lib/chaos/run-repository");
+
+    await failRunningC01RunExecution(RUN_ID, "safe fixed reason");
+
+    const updatePayload = builder.update.mock.calls[0]?.[0] as {
+      error_message_redacted: string;
+    };
+    expect(updatePayload.error_message_redacted).toBe("safe fixed reason");
+  });
+
+  it("throws ChaosRunRepositoryError on a Supabase error, never leaking the raw error", async () => {
+    fromMock.mockReturnValue(
+      makeQueryBuilder({
+        data: null,
+        error: { message: "leaked-secret-detail" },
+      }),
+    );
+    const { failRunningC01RunExecution, ChaosRunRepositoryError } =
+      await import("@/lib/chaos/run-repository");
+    await expect(
+      failRunningC01RunExecution(RUN_ID, "safe reason"),
+    ).rejects.toBeInstanceOf(ChaosRunRepositoryError);
   });
 });

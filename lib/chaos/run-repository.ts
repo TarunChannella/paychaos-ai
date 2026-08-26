@@ -6,15 +6,16 @@
  * else. It never replays a webhook, injects a fault, calls Razorpay, or
  * mutates `orders`/`payment_attempts`/`payments`/`fulfilments` in any way.
  *
- * Exported surface is deliberately exactly three functions:
- *   - `createPendingChaosRun`  — a Phase 3A `PRECHECK_PASSED` result.
- *   - `createBlockedChaosRun`  — a persistable Phase 3A `BLOCKED` result
- *     (see `lib/chaos/run-service.ts` for which precheck IDs qualify).
- *   - `getChaosRunById`        — read-only lookup.
- * No `startRun`/`transitionRun`/`completeRun`/`failRun`/
- * `updateFaultState`, and no other speculative Phase 3C+ lifecycle
- * function — those belong to whichever later phase actually executes a
- * mechanism and needs them.
+ * Phase 3B's exported surface was deliberately exactly three functions
+ * (`createPendingChaosRun`/`createBlockedChaosRun`/`getChaosRunById`) — no
+ * lifecycle-transition function existed yet, since no phase executed a
+ * mechanism yet. Phase 3C is that phase for C01: it adds exactly the three
+ * narrow lifecycle transitions C01's controlled replay actually needs —
+ * `startPendingC01RunAtomically`, `completeRunningC01RunUnknown`,
+ * `failRunningC01RunExecution` — each a single atomic conditional UPDATE
+ * (never a SELECT-then-UPDATE race), each scoped narrowly to the exact
+ * status transition it names. This is an ADDITIVE change: the three frozen
+ * Phase 3B functions above are byte-for-byte unchanged.
  *
  * Every entity FK (`orderId`/`paymentAttemptId`/`paymentId`/
  * `sourceWebhookEventId`) is optional and nullable here by design — this
@@ -182,6 +183,141 @@ export async function createBlockedChaosRun(
     throw new ChaosRunRepositoryError(
       "CHAOS_RUN_BLOCKED_INSERT_FAILED",
       "Failed to persist a blocked chaos run.",
+    );
+  }
+
+  return data;
+}
+
+/**
+ * Phase 3C — atomically claims one PENDING C01/`REPLAY_EVENT` chaos run for
+ * execution: `PENDING -> RUNNING`, exactly once (this task's Section 8A
+ * "atomic start"). A single conditional `UPDATE ... WHERE ... RETURNING`
+ * (never a `SELECT` followed by an unconditional `UPDATE`, which would race
+ * under two concurrent callers) — the same atomic-conditional-UPDATE idiom
+ * already established in this codebase by
+ * `lib/webhooks/event-processing-repository.ts`'s
+ * `markEventProcessingAttemptFailedIfNotFinal`.
+ *
+ * Returns `null` (never throws for this case) when zero rows matched the
+ * WHERE clause — the run does not exist, is not `C01`, is not
+ * `REPLAY_EVENT`, does not have `outcome IS NULL`, or (the expected steady
+ * state under a genuine race) has already been claimed by a concurrent
+ * caller and is no longer `PENDING`. The caller must never execute a
+ * replay when this returns `null`.
+ */
+export async function startPendingC01RunAtomically(
+  id: string,
+  now: () => Date = () => new Date(),
+): Promise<ChaosRunRow | null> {
+  const client = getSupabaseServerClient();
+  const timestamp = now().toISOString();
+
+  const { data, error } = await client
+    .from("chaos_runs")
+    .update({
+      status: "RUNNING",
+      started_at: timestamp,
+      updated_at: timestamp,
+    })
+    .eq("id", id)
+    .eq("scenario_id", "C01")
+    .eq("status", "PENDING")
+    .eq("fault_type", "REPLAY_EVENT")
+    .is("outcome", null)
+    .select()
+    .maybeSingle();
+
+  if (error) {
+    throw new ChaosRunRepositoryError(
+      "CHAOS_RUN_START_FAILED",
+      "Failed to atomically start the chaos run.",
+    );
+  }
+
+  return data;
+}
+
+/**
+ * Phase 3C — completes a successfully-replayed RUNNING run (this task's
+ * Section 8B "successful completion"): `RUNNING -> COMPLETED`/`UNKNOWN`.
+ * `status = COMPLETED` means the chaos mechanism execution completed;
+ * `outcome = UNKNOWN` means no deterministic Money Invariant evaluation has
+ * run yet (Phase 3F's job) — this is NOT a merchant reliability verdict.
+ * The conditional `WHERE status = 'RUNNING'` means this can only ever
+ * transition a run this same execution path already atomically claimed;
+ * returns `null` if that precondition somehow does not hold (should not
+ * happen in the normal flow — the caller treats it as a technical
+ * anomaly).
+ */
+export async function completeRunningC01RunUnknown(
+  id: string,
+  now: () => Date = () => new Date(),
+): Promise<ChaosRunRow | null> {
+  const client = getSupabaseServerClient();
+  const timestamp = now().toISOString();
+
+  const { data, error } = await client
+    .from("chaos_runs")
+    .update({
+      status: "COMPLETED",
+      outcome: "UNKNOWN",
+      completed_at: timestamp,
+      updated_at: timestamp,
+      error_message_redacted: null,
+    })
+    .eq("id", id)
+    .eq("status", "RUNNING")
+    .select()
+    .maybeSingle();
+
+  if (error) {
+    throw new ChaosRunRepositoryError(
+      "CHAOS_RUN_COMPLETE_FAILED",
+      "Failed to persist chaos run completion.",
+    );
+  }
+
+  return data;
+}
+
+/**
+ * Phase 3C — records a technical execution failure on a RUNNING run (this
+ * task's Section 8C "technical execution failure"): `RUNNING ->
+ * FAILED`/`ERROR`. This is NEVER how a merchant reliability FAIL is
+ * represented (that is `COMPLETED`/`FAIL`, a later Phase 3F deterministic
+ * invariant-evaluation outcome) — `FAILED`/`ERROR` means the replay
+ * execution itself could not complete for a technical reason before the
+ * intended scenario finished. `safeReason` must already be a fixed, safe,
+ * redacted string — this function never accepts or persists a raw
+ * Postgres/Supabase error, a stack trace, a secret, or a raw payload.
+ */
+export async function failRunningC01RunExecution(
+  id: string,
+  safeReason: string,
+  now: () => Date = () => new Date(),
+): Promise<ChaosRunRow | null> {
+  const client = getSupabaseServerClient();
+  const timestamp = now().toISOString();
+
+  const { data, error } = await client
+    .from("chaos_runs")
+    .update({
+      status: "FAILED",
+      outcome: "ERROR",
+      completed_at: timestamp,
+      updated_at: timestamp,
+      error_message_redacted: safeReason,
+    })
+    .eq("id", id)
+    .eq("status", "RUNNING")
+    .select()
+    .maybeSingle();
+
+  if (error) {
+    throw new ChaosRunRepositoryError(
+      "CHAOS_RUN_FAIL_FAILED",
+      "Failed to persist chaos run technical failure.",
     );
   }
 

@@ -20,18 +20,26 @@
  * `process_webhook_payment_event` RPC
  * (supabase/migrations/20260828000000_phase2f_merchant_processing.sql), and
  * the Phase 3B additive `chaos_runs` table
- * (supabase/migrations/20260829000000_phase3b_chaos_runs.sql — NOT YET
- * APPLIED to the remote project; this type describes it in advance so
- * `lib/chaos/run-repository.ts` can be written and unit-tested against a
- * mocked client before the migration is manually reviewed and applied).
+ * (supabase/migrations/20260829000000_phase3b_chaos_runs.sql), and the
+ * Phase 3C additive `event_processing_attempts.chaos_run_id` column plus
+ * widened `source_kind` (supabase/migrations/20260830000000_phase3c_controlled_replay.sql
+ * — NOT YET APPLIED to the remote project; this type describes it in
+ * advance so `lib/chaos/replay-repository.ts` can be written and
+ * unit-tested against a mocked client before the migration is manually
+ * reviewed and applied).
  *
  * Do NOT add Phase 3C+ tables here (`invariant_results`, `findings`,
  * `regression_runs`) — those are created and typed by the phases that own
- * them. `event_processing_attempts` here is deliberately the Phase 2
- * SUBSET ONLY — no `chaos_run_id`/`fault_action`/`state_before`/
- * `state_after` (docs/DATABASE.md Section 14 "Phase Ownership" pre-approves
- * those as later, separate additive columns — Phase 3B does not add them;
- * see the Phase 3B migration's own header comment).
+ * them. `event_processing_attempts.source_kind` here is deliberately
+ * scoped to exactly the two values the current CHECK constraint allows
+ * (`REAL_RAZORPAY_WEBHOOK`, `PAYCHAOS_REPLAY`) — NOT the full four-value
+ * approved-target vocabulary docs/DATABASE.md Section 14 documents.
+ * `PAYCHAOS_SIMULATION`/`TEST_FIXTURE` remain unimplemented surface until
+ * their own later phases; adding them to this type would misrepresent what
+ * the database will currently accept. `event_processing_attempts` also
+ * still excludes `fault_action`/`state_before`/`state_after` — those
+ * remain later, separate additive columns (docs/DATABASE.md Section 14
+ * "Phase Ownership").
  *
  * This type only describes shape for `createClient<Database>()`. It is not
  * itself a migration and does not create/alter anything.
@@ -57,6 +65,16 @@ export type EventProcessingAttemptStatus =
   | "SUCCEEDED"
   | "FAILED"
   | "SKIPPED_DUPLICATE";
+
+/**
+ * Phase 3C — the currently-persistable subset of `source_kind`, matching
+ * the current `event_processing_attempts_source_kind_valid` CHECK exactly.
+ * `PAYCHAOS_SIMULATION`/`TEST_FIXTURE` are approved future target values
+ * (docs/DATABASE.md Section 14) but are deliberately excluded here — the
+ * database does not currently accept them.
+ */
+export type EventProcessingAttemptSourceKind =
+  "REAL_RAZORPAY_WEBHOOK" | "PAYCHAOS_REPLAY";
 
 /** Phase 3B — frozen P0 scenario catalogue, matching lib/chaos/types.ts's ChaosScenarioId exactly. */
 export type ChaosRunScenarioId = "C01" | "C03" | "C07" | "C11";
@@ -334,7 +352,8 @@ export interface Database {
           webhook_event_id: string | null;
           payment_attempt_id: string | null;
           payment_id: string | null;
-          source_kind: "REAL_RAZORPAY_WEBHOOK";
+          chaos_run_id: string | null;
+          source_kind: EventProcessingAttemptSourceKind;
           is_duplicate_delivery: boolean;
           status: EventProcessingAttemptStatus;
           normalized_event: Record<string, unknown>;
@@ -348,7 +367,8 @@ export interface Database {
           webhook_event_id?: string | null;
           payment_attempt_id?: string | null;
           payment_id?: string | null;
-          source_kind?: "REAL_RAZORPAY_WEBHOOK";
+          chaos_run_id?: string | null;
+          source_kind?: EventProcessingAttemptSourceKind;
           is_duplicate_delivery?: boolean;
           status?: EventProcessingAttemptStatus;
           normalized_event?: Record<string, unknown>;
@@ -362,7 +382,8 @@ export interface Database {
           webhook_event_id?: string | null;
           payment_attempt_id?: string | null;
           payment_id?: string | null;
-          source_kind?: "REAL_RAZORPAY_WEBHOOK";
+          chaos_run_id?: string | null;
+          source_kind?: EventProcessingAttemptSourceKind;
           is_duplicate_delivery?: boolean;
           status?: EventProcessingAttemptStatus;
           normalized_event?: Record<string, unknown>;
@@ -391,6 +412,13 @@ export interface Database {
             columns: ["payment_id"];
             isOneToOne: false;
             referencedRelation: "payments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "event_processing_attempts_chaos_run_id_fkey";
+            columns: ["chaos_run_id"];
+            isOneToOne: false;
+            referencedRelation: "chaos_runs";
             referencedColumns: ["id"];
           },
         ];

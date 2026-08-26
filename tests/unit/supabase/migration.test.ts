@@ -991,3 +991,331 @@ describe("Phase 3B migration — chaos_runs static structural coverage (architec
     });
   });
 });
+
+describe("Phase 3C migration — controlled replay compatibility (architect-approved Phase 2F admission-gate fix)", () => {
+  const phase3cMigration = migrations.find((m) => m.name.includes("phase3c"));
+  const phase2eMigration = migrations.find((m) => m.name.includes("phase2e"));
+  const phase2fMigration = migrations.find((m) => m.name.includes("phase2f"));
+
+  it("found the Phase 3C migration file", () => {
+    expect(phase3cMigration).toBeDefined();
+  });
+
+  it("does NOT create a new table (no functional CREATE TABLE statement — its own header comment legitimately mentions the phrase by name while explaining that historical CREATE TABLE statements are untouched, so only non-comment lines are checked here)", () => {
+    const functionalSql = phase3cMigration!.sql
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("--"))
+      .join("\n");
+    expect(functionalSql).not.toMatch(/create\s+table/i);
+  });
+
+  it("does not edit the historical Phase 2E or Phase 2F migration files (both remain byte-for-byte present, unchanged, and are not the file this test is reading edits from)", () => {
+    expect(phase2eMigration).toBeDefined();
+    expect(phase2fMigration).toBeDefined();
+    // The historical files' own CREATE TABLE/CREATE FUNCTION statements
+    // still exist verbatim in the combined SQL — this migration only adds
+    // NEW statements in its OWN file, never mutates theirs.
+    expect(phase2eMigration!.sql).toMatch(
+      /create table\s+public\.event_processing_attempts/i,
+    );
+    expect(phase2fMigration!.sql).toMatch(
+      /create function public\.process_webhook_payment_event/i,
+    );
+  });
+
+  describe("event_processing_attempts.chaos_run_id", () => {
+    it("adds chaos_run_id as a nullable FK to chaos_runs(id) ON DELETE RESTRICT", () => {
+      expect(phase3cMigration!.sql).toMatch(
+        /alter table public\.event_processing_attempts\s+add column chaos_run_id uuid references public\.chaos_runs \(id\) on delete restrict;/i,
+      );
+    });
+
+    it("adds the chaos_run_id index", () => {
+      expect(phase3cMigration!.sql).toMatch(
+        /create index event_processing_attempts_chaos_run_id_idx\s+on public\.event_processing_attempts \(chaos_run_id\);/i,
+      );
+    });
+  });
+
+  describe("source_kind widening", () => {
+    it("drops the old event_processing_attempts_source_kind_valid constraint", () => {
+      expect(phase3cMigration!.sql).toMatch(
+        /alter table public\.event_processing_attempts\s+drop constraint event_processing_attempts_source_kind_valid;/i,
+      );
+    });
+
+    it("recreates it allowing exactly REAL_RAZORPAY_WEBHOOK and PAYCHAOS_REPLAY", () => {
+      expect(phase3cMigration!.sql).toMatch(
+        /source_kind in \('REAL_RAZORPAY_WEBHOOK', 'PAYCHAOS_REPLAY'\)/,
+      );
+    });
+
+    it("does NOT enable PAYCHAOS_SIMULATION or TEST_FIXTURE in the new CHECK constraint", () => {
+      const constraintMatch = phase3cMigration!.sql.match(
+        /add constraint event_processing_attempts_source_kind_valid check \(([\s\S]*?)\);/i,
+      );
+      expect(constraintMatch).not.toBeNull();
+      const constraintBody = constraintMatch![1]!;
+      expect(constraintBody).not.toMatch(/PAYCHAOS_SIMULATION/);
+      expect(constraintBody).not.toMatch(/TEST_FIXTURE/);
+    });
+  });
+
+  describe("PAYCHAOS_REPLAY provenance constraint", () => {
+    it("adds event_processing_attempts_replay_provenance_valid requiring webhook_event_id, chaos_run_id, and is_duplicate_delivery = false", () => {
+      const constraintMatch = phase3cMigration!.sql.match(
+        /add constraint event_processing_attempts_replay_provenance_valid check \(([\s\S]*?)\);/i,
+      );
+      expect(constraintMatch).not.toBeNull();
+      const body = constraintMatch![1]!;
+      expect(body).toMatch(/webhook_event_id is not null/i);
+      expect(body).toMatch(/chaos_run_id is not null/i);
+      expect(body).toMatch(/is_duplicate_delivery = false/i);
+    });
+  });
+
+  describe("RLS / privileges unchanged", () => {
+    it("contains no CREATE POLICY, no GRANT to anon/authenticated, and no ALTER TABLE ... ENABLE ROW LEVEL SECURITY (RLS shape is untouched — already enabled by Phase 2E)", () => {
+      expect(phase3cMigration!.sql).not.toMatch(/create policy/i);
+      expect(phase3cMigration!.sql).not.toMatch(/grant[^;]*\bto\s+anon\b/i);
+      expect(phase3cMigration!.sql).not.toMatch(
+        /grant[^;]*\bto\s+authenticated\b/i,
+      );
+      expect(phase3cMigration!.sql).not.toMatch(/enable row level security/i);
+    });
+
+    it("re-asserts service_role-only execute on process_webhook_payment_event, still revoked from public", () => {
+      expect(phase3cMigration!.sql).toMatch(
+        /revoke all on function public\.process_webhook_payment_event\(uuid\) from public;/i,
+      );
+      expect(phase3cMigration!.sql).toMatch(
+        /grant execute on function public\.process_webhook_payment_event\(uuid\) to service_role;/i,
+      );
+    });
+  });
+
+  describe("process_webhook_payment_event — CREATE OR REPLACE, signature-preserving", () => {
+    const headerMatch = phase3cMigration
+      ? phase3cMigration.sql.match(
+          /create or replace function public\.process_webhook_payment_event\([\s\S]*?as \$\$/i,
+        )
+      : null;
+    const bodyMatch = phase3cMigration
+      ? phase3cMigration.sql.match(
+          /create or replace function public\.process_webhook_payment_event\([\s\S]*?as \$\$([\s\S]*?)\n\$\$;/i,
+        )
+      : null;
+    const functionHeader = headerMatch ? headerMatch[0]! : "";
+    const functionBody = bodyMatch ? bodyMatch[1]! : "";
+
+    it("uses CREATE OR REPLACE FUNCTION with the identical signature (uuid) — never CREATE FUNCTION (which would conflict) and never a renamed function", () => {
+      expect(functionHeader.length).toBeGreaterThan(0);
+      expect(phase3cMigration!.sql).toMatch(
+        /create or replace function public\.process_webhook_payment_event\(\s*p_processing_attempt_id uuid\s*\)/i,
+      );
+    });
+
+    it("preserves SECURITY INVOKER and pinned search_path", () => {
+      expect(functionHeader).toMatch(/security invoker/i);
+      expect(functionHeader).not.toMatch(/security definer/i);
+      expect(functionHeader).toMatch(/set search_path = public/i);
+    });
+
+    it("preserves the three supported P0 event types (payment.captured/payment.failed/order.paid)", () => {
+      expect(functionBody).toMatch(
+        /'payment\.captured', 'payment\.failed', 'order\.paid'/,
+      );
+    });
+
+    it("UNCHANGED: normalized_event.sourceKind must still equal REAL_RAZORPAY_WEBHOOK regardless of the processing attempt's own source_kind", () => {
+      expect(functionBody).toMatch(
+        /if v_norm_source_kind is distinct from 'REAL_RAZORPAY_WEBHOOK' then/i,
+      );
+    });
+
+    it("UNCHANGED: the correlated canonical webhook_events row must still be REAL_RAZORPAY_WEBHOOK + signature_verified = true", () => {
+      expect(functionBody).toMatch(
+        /v_webhook\.source_kind <> 'REAL_RAZORPAY_WEBHOOK' or v_webhook\.signature_verified is not true/i,
+      );
+    });
+
+    it("Phase 3C's ONLY admission change: the processing-attempt gate now permits PAYCHAOS_REPLAY (requiring chaos_run_id and is_duplicate_delivery = false), in addition to REAL_RAZORPAY_WEBHOOK", () => {
+      expect(functionBody).toMatch(
+        /source_kind not in \('REAL_RAZORPAY_WEBHOOK', 'PAYCHAOS_REPLAY'\)/i,
+      );
+      expect(functionBody).toMatch(
+        /v_attempt\.source_kind = 'PAYCHAOS_REPLAY'/i,
+      );
+      expect(functionBody).toMatch(/v_attempt\.chaos_run_id is null/i);
+      expect(functionBody).toMatch(
+        /v_attempt\.is_duplicate_delivery is not false/i,
+      );
+    });
+
+    it("still requires webhook_event_id is not null for both source kinds", () => {
+      expect(functionBody).toMatch(
+        /v_attempt\.webhook_event_id is null[\s\S]*?raise exception 'PROCESSING_SOURCE_INVALID/i,
+      );
+    });
+
+    it("preserves the fixed FOR UPDATE lock order and the fulfilment ON CONFLICT idempotency boundary", () => {
+      const forUpdateCount = (functionBody.match(/for update/gi) ?? []).length;
+      expect(forUpdateCount).toBeGreaterThanOrEqual(5);
+      expect(functionBody).toMatch(
+        /on conflict \(idempotency_key\) do update/i,
+      );
+    });
+
+    it("preserves every deterministic safe error code (no new error code was introduced)", () => {
+      for (const code of [
+        "PROCESSING_ATTEMPT_NOT_FOUND",
+        "PROCESSING_ATTEMPT_NOT_READY",
+        "PROCESSING_SOURCE_INVALID",
+        "PROCESSING_EVENT_INVALID",
+        "PROCESSING_CORRELATION_INVALID",
+        "PROCESSING_PAYMENT_REQUIRED",
+        "PROCESSING_AMOUNT_MISMATCH",
+        "PROCESSING_CURRENCY_MISMATCH",
+        "PROCESSING_FULFILMENT_CONFLICT",
+      ]) {
+        expect(functionBody).toContain(code);
+      }
+    });
+
+    it("no dynamic SQL was introduced (no EXECUTE statement, no format()/quote_ident() string-building)", () => {
+      expect(functionBody).not.toMatch(/\bexecute\s+(format|'|")/i);
+      expect(functionBody).not.toMatch(/\bformat\s*\(/i);
+      expect(functionBody).not.toMatch(/\bquote_ident\s*\(/i);
+    });
+  });
+
+  describe("scope: does not touch chaos_runs, does not enable PAYCHAOS_SIMULATION/TEST_FIXTURE, does not add evidence-snapshot columns", () => {
+    it("does not create or alter chaos_runs", () => {
+      expect(phase3cMigration!.sql).not.toMatch(
+        /create\s+table\s+public\.chaos_runs/i,
+      );
+      expect(phase3cMigration!.sql).not.toMatch(
+        /alter table\s+public\.chaos_runs/i,
+      );
+    });
+
+    it("does not add fault_action/state_before/state_after columns", () => {
+      for (const forbidden of ["fault_action", "state_before", "state_after"]) {
+        expect(phase3cMigration!.sql).not.toMatch(
+          new RegExp(`add column\\s+${forbidden}\\b`, "i"),
+        );
+      }
+    });
+
+    it("does not create invariant_results, findings, or regression_runs", () => {
+      for (const forbidden of [
+        "invariant_results",
+        "findings",
+        "regression_runs",
+      ]) {
+        expect(phase3cMigration!.sql).not.toMatch(
+          new RegExp(`create table\\s+public\\.${forbidden}`, "i"),
+        );
+      }
+    });
+  });
+
+  describe("differential regression proof — process_webhook_payment_event is IDENTICAL to frozen Phase 2F outside the one approved admission delta (architect correction, Finding 4)", () => {
+    const phase2fBodyMatch = phase2fMigration!.sql.match(
+      /create function public\.process_webhook_payment_event\([\s\S]*?as \$\$([\s\S]*?)\n\$\$;/i,
+    );
+    const phase3cBodyMatch = phase3cMigration!.sql.match(
+      /create or replace function public\.process_webhook_payment_event\([\s\S]*?as \$\$([\s\S]*?)\n\$\$;/i,
+    );
+    const phase2fBody = phase2fBodyMatch ? phase2fBodyMatch[1]! : "";
+    const phase3cBody = phase3cBodyMatch ? phase3cBodyMatch[1]! : "";
+
+    // Strips `--` line comments (this function body never uses `--` inside
+    // a string literal, confirmed by inspection, so a plain per-line split
+    // is safe), then collapses all whitespace/newlines to single spaces.
+    // This lets the two bodies be compared for SEMANTIC equivalence without
+    // being defeated by the deliberately reworded/shortened comments the
+    // Phase 3C copy carries (e.g. the Phase 2F "Finding A/B/C/D" review
+    // annotations are not repeated verbatim) — comments are stripped
+    // entirely before comparison, so their wording cannot hide, and cannot
+    // falsely flag, a real code difference.
+    function normalizeSql(body: string): string {
+      return body
+        .split("\n")
+        .map((line) => {
+          const commentIdx = line.indexOf("--");
+          return commentIdx === -1 ? line : line.slice(0, commentIdx);
+        })
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    // The frozen Phase 2F admission block, verbatim from the applied
+    // migration file's own text.
+    const FROZEN_PHASE2F_ADMISSION_BLOCK = `
+      if v_attempt.source_kind <> 'REAL_RAZORPAY_WEBHOOK' or v_attempt.webhook_event_id is null then
+        raise exception 'PROCESSING_SOURCE_INVALID: processing attempt % does not carry valid REAL_RAZORPAY_WEBHOOK evidence', p_processing_attempt_id;
+      end if;
+    `;
+
+    // The ONE architect-approved Phase 3C widened admission block.
+    const PHASE3C_ADMISSION_BLOCK = `
+      if v_attempt.webhook_event_id is null
+         or v_attempt.source_kind not in ('REAL_RAZORPAY_WEBHOOK', 'PAYCHAOS_REPLAY')
+         or (
+           v_attempt.source_kind = 'PAYCHAOS_REPLAY'
+           and (v_attempt.chaos_run_id is null or v_attempt.is_duplicate_delivery is not false)
+         )
+      then
+        raise exception 'PROCESSING_SOURCE_INVALID: processing attempt % does not carry valid REAL_RAZORPAY_WEBHOOK or PAYCHAOS_REPLAY evidence', p_processing_attempt_id;
+      end if;
+    `;
+
+    it("found both function bodies", () => {
+      expect(phase2fBody.length).toBeGreaterThan(0);
+      expect(phase3cBody.length).toBeGreaterThan(0);
+    });
+
+    it("the Phase 2F body contains the frozen admission block exactly once", () => {
+      const normalizedBody = normalizeSql(phase2fBody);
+      const normalizedBlock = normalizeSql(FROZEN_PHASE2F_ADMISSION_BLOCK);
+      const occurrences = normalizedBody.split(normalizedBlock).length - 1;
+      expect(occurrences).toBe(1);
+    });
+
+    it("the Phase 3C body contains the expected widened admission block exactly once", () => {
+      const normalizedBody = normalizeSql(phase3cBody);
+      const normalizedBlock = normalizeSql(PHASE3C_ADMISSION_BLOCK);
+      const occurrences = normalizedBody.split(normalizedBlock).length - 1;
+      expect(occurrences).toBe(1);
+    });
+
+    it("after reverting Phase 3C's widened admission block back to the frozen Phase 2F admission block, the two normalized function bodies are IDENTICAL — proving no other business logic, lock ordering, correlation validation, fulfilment logic, payment.failed precedence, supported event set, or final state update changed", () => {
+      const normalizedPhase2fBody = normalizeSql(phase2fBody);
+      const normalizedPhase3cBody = normalizeSql(phase3cBody);
+      const normalizedNewBlock = normalizeSql(PHASE3C_ADMISSION_BLOCK);
+      const normalizedOldBlock = normalizeSql(FROZEN_PHASE2F_ADMISSION_BLOCK);
+
+      const revertedPhase3cBody = normalizedPhase3cBody.replace(
+        normalizedNewBlock,
+        normalizedOldBlock,
+      );
+
+      expect(revertedPhase3cBody).toBe(normalizedPhase2fBody);
+    });
+  });
+
+  it("the migration set still creates exactly the same 7 approved tables — Phase 3C adds no new table", () => {
+    const tableNames = extractCreateTableNames(combinedSql);
+    expect([...tableNames].sort()).toEqual([
+      "chaos_runs",
+      "event_processing_attempts",
+      "fulfilments",
+      "orders",
+      "payment_attempts",
+      "payments",
+      "webhook_events",
+    ]);
+  });
+});

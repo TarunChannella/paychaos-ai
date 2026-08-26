@@ -126,6 +126,13 @@ describe("Phase 2E — event_processing_attempts table (real Supabase)", () => {
   });
 
   // 49. invalid source_kind rejected.
+  //
+  // Phase 3C widened the current-schema source_kind CHECK to accept
+  // PAYCHAOS_REPLAY in addition to REAL_RAZORPAY_WEBHOOK (see the Phase 3C
+  // describe block in tests/unit/supabase/migration.test.ts for the
+  // historical-vs-current distinction), so PAYCHAOS_REPLAY is no longer a
+  // truly unsupported value here — a genuinely bogus value is used instead
+  // to keep proving the CHECK constraint itself is enforced.
   it("an invalid source_kind is rejected (23514)", async () => {
     const webhookEventId = await createTrackedWebhookEvent("bad-source-kind");
     try {
@@ -134,7 +141,7 @@ describe("Phase 2E — event_processing_attempts table (real Supabase)", () => {
         .insert({
           ...validAttemptInsert("bad-source-kind"),
           webhook_event_id: webhookEventId,
-          source_kind: "PAYCHAOS_REPLAY" as "REAL_RAZORPAY_WEBHOOK",
+          source_kind: "NOT_A_REAL_SOURCE_KIND" as "REAL_RAZORPAY_WEBHOOK",
         })
         .select()
         .single();
