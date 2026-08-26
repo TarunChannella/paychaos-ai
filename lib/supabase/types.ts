@@ -1,5 +1,5 @@
 /**
- * Phase 1C-A/2B/2C/2D/2E/2F — minimal Supabase `Database` type.
+ * Phase 1C-A/2B/2C/2D/2E/2F/3B — minimal Supabase `Database` type.
  *
  * Scoped EXACTLY to the tables that exist after the approved Phase 1
  * migration (`orders`, `payment_attempts`, `fulfilments` — see
@@ -14,18 +14,24 @@
  * (supabase/migrations/20260826000000_phase2d_webhook_events.sql), the
  * Phase 2E additive `event_processing_attempts` table plus the
  * `record_webhook_duplicate_delivery` RPC
- * (supabase/migrations/20260827000000_phase2e_webhook_dedup.sql), and the
+ * (supabase/migrations/20260827000000_phase2e_webhook_dedup.sql), the
  * Phase 2F additive `fulfilments.payment_id` /
  * `fulfilments.trigger_processing_attempt_id` columns plus the
  * `process_webhook_payment_event` RPC
- * (supabase/migrations/20260828000000_phase2f_merchant_processing.sql).
+ * (supabase/migrations/20260828000000_phase2f_merchant_processing.sql), and
+ * the Phase 3B additive `chaos_runs` table
+ * (supabase/migrations/20260829000000_phase3b_chaos_runs.sql — NOT YET
+ * APPLIED to the remote project; this type describes it in advance so
+ * `lib/chaos/run-repository.ts` can be written and unit-tested against a
+ * mocked client before the migration is manually reviewed and applied).
  *
- * Do NOT add Phase 3+ tables here (`chaos_runs`, `invariant_results`,
- * `findings`, `regression_runs`) — those are created and typed by the
- * phases that own them. `event_processing_attempts` here is deliberately
- * the Phase 2 SUBSET ONLY — no `chaos_run_id`/`fault_action`/
- * `state_before`/`state_after` (docs/DATABASE.md Section 14 "Phase
- * Ownership" pre-approves those as later, separate additive columns).
+ * Do NOT add Phase 3C+ tables here (`invariant_results`, `findings`,
+ * `regression_runs`) — those are created and typed by the phases that own
+ * them. `event_processing_attempts` here is deliberately the Phase 2
+ * SUBSET ONLY — no `chaos_run_id`/`fault_action`/`state_before`/
+ * `state_after` (docs/DATABASE.md Section 14 "Phase Ownership" pre-approves
+ * those as later, separate additive columns — Phase 3B does not add them;
+ * see the Phase 3B migration's own header comment).
  *
  * This type only describes shape for `createClient<Database>()`. It is not
  * itself a migration and does not create/alter anything.
@@ -51,6 +57,33 @@ export type EventProcessingAttemptStatus =
   | "SUCCEEDED"
   | "FAILED"
   | "SKIPPED_DUPLICATE";
+
+/** Phase 3B — frozen P0 scenario catalogue, matching lib/chaos/types.ts's ChaosScenarioId exactly. */
+export type ChaosRunScenarioId = "C01" | "C03" | "C07" | "C11";
+
+export type ChaosRunStatus = "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
+
+export type ChaosRunOutcome = "PASS" | "FAIL" | "UNKNOWN" | "BLOCKED" | "ERROR";
+
+/** Phase 3B — the three P0 fault primitives, matching lib/chaos/types.ts's ChaosFaultType exactly. NULL for C11, which has none. */
+export type ChaosRunFaultType =
+  "REPLAY_EVENT" | "INVALID_SIGNATURE_TEST" | "DROP_CLIENT_CONFIRMATION";
+
+/** Phase 3B — the ten official Chaos Run Precheck IDs, matching lib/chaos/types.ts's ChaosPrecheckId exactly. */
+export type ChaosRunFailedPrecheckId =
+  | "PRECHECK-01"
+  | "PRECHECK-02"
+  | "PRECHECK-03"
+  | "PRECHECK-04"
+  | "PRECHECK-05"
+  | "PRECHECK-06"
+  | "PRECHECK-07"
+  | "PRECHECK-08"
+  | "PRECHECK-09"
+  | "PRECHECK-10";
+
+export type ChaosRunDataClassification =
+  "RECORDED_TEST_EVIDENCE" | "SYNTHETIC_DEMO";
 
 export interface Database {
   public: {
@@ -413,6 +446,102 @@ export interface Database {
             columns: ["trigger_processing_attempt_id"];
             isOneToOne: false;
             referencedRelation: "event_processing_attempts";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      chaos_runs: {
+        Row: {
+          id: string;
+          scenario_id: ChaosRunScenarioId;
+          order_id: string | null;
+          payment_attempt_id: string | null;
+          payment_id: string | null;
+          source_webhook_event_id: string | null;
+          status: ChaosRunStatus;
+          outcome: ChaosRunOutcome | null;
+          fault_type: ChaosRunFaultType | null;
+          failed_precheck_id: ChaosRunFailedPrecheckId | null;
+          fault_config: Record<string, unknown>;
+          fault_state: Record<string, unknown>;
+          data_classification: ChaosRunDataClassification;
+          error_message_redacted: string | null;
+          started_at: string | null;
+          completed_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          scenario_id: ChaosRunScenarioId;
+          order_id?: string | null;
+          payment_attempt_id?: string | null;
+          payment_id?: string | null;
+          source_webhook_event_id?: string | null;
+          status?: ChaosRunStatus;
+          outcome?: ChaosRunOutcome | null;
+          fault_type?: ChaosRunFaultType | null;
+          failed_precheck_id?: ChaosRunFailedPrecheckId | null;
+          fault_config?: Record<string, unknown>;
+          fault_state?: Record<string, unknown>;
+          // Required, NOT optional: the database column has NO DEFAULT
+          // (architect correction — fail-closed provenance handling). Every
+          // insert must supply this explicitly; there is no server-side or
+          // TypeScript-level fallback.
+          data_classification: ChaosRunDataClassification;
+          error_message_redacted?: string | null;
+          started_at?: string | null;
+          completed_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          scenario_id?: ChaosRunScenarioId;
+          order_id?: string | null;
+          payment_attempt_id?: string | null;
+          payment_id?: string | null;
+          source_webhook_event_id?: string | null;
+          status?: ChaosRunStatus;
+          outcome?: ChaosRunOutcome | null;
+          fault_type?: ChaosRunFaultType | null;
+          failed_precheck_id?: ChaosRunFailedPrecheckId | null;
+          fault_config?: Record<string, unknown>;
+          fault_state?: Record<string, unknown>;
+          data_classification?: ChaosRunDataClassification;
+          error_message_redacted?: string | null;
+          started_at?: string | null;
+          completed_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "chaos_runs_order_id_fkey";
+            columns: ["order_id"];
+            isOneToOne: false;
+            referencedRelation: "orders";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "chaos_runs_payment_attempt_id_fkey";
+            columns: ["payment_attempt_id"];
+            isOneToOne: false;
+            referencedRelation: "payment_attempts";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "chaos_runs_payment_id_fkey";
+            columns: ["payment_id"];
+            isOneToOne: false;
+            referencedRelation: "payments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "chaos_runs_source_webhook_event_id_fkey";
+            columns: ["source_webhook_event_id"];
+            isOneToOne: false;
+            referencedRelation: "webhook_events";
             referencedColumns: ["id"];
           },
         ];

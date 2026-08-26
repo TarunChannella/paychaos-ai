@@ -236,28 +236,24 @@ describe("Phase 1C-A: no service-role name leaks into client-importable code (#3
   });
 });
 
-describe("Phase 1C-A/2C/2D/2E/2F: Database type is scoped to exactly the 6 approved tables", () => {
+describe("Phase 1C-A/2C/2D/2E/2F/3B: Database type is scoped to exactly the 7 approved tables", () => {
   const typesSource = fs.readFileSync(
     path.join(repoRoot, "lib", "supabase", "types.ts"),
     "utf-8",
   );
 
-  it("declares the 6 approved table keys (Phase 1: orders/payment_attempts/fulfilments; Phase 2C: payments; Phase 2D: webhook_events; Phase 2E: event_processing_attempts)", () => {
+  it("declares the 7 approved table keys (Phase 1: orders/payment_attempts/fulfilments; Phase 2C: payments; Phase 2D: webhook_events; Phase 2E: event_processing_attempts; Phase 3B: chaos_runs)", () => {
     expect(typesSource).toMatch(/\borders:\s*{/);
     expect(typesSource).toMatch(/\bpayment_attempts:\s*{/);
     expect(typesSource).toMatch(/\bpayments:\s*{/);
     expect(typesSource).toMatch(/\bfulfilments:\s*{/);
     expect(typesSource).toMatch(/\bwebhook_events:\s*{/);
     expect(typesSource).toMatch(/\bevent_processing_attempts:\s*{/);
+    expect(typesSource).toMatch(/\bchaos_runs:\s*{/);
   });
 
-  it("declares no Phase 3+/4+ table", () => {
-    const forbidden = [
-      "chaos_runs",
-      "invariant_results",
-      "findings",
-      "regression_runs",
-    ];
+  it("declares no Phase 3C+/4+ table", () => {
+    const forbidden = ["invariant_results", "findings", "regression_runs"];
     for (const name of forbidden) {
       expect(typesSource).not.toMatch(new RegExp(`\\b${name}:\\s*{`));
     }

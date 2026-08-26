@@ -51,7 +51,7 @@ describe("Phase 1C-A migration file exists (#4)", () => {
   });
 });
 
-describe("Migration set creates exactly the approved Phase 1 + Phase 2B + Phase 2C + Phase 2D + Phase 2E tables (#5, #6, #7)", () => {
+describe("Migration set creates exactly the approved Phase 1 + Phase 2B + Phase 2C + Phase 2D + Phase 2E + Phase 3B tables (#5, #6, #7)", () => {
   const tableNames = extractCreateTableNames(combinedSql);
 
   // Phase 1 created orders/payment_attempts/fulfilments (#5-#7). Phase 2B
@@ -64,10 +64,14 @@ describe("Migration set creates exactly the approved Phase 1 + Phase 2B + Phase 
   // docs/DATABASE.md Section 13). Phase 2E legitimately adds
   // `event_processing_attempts` (Phase 2 subset only) via its own additive
   // migration (supabase/migrations/20260827000000_phase2e_webhook_dedup.sql,
-  // docs/DATABASE.md Section 14) — this is the current approved cumulative
+  // docs/DATABASE.md Section 14). Phase 3B legitimately adds `chaos_runs` via
+  // its own additive migration
+  // (supabase/migrations/20260829000000_phase3b_chaos_runs.sql,
+  // docs/DATABASE.md Section 15) — this is the current approved cumulative
   // table set, not a Phase 1 boundary violation.
-  it("creates orders, payment_attempts, payments, fulfilments, webhook_events, event_processing_attempts and nothing else", () => {
+  it("creates orders, payment_attempts, payments, fulfilments, webhook_events, event_processing_attempts, chaos_runs and nothing else", () => {
     expect([...tableNames].sort()).toEqual([
+      "chaos_runs",
       "event_processing_attempts",
       "fulfilments",
       "orders",
@@ -77,9 +81,8 @@ describe("Migration set creates exactly the approved Phase 1 + Phase 2B + Phase 
     ]);
   });
 
-  it("does not create any other Phase 3+/4+ table", () => {
+  it("does not create any other Phase 3C+/4+ table", () => {
     const forbidden = [
-      "chaos_runs",
       "invariant_results",
       "findings",
       "regression_runs",
@@ -269,14 +272,14 @@ describe("Phase 1C-A no permissive anon/authenticated policy (#14)", () => {
     }
   });
 
-  it("every TABLE GRANT targets only the 6 approved tables", () => {
+  it("every TABLE GRANT targets only the 7 approved tables", () => {
     const tableGrantLines = combinedSql
       .split("\n")
       .filter((line) => /^\s*grant\s.*\bon\s+(?!function\b)/i.test(line));
     expect(tableGrantLines.length).toBeGreaterThan(0);
     for (const line of tableGrantLines) {
       expect(line).toMatch(
-        /public\.(orders|payment_attempts|payments|fulfilments|webhook_events|event_processing_attempts)\b/i,
+        /public\.(orders|payment_attempts|payments|fulfilments|webhook_events|event_processing_attempts|chaos_runs)\b/i,
       );
     }
   });
@@ -325,13 +328,13 @@ describe("Phase 1C-A correction — no unnecessary pgcrypto extension", () => {
     expect(combinedSql).not.toMatch(/create extension[^;]*pgcrypto/i);
   });
 
-  it("gen_random_uuid() remains the UUID default for all six tables", () => {
+  it("gen_random_uuid() remains the UUID default for all seven tables", () => {
     const occurrences = [
       ...combinedSql.matchAll(
         /id uuid primary key default gen_random_uuid\(\)/gi,
       ),
     ];
-    expect(occurrences.length).toBe(6);
+    expect(occurrences.length).toBe(7);
   });
 });
 
@@ -437,8 +440,16 @@ describe("Phase 2F migration — no Phase 3+ schema added (2F structural #29)", 
     }
   });
 
-  it("total table set remains exactly the 6 approved tables (no new CREATE TABLE in the Phase 2F migration)", () => {
-    const tableNames = extractCreateTableNames(combinedSql);
+  it("total table set as of Phase 2F was exactly the 6 approved tables (no new CREATE TABLE in the Phase 2F migration) — scoped to migrations up to and including Phase 2F, not the current combined set, since this asserts a historical fact about that migration, not a fact that should require updating at every later phase", () => {
+    const phase2fIndex = migrations.findIndex((m) =>
+      m.name.includes("phase2f"),
+    );
+    expect(phase2fIndex).toBeGreaterThanOrEqual(0);
+    const sqlUpToPhase2f = migrations
+      .slice(0, phase2fIndex + 1)
+      .map((m) => m.sql)
+      .join("\n");
+    const tableNames = extractCreateTableNames(sqlUpToPhase2f);
     expect([...tableNames].sort()).toEqual([
       "event_processing_attempts",
       "fulfilments",
@@ -715,21 +726,21 @@ describe("Phase 1C-A correction — explicit browser-role revocation", () => {
     expect(combinedSql).not.toMatch(/grant[^;]*\bto\s+authenticated\b/i);
   });
 
-  it("service_role retains explicit CRUD grants on exactly the six tables", () => {
+  it("service_role retains explicit CRUD grants on exactly the seven tables", () => {
     const tableGrantLines = combinedSql
       .split("\n")
       .filter((line) => /^\s*grant\s.*\bon\s+(?!function\b)/i.test(line));
-    expect(tableGrantLines.length).toBe(6);
+    expect(tableGrantLines.length).toBe(7);
     for (const line of tableGrantLines) {
       expect(line).toMatch(/select,\s*insert,\s*update,\s*delete/i);
       expect(line).toMatch(/to service_role/i);
       expect(line).toMatch(
-        /public\.(orders|payment_attempts|payments|fulfilments|webhook_events|event_processing_attempts)\b/i,
+        /public\.(orders|payment_attempts|payments|fulfilments|webhook_events|event_processing_attempts|chaos_runs)\b/i,
       );
     }
   });
 
-  it("RLS remains enabled on all six tables", () => {
+  it("RLS remains enabled on all seven tables", () => {
     for (const table of [
       "orders",
       "payment_attempts",
@@ -737,6 +748,7 @@ describe("Phase 1C-A correction — explicit browser-role revocation", () => {
       "fulfilments",
       "webhook_events",
       "event_processing_attempts",
+      "chaos_runs",
     ]) {
       const re = new RegExp(
         `alter table public\\.${table} enable row level security`,
@@ -748,5 +760,234 @@ describe("Phase 1C-A correction — explicit browser-role revocation", () => {
 
   it("there are still zero CREATE POLICY statements", () => {
     expect(combinedSql).not.toMatch(/create policy/i);
+  });
+});
+
+describe("Phase 3B migration — chaos_runs static structural coverage (architect correction, Finding 4)", () => {
+  // This describe block statically verifies the Phase 3B migration
+  // (supabase/migrations/20260829000000_phase3b_chaos_runs.sql) BEFORE it
+  // is manually applied to the real Supabase project — see this task's own
+  // "Do NOT apply the Supabase migration" boundary. Real-Supabase
+  // constraint/RLS/persistence behavior is separately proven by
+  // tests/integration/supabase/052-chaos-run-persistence.integration.test.ts,
+  // which remains NOT RUN until that manual application happens.
+  const phase3bMigration = migrations.find((m) => m.name.includes("phase3b"));
+  const chaosRunsMatch = combinedSql.match(
+    /create table\s+public\.chaos_runs\s*\(([\s\S]*?)\n\);/i,
+  );
+  const chaosRunsBlock = chaosRunsMatch ? chaosRunsMatch[1]! : "";
+
+  it("found the Phase 3B migration file and the chaos_runs table definition", () => {
+    expect(phase3bMigration).toBeDefined();
+    expect(chaosRunsBlock.length).toBeGreaterThan(0);
+  });
+
+  it("creates public.chaos_runs exactly once", () => {
+    const occurrences = [
+      ...combinedSql.matchAll(/create\s+table\s+public\.chaos_runs\s*\(/gi),
+    ];
+    expect(occurrences.length).toBe(1);
+  });
+
+  describe("columns / nullability", () => {
+    it("scenario_id is NOT NULL", () => {
+      expect(chaosRunsBlock).toMatch(/scenario_id text not null/i);
+    });
+
+    it("order_id/payment_attempt_id/payment_id/source_webhook_event_id are nullable FKs (no NOT NULL on any of them)", () => {
+      for (const column of [
+        "order_id",
+        "payment_attempt_id",
+        "payment_id",
+        "source_webhook_event_id",
+      ]) {
+        const columnLineMatch = chaosRunsBlock.match(
+          new RegExp(`${column}\\s+uuid\\s+references[^,\\n]*`, "i"),
+        );
+        expect(columnLineMatch).not.toBeNull();
+        expect(columnLineMatch![0]).not.toMatch(/not null/i);
+        expect(columnLineMatch![0]).toMatch(/on delete restrict/i);
+      }
+    });
+
+    it("fault_type is nullable (no NOT NULL) — C11 has no fault primitive", () => {
+      expect(chaosRunsBlock).toMatch(/fault_type text,/i);
+      expect(chaosRunsBlock).not.toMatch(/fault_type text not null/i);
+    });
+
+    it("failed_precheck_id is nullable (no NOT NULL) and present as a column", () => {
+      expect(chaosRunsBlock).toMatch(/failed_precheck_id text,/i);
+      expect(chaosRunsBlock).not.toMatch(/failed_precheck_id text not null/i);
+    });
+
+    it("data_classification is TEXT NOT NULL with NO DEFAULT (architect correction — fail-closed provenance handling: a server-side bug or future writer must never be able to omit this column and silently receive a default classification in either direction)", () => {
+      expect(chaosRunsBlock).toMatch(/data_classification text not null,/i);
+      expect(chaosRunsBlock).not.toMatch(
+        /data_classification text not null default/i,
+      );
+      expect(chaosRunsBlock).not.toMatch(/data_classification[^,]*default/i);
+    });
+  });
+
+  describe("required CHECK constraints", () => {
+    it.each([
+      "chaos_runs_scenario_id_valid",
+      "chaos_runs_status_valid",
+      "chaos_runs_outcome_valid",
+      "chaos_runs_fault_type_valid",
+      "chaos_runs_failed_precheck_id_valid",
+      "chaos_runs_data_classification_valid",
+      "chaos_runs_fault_config_is_object",
+      "chaos_runs_fault_state_is_object",
+      "chaos_runs_blocked_state_consistent",
+      "chaos_runs_pending_state_consistent",
+    ])("%s exists", (constraintName) => {
+      expect(chaosRunsBlock).toMatch(
+        new RegExp(`constraint\\s+${constraintName}\\s+check`, "i"),
+      );
+    });
+
+    it("chaos_runs_scenario_id_valid allows exactly C01/C03/C07/C11", () => {
+      expect(chaosRunsBlock).toMatch(
+        /scenario_id in \('C01', 'C03', 'C07', 'C11'\)/i,
+      );
+    });
+
+    it("chaos_runs_fault_type_valid allows NULL or exactly the three canonical P0 primitives — no fourth primitive", () => {
+      expect(chaosRunsBlock).toMatch(
+        /fault_type is null or fault_type in \(\s*'REPLAY_EVENT', 'INVALID_SIGNATURE_TEST', 'DROP_CLIENT_CONFIRMATION'\s*\)/i,
+      );
+    });
+
+    it("chaos_runs_failed_precheck_id_valid allows NULL or PRECHECK-01 through PRECHECK-10", () => {
+      for (let n = 1; n <= 10; n++) {
+        const id = `PRECHECK-${String(n).padStart(2, "0")}`;
+        expect(chaosRunsBlock).toContain(`'${id}'`);
+      }
+      expect(chaosRunsBlock).toMatch(/failed_precheck_id is null or/i);
+    });
+
+    it("chaos_runs_data_classification_valid allows exactly RECORDED_TEST_EVIDENCE/SYNTHETIC_DEMO", () => {
+      expect(chaosRunsBlock).toMatch(
+        /data_classification in \('RECORDED_TEST_EVIDENCE', 'SYNTHETIC_DEMO'\)/i,
+      );
+    });
+
+    it("chaos_runs_blocked_state_consistent requires status/outcome/failed_precheck_id/error_message_redacted/started_at/completed_at agreement", () => {
+      expect(chaosRunsBlock).toMatch(/outcome = 'BLOCKED'/i);
+      expect(chaosRunsBlock).toMatch(/status = 'COMPLETED'/i);
+      expect(chaosRunsBlock).toMatch(/failed_precheck_id is not null/i);
+      expect(chaosRunsBlock).toMatch(/error_message_redacted is not null/i);
+      expect(chaosRunsBlock).toMatch(/started_at is null/i);
+      expect(chaosRunsBlock).toMatch(/completed_at is not null/i);
+      expect(chaosRunsBlock).toMatch(/outcome is distinct from 'BLOCKED'/i);
+    });
+
+    it("chaos_runs_pending_state_consistent requires outcome/failed_precheck_id/started_at/completed_at all NULL when status = PENDING", () => {
+      expect(chaosRunsBlock).toMatch(
+        /status <> 'PENDING'\s*\n\s*or \(\s*\n\s*outcome is null\s*\n\s*and failed_precheck_id is null\s*\n\s*and started_at is null\s*\n\s*and completed_at is null/i,
+      );
+    });
+  });
+
+  it("FK safety: all four entity/evidence columns use ON DELETE RESTRICT (no cascading deletes)", () => {
+    const fkLines = chaosRunsBlock
+      .split("\n")
+      .filter((line) => /references public\./i.test(line));
+    expect(fkLines.length).toBe(4);
+    for (const line of fkLines) {
+      expect(line).toMatch(/on delete restrict/i);
+    }
+    expect(chaosRunsBlock).not.toMatch(/on delete cascade/i);
+  });
+
+  describe("required indexes", () => {
+    it.each([
+      ["chaos_runs_scenario_id_idx", "scenario_id"],
+      ["chaos_runs_order_id_idx", "order_id"],
+      ["chaos_runs_payment_attempt_id_idx", "payment_attempt_id"],
+      ["chaos_runs_payment_id_idx", "payment_id"],
+      ["chaos_runs_source_webhook_event_id_idx", "source_webhook_event_id"],
+    ])("%s on (%s)", (indexName, column) => {
+      expect(combinedSql).toMatch(
+        new RegExp(
+          `create index ${indexName} on public\\.chaos_runs \\(${column}\\)`,
+          "i",
+        ),
+      );
+    });
+
+    it("composite index on (status, created_at)", () => {
+      expect(combinedSql).toMatch(
+        /create index chaos_runs_status_created_at_idx on public\.chaos_runs \(status, created_at\)/i,
+      );
+    });
+
+    it("composite index on (data_classification, completed_at)", () => {
+      expect(combinedSql).toMatch(
+        /create index chaos_runs_data_classification_completed_at_idx on public\.chaos_runs \(data_classification, completed_at\)/i,
+      );
+    });
+  });
+
+  describe("RLS / privileges", () => {
+    it("RLS is enabled on chaos_runs", () => {
+      expect(combinedSql).toMatch(
+        /alter table public\.chaos_runs enable row level security/i,
+      );
+    });
+
+    it("privileges are explicitly revoked from anon and authenticated", () => {
+      expect(combinedSql).toMatch(
+        /revoke all privileges on table public\.chaos_runs from anon,\s*authenticated;/i,
+      );
+    });
+
+    it("CRUD is granted to service_role", () => {
+      expect(combinedSql).toMatch(
+        /grant select, insert, update, delete on public\.chaos_runs to service_role;/i,
+      );
+    });
+
+    it("no CREATE POLICY exists for chaos_runs specifically (and none anywhere, per the suite-wide check above)", () => {
+      expect(phase3bMigration!.sql).not.toMatch(/create policy/i);
+    });
+
+    it("chaos_runs never appears in a GRANT to anon or authenticated", () => {
+      expect(combinedSql).not.toMatch(
+        /grant[^;]*\bchaos_runs\b[^;]*\bto\s+(anon|authenticated)\b/i,
+      );
+    });
+  });
+
+  describe("scope: Phase 3B does not touch event_processing_attempts or later-phase tables", () => {
+    it("does not add chaos_run_id to event_processing_attempts", () => {
+      expect(phase3bMigration!.sql).not.toMatch(/add column\s+chaos_run_id\b/i);
+    });
+
+    it("does not widen event_processing_attempts.source_kind's CHECK constraint (its own header comment legitimately explains this deferral by name, so only functional/non-comment lines are checked here)", () => {
+      const functionalSql = phase3bMigration!.sql
+        .split("\n")
+        .filter((line) => !line.trim().startsWith("--"))
+        .join("\n");
+      expect(functionalSql).not.toMatch(/PAYCHAOS_REPLAY/);
+      expect(functionalSql).not.toMatch(/PAYCHAOS_SIMULATION/);
+      expect(functionalSql).not.toMatch(/TEST_FIXTURE/);
+      expect(phase3bMigration!.sql).not.toMatch(
+        /alter table\s+public\.event_processing_attempts/i,
+      );
+    });
+
+    it("does not create invariant_results, findings, or regression_runs", () => {
+      for (const forbidden of [
+        "invariant_results",
+        "findings",
+        "regression_runs",
+      ]) {
+        expect(phase3bMigration!.sql).not.toMatch(
+          new RegExp(`create table\\s+public\\.${forbidden}`, "i"),
+        );
+      }
+    });
   });
 });

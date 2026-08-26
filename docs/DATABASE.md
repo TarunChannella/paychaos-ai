@@ -1388,22 +1388,27 @@ There is no separate `chaos_scenarios` database table.
 | Column | Type | Nullable? | Default | Constraints | Purpose |
 |---|---|---:|---|---|---|
 | `id` | `uuid` | No | generated UUID | PRIMARY KEY | Chaos run ID |
-| `scenario_id` | `text` | No | — | — | Stable scenario catalogue ID |
-| `order_id` | `uuid` | No | — | FK → `orders.id` | Merchant order being tested |
-| `payment_attempt_id` | `uuid` | No | — | FK → `payment_attempts.id` | Payment attempt being tested |
+| `scenario_id` | `text` | No | — | CHECK approved values | Stable scenario catalogue ID |
+| `order_id` | `uuid` | **Yes** | `NULL` | FK → `orders.id` | Merchant order being tested, when one applies |
+| `payment_attempt_id` | `uuid` | **Yes** | `NULL` | FK → `payment_attempts.id` | Payment attempt being tested, when one exists |
 | `payment_id` | `uuid` | Yes | `NULL` | FK → `payments.id` | Specific payment if applicable |
 | `source_webhook_event_id` | `uuid` | Yes | `NULL` | FK → `webhook_events.id` | Verified source evidence for replay |
 | `status` | `text` | No | `'PENDING'` | CHECK approved values | Run lifecycle |
 | `outcome` | `text` | Yes | `NULL` | CHECK approved values | Aggregate scenario outcome |
-| `fault_type` | `text` | No | — | — | Fault primitive used |
+| `fault_type` | `text` | **Yes** | `NULL` | CHECK approved values | Fault primitive used, when the scenario has one |
+| `failed_precheck_id` | `text` | **Yes** | `NULL` | CHECK approved values | Which PRECHECK-01..10 blocked this run |
 | `fault_config` | `jsonb` | No | `{}` | object | Immutable requested fault configuration |
 | `fault_state` | `jsonb` | No | `{}` | object | Runtime hold/release/transient state |
-| `data_classification` | `text` | No | `'RECORDED_TEST_EVIDENCE'` | CHECK | Real/synthetic classification |
+| `data_classification` | `text` | No | **none** | CHECK | Real/synthetic classification — must be supplied explicitly |
 | `error_message_redacted` | `text` | Yes | `NULL` | — | Run failure detail |
-| `started_at` | `timestamptz` | Yes | `NULL` | — | Actual run start |
-| `completed_at` | `timestamptz` | Yes | `NULL` | — | Actual run end |
+| `started_at` | `timestamptz` | Yes | `NULL` | — | Actual run start — remains `NULL` for a BLOCKED run (execution never began) |
+| `completed_at` | `timestamptz` | Yes | `NULL` | — | Actual run end, or BLOCKED finalization time |
 | `created_at` | `timestamptz` | No | `now()` | — | Creation |
 | `updated_at` | `timestamptz` | No | `now()` | — | Last status update |
+
+**Nullable links (architect-approved correction — Phase 3B):** `order_id`/`payment_attempt_id`/`payment_id`/`source_webhook_event_id` are all nullable because not every P0 scenario has an entity/evidence target at chaos-run creation time. C03 (Mechanism C) targets PayChaos's own fixed internal webhook-verification path and has no merchant order at all. C07 and C11 Mechanism A begin from a fresh order, but the frozen Phase 3A precheck contract never guarantees that order already has a `payment_attempts` row — Checkout, which creates the attempt, happens after a chaos run is requested. These links are never fabricated merely to populate the column; a `NULL` link is preferred over a false one.
+
+`fault_type` is nullable because C11 has no unsafe fault primitive of its own (`allowedFaultTypes: []` in the frozen scenario registry) — it is `NULL` for both of its mechanisms, never a fabricated fourth "no fault" primitive.
 
 ---
 
@@ -1437,9 +1442,14 @@ A run blocked by a failed safety/prerequisite precheck may be finalized with:
 ```text
 status = COMPLETED
 outcome = BLOCKED
+failed_precheck_id = <the PRECHECK-xx that blocked it>
+error_message_redacted = <safe reason>
+started_at = NULL
+completed_at = <finalization time>
 ```
 
-without executing replay/fault injection.
+without executing replay/fault injection. `started_at` remains `NULL` for a
+BLOCKED run because execution never actually began.
 
 Detailed correctness still comes from individual:
 
@@ -1449,12 +1459,79 @@ invariant_results
 
 ---
 
+## `failed_precheck_id`
+
+```text
+PRECHECK-01
+PRECHECK-02
+PRECHECK-03
+PRECHECK-04
+PRECHECK-05
+PRECHECK-06
+PRECHECK-07
+PRECHECK-08
+PRECHECK-09
+PRECHECK-10
+```
+
+Records which of the ten official Chaos Run Precheck IDs (Section 11)
+blocked this run. `NULL` for a `PENDING` row. Not every BLOCKED precheck
+category is necessarily persisted here — `PRECHECK-01`/`02`/`03` (global
+server/config failure), `PRECHECK-05` (unregistered/disabled/malformed
+scenario), and `PRECHECK-06` (audit database itself unreachable) are not
+scenario-attributable or cannot be durably recorded, so the phase that owns
+this decision may choose not to create a row for them at all. Only
+`PRECHECK-07`/`08`/`09`/`10` against an independently-confirmed registered
+scenario are eligible.
+
+---
+
+## Consistency Constraints
+
+```text
+chaos_runs_blocked_state_consistent
+chaos_runs_pending_state_consistent
+```
+
+`chaos_runs_blocked_state_consistent` guarantees that whenever
+`outcome = 'BLOCKED'`, the row is also `status = 'COMPLETED'`,
+`failed_precheck_id` and `error_message_redacted` are both non-null,
+`started_at` is `NULL`, and `completed_at` is non-null — and that
+`failed_precheck_id` is `NULL` on every row whose outcome is not `BLOCKED`.
+`chaos_runs_pending_state_consistent` guarantees that a `PENDING` row always
+has `outcome`/`failed_precheck_id`/`started_at`/`completed_at` all `NULL`.
+Both are enforced at the database level, not only in application code
+(docs/ARCHITECTURE.md Section 25). Neither constrains future
+`RUNNING`/`COMPLETED`-with-`PASS`/`FAIL`/`UNKNOWN`/`ERROR`/`FAILED`-status
+semantics — those belong to whichever later phase actually executes a
+mechanism.
+
+---
+
 ## `data_classification`
 
 ```text
 RECORDED_TEST_EVIDENCE
 SYNTHETIC_DEMO
 ```
+
+`text`, `NOT NULL`, **NO DEFAULT** (architect correction). This column must
+be supplied explicitly by trusted server code on every insert — omitting it
+fails the insert closed rather than silently defaulting to either value.
+
+This is deliberate fail-closed provenance handling:
+`RECORDED_TEST_EVIDENCE` is authoritative genuine-evidence metadata, so a
+server-side bug or a future writer must never be able to omit this column
+and silently receive the strongest/genuine-evidence classification by
+default. Defaulting to `SYNTHETIC_DEMO` instead was considered and rejected
+too, since that could just as easily silently misclassify a genuine run in
+the other direction. The only safe behavior is to require every writer to
+decide and state the classification explicitly, and to reject the insert
+entirely if it does not.
+
+This column is never caller/browser controlled — it is always derived by
+trusted server code (`lib/chaos/run-service.ts`) from the scenario/mechanism
+being persisted, never read from a browser-supplied request field.
 
 A replay of a genuine verified Razorpay Test Mode event remains:
 
