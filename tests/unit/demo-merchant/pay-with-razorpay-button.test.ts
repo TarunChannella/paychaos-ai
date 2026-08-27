@@ -93,6 +93,76 @@ describe("app/demo-merchant/page.tsx — persisted-checkout-evidence status mess
   });
 });
 
+describe("Phase 3D-B correction round (Blocker 2) — C07 client-confirmation suppression display", () => {
+  it("20/21: handles result.ok===true && result.suppressed===true BEFORE the generic !result.payment failure branch", () => {
+    const suppressedCheckIndex = buttonSource.indexOf(
+      "if (result.ok && result.suppressed)",
+    );
+    const genericFailureCheckIndex = buttonSource.indexOf(
+      "if (!result.ok || !result.payment)",
+    );
+    expect(suppressedCheckIndex).toBeGreaterThan(-1);
+    expect(genericFailureCheckIndex).toBeGreaterThan(-1);
+    expect(suppressedCheckIndex).toBeLessThan(genericFailureCheckIndex);
+  });
+
+  it("20: renders a dedicated C07 suppression message with a dedicated locator", () => {
+    expect(buttonSource).toContain(
+      'data-testid="c07-client-confirmation-suppressed"',
+    );
+    expect(buttonSource).toMatch(/setC07Suppressed\(/);
+  });
+
+  it("22: a suppression result never calls setVerified — no verified-Checkout-evidence UI state is created for a suppression", () => {
+    const suppressedBranch = buttonSource.match(
+      /if \(result\.ok && result\.suppressed\) \{([\s\S]*?)\n\s{12}\}/,
+    );
+    expect(suppressedBranch).not.toBeNull();
+    expect(suppressedBranch![1]).not.toMatch(/setVerified\(/);
+  });
+
+  it("never claims captured/failed/paid/fulfilled inside the suppression branch", () => {
+    const suppressedBranch = buttonSource.match(
+      /if \(result\.ok && result\.suppressed\) \{([\s\S]*?)\n\s{12}\}/,
+    );
+    expect(suppressedBranch).not.toBeNull();
+    const branchText = suppressedBranch![1]!.toLowerCase();
+    expect(branchText).not.toMatch(/captured/);
+    expect(branchText).not.toMatch(/failed/);
+    expect(branchText).not.toMatch(/\bpaid\b/);
+    expect(branchText).not.toMatch(/fulfil/);
+  });
+
+  it("a fresh Checkout attempt clears stale C07 suppression UI state", () => {
+    const handleClickIndex = buttonSource.indexOf("function handleClick()");
+    const clearCallIndex = buttonSource.indexOf(
+      "setC07Suppressed(null)",
+      handleClickIndex,
+    );
+    const startTransitionIndex = buttonSource.indexOf(
+      "startTransition(async () => {",
+      handleClickIndex,
+    );
+    expect(handleClickIndex).toBeGreaterThan(-1);
+    expect(clearCallIndex).toBeGreaterThan(handleClickIndex);
+    expect(clearCallIndex).toBeLessThan(startTransitionIndex);
+  });
+
+  it("does not add chaosRunId or any chaos-specific field to the browser Checkout handler payload", () => {
+    expect(buttonSource).not.toMatch(/chaosRunId/i);
+    expect(buttonSource).not.toMatch(/\bscenario\b/i);
+    expect(buttonSource).not.toMatch(/\bfaultType\b/i);
+  });
+
+  it("23: normal Checkout success/failure behavior source is unchanged — still checks !result.ok || !result.payment and still calls setVerified on the normal path", () => {
+    expect(buttonSource).toContain("if (!result.ok || !result.payment)");
+    expect(buttonSource).toContain("setVerified({");
+    expect(buttonSource).toContain(
+      "setError(result.error ?? DEFAULT_ERROR_MESSAGE)",
+    );
+  });
+});
+
 describe("repo-wide regression guard — no duplicate unconditional stale-message path remains (this round's Task 5 item 7)", () => {
   it("the two message string literals exist ONLY inside lib/demo-merchant/view-model.ts's exported constants — nowhere else in app/demo-merchant", () => {
     expect(viewModelSource).toContain(AWAITING_MESSAGE);

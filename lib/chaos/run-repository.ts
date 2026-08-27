@@ -519,6 +519,372 @@ export async function failRunningChaosRunExecution(
 }
 
 /**
+ * Phase 3D-B — atomically transitions one eligible PENDING C07 run to the
+ * execution-time BLOCKED shape frozen by Phase 3D-0, mirroring
+ * `blockPendingC03RunForPreSec007` exactly: `execution_block_code =
+ * 'PRE-SEC-007'`, `failed_precheck_id = NULL`, `started_at = NULL`. The
+ * conditional `UPDATE ... WHERE ... RETURNING` requires `id`/`status =
+ * PENDING`/`scenario_id = C07`/`fault_type = DROP_CLIENT_CONFIRMATION`/
+ * `data_classification = RECORDED_TEST_EVIDENCE`/`order_id IS NOT NULL` all
+ * match. `execution_block_code` is always the hardcoded literal
+ * `'PRE-SEC-007'` — never a caller-supplied value.
+ *
+ * Returns `null` (never throws for this case) when zero rows matched — the
+ * run does not exist, or is not an eligible PENDING C07 row. The caller must
+ * never treat a `null` return as "blocked successfully".
+ */
+export async function blockPendingC07RunForPreSec007(
+  id: string,
+  safeReason: string,
+  now: () => Date = () => new Date(),
+): Promise<ChaosRunRow | null> {
+  const client = getSupabaseServerClient();
+  const timestamp = now().toISOString();
+
+  const { data, error } = await client
+    .from("chaos_runs")
+    .update({
+      status: "COMPLETED",
+      outcome: "BLOCKED",
+      failed_precheck_id: null,
+      execution_block_code: "PRE-SEC-007",
+      error_message_redacted: safeReason,
+      started_at: null,
+      completed_at: timestamp,
+      updated_at: timestamp,
+    })
+    .eq("id", id)
+    .eq("status", "PENDING")
+    .eq("scenario_id", "C07")
+    .eq("fault_type", "DROP_CLIENT_CONFIRMATION")
+    .eq("data_classification", "RECORDED_TEST_EVIDENCE")
+    .not("order_id", "is", null)
+    .select()
+    .maybeSingle();
+
+  if (error) {
+    throw new ChaosRunRepositoryError(
+      "CHAOS_RUN_C07_BLOCK_FAILED",
+      "Failed to persist the PRE-SEC-007 blocked chaos run.",
+    );
+  }
+
+  return data;
+}
+
+/** The fixed, server-owned C07 fault_state shape at the moment of arming — no additional keys, never caller-supplied. */
+export const C07_ARMED_FAULT_STATE = {
+  armed: true,
+  consumed: false,
+} as const;
+
+export type StartPendingC07RunResult =
+  | { readonly kind: "STARTED"; readonly run: ChaosRunRow }
+  | { readonly kind: "NOT_ELIGIBLE" }
+  | { readonly kind: "ALREADY_ARMED_FOR_ORDER" };
+
+/**
+ * Phase 3D-B — the ONE atomic arm-and-claim statement (this task's Section
+ * 8 "Atomic Arm"). A single conditional `UPDATE ... WHERE ... RETURNING`
+ * simultaneously transitions `PENDING -> RUNNING`, sets `started_at =
+ * now()`, and sets `fault_state = {armed: true, consumed: false}` — there
+ * is no intermediate "PENDING + armed" state. The `WHERE` clause hardcodes
+ * every eligibility fact (`scenario_id = C07`, `fault_type =
+ * DROP_CLIENT_CONFIRMATION`, `data_classification = RECORDED_TEST_EVIDENCE`,
+ * `status = PENDING`, `order_id IS NOT NULL`) — no scenario/fault
+ * type/status/fault_state/order id is ever accepted as a caller-controlled
+ * parameter.
+ *
+ * The Phase 3D-0 partial unique index
+ * (`chaos_runs_one_active_c07_fault_per_order_idx`) is the authoritative
+ * race-safety boundary for "at most one RUNNING C07 fault per order" — this
+ * function detects a violation of specifically that index (Postgres
+ * `23505`) and reports it as `ALREADY_ARMED_FOR_ORDER`, rather than
+ * replacing the database guarantee with an application-only existence
+ * check. Any other unique-constraint violation on this table would be a
+ * genuine anomaly, not an expected outcome, and is thrown as a generic
+ * repository error instead of being silently reinterpreted.
+ *
+ * Returns `NOT_ELIGIBLE` (zero rows matched, no error) when the run does
+ * not exist, is not an eligible PENDING C07 row, or has already been
+ * claimed by a concurrent caller.
+ */
+export async function startPendingC07RunAtomically(
+  id: string,
+  now: () => Date = () => new Date(),
+): Promise<StartPendingC07RunResult> {
+  const client = getSupabaseServerClient();
+  const timestamp = now().toISOString();
+
+  const { data, error } = await client
+    .from("chaos_runs")
+    .update({
+      status: "RUNNING",
+      started_at: timestamp,
+      updated_at: timestamp,
+      fault_state: C07_ARMED_FAULT_STATE,
+    })
+    .eq("id", id)
+    .eq("scenario_id", "C07")
+    .eq("fault_type", "DROP_CLIENT_CONFIRMATION")
+    .eq("data_classification", "RECORDED_TEST_EVIDENCE")
+    .eq("status", "PENDING")
+    .not("order_id", "is", null)
+    .select()
+    .maybeSingle();
+
+  if (error) {
+    if (error.code === "23505") {
+      return { kind: "ALREADY_ARMED_FOR_ORDER" };
+    }
+    throw new ChaosRunRepositoryError(
+      "CHAOS_RUN_C07_START_FAILED",
+      "Failed to atomically arm the C07 chaos run.",
+    );
+  }
+
+  if (!data) {
+    return { kind: "NOT_ELIGIBLE" };
+  }
+
+  return { kind: "STARTED", run: data };
+}
+
+/**
+ * Phase 3D-B (correction round — Blocker 3/14 "exact JSON state") — the one
+ * atomic `consumed: false -> true` mutation (this task's Section 14
+ * "Consume Semantics + Race Safety"). Scoped via EXACT JSONB equality
+ * (`.filter("fault_state", "eq", JSON.stringify({armed:true, consumed:false}))`
+ * — a raw object passed to postgrest-js's `.eq()` is not serialized as
+ * JSON, and `.eq()`'s TS typing also rejects a string value for this
+ * `Record<string, unknown>`-typed column, so the JSON text is supplied via
+ * `.filter()`, postgrest-js's documented raw-syntax escape hatch) — not
+ * containment — combined with `id`/`scenario_id = C07`/`fault_type =
+ * DROP_CLIENT_CONFIRMATION`/`data_classification = RECORDED_TEST_EVIDENCE`/
+ * `status = RUNNING`. A row whose `fault_state` carries any extra key or a
+ * non-boolean `consumed` can never satisfy this exact match, so a malformed
+ * state can never be mutated by this function — a single conditional
+ * `UPDATE`, never a `SELECT` followed by an unconditional `UPDATE`. Two
+ * concurrent duplicate client confirmations racing this same call can only
+ * ever produce ONE successful `false -> true` transition; the loser
+ * receives `null` and must re-read the active fault
+ * (`resolveActiveArmedC07FaultForOrder`) to decide whether it is still
+ * suppressed.
+ *
+ * Returns `null` (never throws for this case) when zero rows matched —
+ * already consumed, not RUNNING, not exactly armed-and-unconsumed, wrong
+ * classification, or the run does not exist.
+ */
+export async function consumeC07ClientConfirmationDrop(
+  chaosRunId: string,
+  now: () => Date = () => new Date(),
+): Promise<ChaosRunRow | null> {
+  const client = getSupabaseServerClient();
+  const timestamp = now().toISOString();
+
+  const { data, error } = await client
+    .from("chaos_runs")
+    .update({
+      fault_state: { armed: true, consumed: true },
+      updated_at: timestamp,
+    })
+    .eq("id", chaosRunId)
+    .eq("scenario_id", "C07")
+    .eq("fault_type", "DROP_CLIENT_CONFIRMATION")
+    .eq("data_classification", "RECORDED_TEST_EVIDENCE")
+    .eq("status", "RUNNING")
+    // `.eq()` types its value against the column's `Record<string, unknown>`
+    // TS type, but postgrest-js does not JSON-serialize non-primitive
+    // filter values — it would send the literal "[object Object]" and the
+    // database would reject it (22P02). `.filter(column, "eq", value)` is
+    // postgrest-js's documented raw-PostgREST-syntax escape hatch for
+    // exactly this case; its runtime behavior is otherwise identical to
+    // `.eq()`.
+    .filter(
+      "fault_state",
+      "eq",
+      JSON.stringify({ armed: true, consumed: false }),
+    )
+    .select()
+    .maybeSingle();
+
+  if (error) {
+    throw new ChaosRunRepositoryError(
+      "CHAOS_RUN_C07_CONSUME_FAILED",
+      "Failed to persist the C07 client-confirmation consumption.",
+    );
+  }
+
+  return data;
+}
+
+/** The authoritative evidence FK selection a C07 reconciliation completion may populate — never fabricated, only ever the resolved result of `resolveC07ConvergenceEvidence`. */
+export interface C07ConvergenceEvidenceLinks {
+  readonly paymentAttemptId: string;
+  readonly paymentId: string;
+  readonly sourceWebhookEventId: string;
+}
+
+/**
+ * Phase 3D-B (correction round — Blocker 3/14 "exact JSON state") —
+ * atomically transitions a RUNNING + exactly-armed-and-consumed C07 run to
+ * `COMPLETED`/`UNKNOWN` once authoritative convergence has been proven
+ * (this task's Section 17). Requires `id`/`order_id = expectedOrderId`
+ * (defense-in-depth scoping to the trusted expected order)/`scenario_id =
+ * C07`/`fault_type = DROP_CLIENT_CONFIRMATION`/`data_classification =
+ * RECORDED_TEST_EVIDENCE`/`status = RUNNING` and EXACT JSONB equality
+ * (`.filter("fault_state", "eq", JSON.stringify({armed:true, consumed:true}))`)
+ * — not containment — so a malformed persisted state (extra key, wrong
+ * type) can never satisfy this mutation. The `consumed = true` gate is mandatory (prevents a
+ * webhook that arrives very quickly from completing the run before
+ * PayChaos has actually observed and suppressed the client confirmation).
+ * Populates the resolved evidence FK columns; `fault_state` is re-asserted
+ * unchanged. Never decides invariant PASS/FAIL — `outcome = UNKNOWN` is
+ * deliberate.
+ *
+ * Returns `null` (never throws for this case) when zero rows matched. The
+ * caller (`lib/chaos/c07-execution-service.ts`) independently re-validates
+ * the exact returned row shape before ever reporting `COMPLETED` —
+ * verified persisted state is authoritative, not merely a non-null return.
+ */
+export async function completeRunningC07RunWithEvidence(
+  chaosRunId: string,
+  expectedOrderId: string,
+  evidence: C07ConvergenceEvidenceLinks,
+  now: () => Date = () => new Date(),
+): Promise<ChaosRunRow | null> {
+  const client = getSupabaseServerClient();
+  const timestamp = now().toISOString();
+
+  const { data, error } = await client
+    .from("chaos_runs")
+    .update({
+      status: "COMPLETED",
+      outcome: "UNKNOWN",
+      completed_at: timestamp,
+      updated_at: timestamp,
+      fault_state: { armed: true, consumed: true },
+      payment_attempt_id: evidence.paymentAttemptId,
+      payment_id: evidence.paymentId,
+      source_webhook_event_id: evidence.sourceWebhookEventId,
+      error_message_redacted: null,
+    })
+    .eq("id", chaosRunId)
+    .eq("order_id", expectedOrderId)
+    .eq("scenario_id", "C07")
+    .eq("fault_type", "DROP_CLIENT_CONFIRMATION")
+    .eq("data_classification", "RECORDED_TEST_EVIDENCE")
+    .eq("status", "RUNNING")
+    // See consumeC07ClientConfirmationDrop's comment above `.filter(...)` —
+    // same postgrest-js raw-syntax escape hatch, same reason.
+    .filter(
+      "fault_state",
+      "eq",
+      JSON.stringify({ armed: true, consumed: true }),
+    )
+    .select()
+    .maybeSingle();
+
+  if (error) {
+    throw new ChaosRunRepositoryError(
+      "CHAOS_RUN_C07_COMPLETE_FAILED",
+      "Failed to persist C07 reconciliation completion.",
+    );
+  }
+
+  return data;
+}
+
+/**
+ * Phase 3D-B (final correction round — Blocker A) — explicit,
+ * operator-initiated-only cancellation of a RUNNING C07 fault (this task's
+ * Section 19). Requires `id`/`order_id = expectedOrderId` (defense-in-depth
+ * scoping to the trusted expected order)/`scenario_id = C07`/`fault_type =
+ * DROP_CLIENT_CONFIRMATION`/`data_classification = RECORDED_TEST_EVIDENCE`/
+ * `status = RUNNING`; transitions to `FAILED`/`ERROR`. Preserves the
+ * server-owned `fault_state` untouched — this function never rewrites it.
+ *
+ * `expectedConsumed` is the caller's server-validated, already-resolved
+ * pre-cancel `consumed` value (never an arbitrary caller-supplied JSON
+ * object) — this function itself constructs the exact expected shape
+ * `{armed: true, consumed: expectedConsumed}` and requires the persisted
+ * `fault_state` to match it EXACTLY (via `.filter(column, "eq", ...)`, never
+ * `.contains()`) as part of the SAME atomic conditional `UPDATE` that
+ * transitions status/outcome. This closes the race the prior round's
+ * read-then-validate approach left open: if a genuine Checkout confirmation
+ * consumes the fault (`false -> true`) between this function's caller
+ * reading the pre-cancel state and this UPDATE executing, the exact-state
+ * predicate no longer matches the (now stale) `expectedConsumed`, so this
+ * UPDATE matches zero rows and never terminalizes the run underneath the
+ * winning consume — it is impossible for this function to both change
+ * `fault_state`'s owning meaning-in-effect and report success against a
+ * value that was never the row's true value at mutation time.
+ *
+ * After cancellation, the `verifyCheckoutAction` suppression lookup
+ * (`resolveActiveArmedC07FaultForOrder`) no longer matches this run (its
+ * `status` is no longer `RUNNING`), which is how the scoped client-drop
+ * fault clears, and the Phase 3D-0 one-active-fault index slot for this
+ * order is released.
+ *
+ * This is a NARROW, C07-specific cancel — not a generic cross-scenario
+ * cancel function.
+ *
+ * Returns `null` (never throws for this case) when zero rows matched — the
+ * run does not exist, is not currently a RUNNING C07 fault, does not belong
+ * to `expectedOrderId`, or its persisted `fault_state` no longer exactly
+ * matches `expectedConsumed` (a concurrent consume raced in first). The
+ * caller (`lib/chaos/c07-execution-service.ts`) independently re-validates
+ * the exact returned row shape before ever reporting `CANCELLED`.
+ */
+export async function cancelRunningC07Fault(
+  chaosRunId: string,
+  expectedOrderId: string,
+  expectedConsumed: boolean,
+  safeReason: string,
+  now: () => Date = () => new Date(),
+): Promise<ChaosRunRow | null> {
+  const client = getSupabaseServerClient();
+  const timestamp = now().toISOString();
+
+  const { data, error } = await client
+    .from("chaos_runs")
+    .update({
+      status: "FAILED",
+      outcome: "ERROR",
+      completed_at: timestamp,
+      updated_at: timestamp,
+      error_message_redacted: safeReason,
+    })
+    .eq("id", chaosRunId)
+    .eq("order_id", expectedOrderId)
+    .eq("scenario_id", "C07")
+    .eq("fault_type", "DROP_CLIENT_CONFIRMATION")
+    .eq("data_classification", "RECORDED_TEST_EVIDENCE")
+    .eq("status", "RUNNING")
+    // Atomic exact-state predicate (Blocker A) — the server constructs this
+    // value itself from a validated boolean, never from caller-supplied
+    // JSON. Same postgrest-js raw-syntax escape hatch as the consume/
+    // complete mutations above, for the same reason (.eq() does not
+    // serialize a non-primitive value).
+    .filter(
+      "fault_state",
+      "eq",
+      JSON.stringify({ armed: true, consumed: expectedConsumed }),
+    )
+    .select()
+    .maybeSingle();
+
+  if (error) {
+    throw new ChaosRunRepositoryError(
+      "CHAOS_RUN_C07_CANCEL_FAILED",
+      "Failed to cancel the C07 chaos run.",
+    );
+  }
+
+  return data;
+}
+
+/**
  * Read-only lookup by internal id. Returns `null` if no such row exists.
  * Throws `ChaosRunRepositoryError` on a genuine DB failure — never returns
  * `null` to mean "the database errored", so a caller cannot mistake an

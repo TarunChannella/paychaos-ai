@@ -21,6 +21,20 @@ type UpdateFn = (payload: Record<string, unknown>) => FakeQueryBuilder;
 type SelectFn = (columns?: string) => FakeQueryBuilder;
 type EqFn = (column: string, value: unknown) => FakeQueryBuilder;
 type IsFn = (column: string, value: unknown) => FakeQueryBuilder;
+type NotFn = (
+  column: string,
+  operator: string,
+  value: unknown,
+) => FakeQueryBuilder;
+type ContainsFn = (
+  column: string,
+  value: Record<string, unknown>,
+) => FakeQueryBuilder;
+type FilterFn = (
+  column: string,
+  operator: string,
+  value: unknown,
+) => FakeQueryBuilder;
 type SingleFn = () => Promise<MockResult>;
 type MaybeSingleFn = () => Promise<MockResult>;
 
@@ -30,6 +44,9 @@ interface FakeQueryBuilder extends PromiseLike<MockResult> {
   select: Mock<SelectFn>;
   eq: Mock<EqFn>;
   is: Mock<IsFn>;
+  not: Mock<NotFn>;
+  contains: Mock<ContainsFn>;
+  filter: Mock<FilterFn>;
   single: Mock<SingleFn>;
   maybeSingle: Mock<MaybeSingleFn>;
 }
@@ -41,6 +58,9 @@ function makeQueryBuilder(result: MockResult): FakeQueryBuilder {
     select: vi.fn<SelectFn>(() => builder),
     eq: vi.fn<EqFn>(() => builder),
     is: vi.fn<IsFn>(() => builder),
+    not: vi.fn<NotFn>(() => builder),
+    contains: vi.fn<ContainsFn>(() => builder),
+    filter: vi.fn<FilterFn>(() => builder),
     single: vi.fn<SingleFn>(async () => result),
     maybeSingle: vi.fn<MaybeSingleFn>(async () => result),
     then: (onfulfilled, onrejected) =>
@@ -99,7 +119,7 @@ describe("lib/chaos/run-repository.ts — module surface", () => {
     expect(source).toMatch(/import\s+["']server-only["']/);
   });
 
-  it("exposes exactly the ten approved P0 persistence/lifecycle functions (Phase 3B's original three, Phase 3C's three narrow C01 lifecycle transitions, and Phase 3D-A's C03 lifecycle transitions plus two safe-shaped generic terminal helpers) — no speculative unconstrained lifecycle function", async () => {
+  it("exposes exactly the fifteen approved P0 persistence/lifecycle functions (Phase 3B's original three, Phase 3C's three narrow C01 lifecycle transitions, Phase 3D-A's C03 lifecycle transitions plus two safe-shaped generic terminal helpers, and Phase 3D-B's five narrow C07 lifecycle transitions) — no speculative unconstrained lifecycle function", async () => {
     const mod = await import("@/lib/chaos/run-repository");
     // `ChaosRunRepositoryError` is a class, which is also `typeof === "function"`
     // in JS — excluded here deliberately since it is an error type, not a
@@ -121,6 +141,11 @@ describe("lib/chaos/run-repository.ts — module surface", () => {
         "startPendingC03RunAtomically",
         "completeRunningChaosRunUnknown",
         "failRunningChaosRunExecution",
+        "blockPendingC07RunForPreSec007",
+        "startPendingC07RunAtomically",
+        "consumeC07ClientConfirmationDrop",
+        "completeRunningC07RunWithEvidence",
+        "cancelRunningC07Fault",
       ].sort(),
     );
     // Generic/speculative names Phase 3B explicitly avoided remain absent.
@@ -619,6 +644,312 @@ describe("completeRunningC01RunUnknown (Phase 3C)", () => {
     await expect(completeRunningC01RunUnknown(RUN_ID)).rejects.toBeInstanceOf(
       ChaosRunRepositoryError,
     );
+  });
+});
+
+describe("blockPendingC07RunForPreSec007 (Phase 3D-B)", () => {
+  it("issues a single atomic conditional UPDATE hardcoding C07 eligibility including order_id IS NOT NULL", async () => {
+    const builder = makeQueryBuilder({
+      data: fakeChaosRunRow({
+        scenario_id: "C07",
+        status: "COMPLETED",
+        outcome: "BLOCKED",
+      }),
+      error: null,
+    });
+    fromMock.mockReturnValue(builder);
+    const { blockPendingC07RunForPreSec007 } =
+      await import("@/lib/chaos/run-repository");
+    const fixedNow = new Date("2026-03-03T02:00:00.000Z");
+
+    await blockPendingC07RunForPreSec007(RUN_ID, "safe reason", () => fixedNow);
+
+    expect(builder.update).toHaveBeenCalledWith({
+      status: "COMPLETED",
+      outcome: "BLOCKED",
+      failed_precheck_id: null,
+      execution_block_code: "PRE-SEC-007",
+      error_message_redacted: "safe reason",
+      started_at: null,
+      completed_at: fixedNow.toISOString(),
+      updated_at: fixedNow.toISOString(),
+    });
+    expect(builder.eq).toHaveBeenCalledWith("scenario_id", "C07");
+    expect(builder.eq).toHaveBeenCalledWith(
+      "fault_type",
+      "DROP_CLIENT_CONFIRMATION",
+    );
+    expect(builder.eq).toHaveBeenCalledWith(
+      "data_classification",
+      "RECORDED_TEST_EVIDENCE",
+    );
+    expect(builder.not).toHaveBeenCalledWith("order_id", "is", null);
+  });
+
+  it("returns null when zero rows matched", async () => {
+    fromMock.mockReturnValue(makeQueryBuilder({ data: null, error: null }));
+    const { blockPendingC07RunForPreSec007 } =
+      await import("@/lib/chaos/run-repository");
+    expect(
+      await blockPendingC07RunForPreSec007(RUN_ID, "safe reason"),
+    ).toBeNull();
+  });
+});
+
+describe("startPendingC07RunAtomically (Phase 3D-B)", () => {
+  it("issues a single atomic UPDATE setting RUNNING + started_at + the fixed armed fault_state, hardcoding C07 eligibility", async () => {
+    const builder = makeQueryBuilder({
+      data: fakeChaosRunRow({ scenario_id: "C07", status: "RUNNING" }),
+      error: null,
+    });
+    fromMock.mockReturnValue(builder);
+    const { startPendingC07RunAtomically } =
+      await import("@/lib/chaos/run-repository");
+    const fixedNow = new Date("2026-03-03T03:00:00.000Z");
+
+    const result = await startPendingC07RunAtomically(RUN_ID, () => fixedNow);
+
+    expect(builder.update).toHaveBeenCalledWith({
+      status: "RUNNING",
+      started_at: fixedNow.toISOString(),
+      updated_at: fixedNow.toISOString(),
+      fault_state: { armed: true, consumed: false },
+    });
+    expect(builder.eq).toHaveBeenCalledWith("scenario_id", "C07");
+    expect(builder.eq).toHaveBeenCalledWith(
+      "fault_type",
+      "DROP_CLIENT_CONFIRMATION",
+    );
+    expect(builder.not).toHaveBeenCalledWith("order_id", "is", null);
+    expect(result.kind).toBe("STARTED");
+  });
+
+  it("returns NOT_ELIGIBLE (never throws) when zero rows matched and no error occurred", async () => {
+    fromMock.mockReturnValue(makeQueryBuilder({ data: null, error: null }));
+    const { startPendingC07RunAtomically } =
+      await import("@/lib/chaos/run-repository");
+    expect(await startPendingC07RunAtomically(RUN_ID)).toEqual({
+      kind: "NOT_ELIGIBLE",
+    });
+  });
+
+  it("maps a 23505 unique-violation error to ALREADY_ARMED_FOR_ORDER — the Phase 3D-0 partial index is the race-safety authority", async () => {
+    fromMock.mockReturnValue(
+      makeQueryBuilder({
+        data: null,
+        error: { code: "23505", message: "duplicate key value" },
+      }),
+    );
+    const { startPendingC07RunAtomically } =
+      await import("@/lib/chaos/run-repository");
+    expect(await startPendingC07RunAtomically(RUN_ID)).toEqual({
+      kind: "ALREADY_ARMED_FOR_ORDER",
+    });
+  });
+
+  it("throws ChaosRunRepositoryError on any other Supabase error", async () => {
+    fromMock.mockReturnValue(
+      makeQueryBuilder({
+        data: null,
+        error: { code: "OTHER", message: "leaked-secret-detail" },
+      }),
+    );
+    const { startPendingC07RunAtomically, ChaosRunRepositoryError } =
+      await import("@/lib/chaos/run-repository");
+    await expect(startPendingC07RunAtomically(RUN_ID)).rejects.toBeInstanceOf(
+      ChaosRunRepositoryError,
+    );
+  });
+});
+
+describe("consumeC07ClientConfirmationDrop (Phase 3D-B correction round — exact JSON state)", () => {
+  it("11: issues a single atomic UPDATE using EXACT jsonb equality (never containment) to require armed=true/consumed=false before flipping to consumed=true", async () => {
+    const builder = makeQueryBuilder({
+      data: fakeChaosRunRow({ scenario_id: "C07", status: "RUNNING" }),
+      error: null,
+    });
+    fromMock.mockReturnValue(builder);
+    const { consumeC07ClientConfirmationDrop } =
+      await import("@/lib/chaos/run-repository");
+    const fixedNow = new Date("2026-03-03T04:00:00.000Z");
+
+    await consumeC07ClientConfirmationDrop(RUN_ID, () => fixedNow);
+
+    expect(builder.update).toHaveBeenCalledWith({
+      fault_state: { armed: true, consumed: true },
+      updated_at: fixedNow.toISOString(),
+    });
+    // A raw object passed to postgrest-js's `.eq()` is not serialized as
+    // JSON (it would stringify to the literal "[object Object]" and the
+    // database would reject it with 22P02) — the exact JSON text is
+    // supplied explicitly via `.filter(column, "eq", value)`, postgrest-js's
+    // documented raw-syntax escape hatch.
+    expect(builder.filter).toHaveBeenCalledWith(
+      "fault_state",
+      "eq",
+      JSON.stringify({ armed: true, consumed: false }),
+    );
+    expect(builder.eq).toHaveBeenCalledWith("status", "RUNNING");
+    expect(builder.eq).toHaveBeenCalledWith(
+      "data_classification",
+      "RECORDED_TEST_EVIDENCE",
+    );
+    expect(builder.contains).not.toHaveBeenCalled();
+  });
+
+  it("returns null (never throws) when zero rows matched — already consumed or not active", async () => {
+    fromMock.mockReturnValue(makeQueryBuilder({ data: null, error: null }));
+    const { consumeC07ClientConfirmationDrop } =
+      await import("@/lib/chaos/run-repository");
+    expect(await consumeC07ClientConfirmationDrop(RUN_ID)).toBeNull();
+  });
+});
+
+describe("completeRunningC07RunWithEvidence (Phase 3D-B correction round — exact JSON state)", () => {
+  it("12: requires EXACT consumed=true jsonb equality (never containment), scopes to the expected order, and populates the resolved evidence FKs", async () => {
+    const builder = makeQueryBuilder({
+      data: fakeChaosRunRow({
+        scenario_id: "C07",
+        status: "COMPLETED",
+        outcome: "UNKNOWN",
+      }),
+      error: null,
+    });
+    fromMock.mockReturnValue(builder);
+    const { completeRunningC07RunWithEvidence } =
+      await import("@/lib/chaos/run-repository");
+    const fixedNow = new Date("2026-03-03T05:00:00.000Z");
+
+    await completeRunningC07RunWithEvidence(
+      RUN_ID,
+      "order-1",
+      {
+        paymentAttemptId: "attempt-1",
+        paymentId: "payment-1",
+        sourceWebhookEventId: "webhook-1",
+      },
+      () => fixedNow,
+    );
+
+    expect(builder.update).toHaveBeenCalledWith({
+      status: "COMPLETED",
+      outcome: "UNKNOWN",
+      completed_at: fixedNow.toISOString(),
+      updated_at: fixedNow.toISOString(),
+      fault_state: { armed: true, consumed: true },
+      payment_attempt_id: "attempt-1",
+      payment_id: "payment-1",
+      source_webhook_event_id: "webhook-1",
+      error_message_redacted: null,
+    });
+    expect(builder.eq).toHaveBeenCalledWith("order_id", "order-1");
+    expect(builder.filter).toHaveBeenCalledWith(
+      "fault_state",
+      "eq",
+      JSON.stringify({ armed: true, consumed: true }),
+    );
+    expect(builder.contains).not.toHaveBeenCalled();
+  });
+
+  it("returns null when zero rows matched", async () => {
+    fromMock.mockReturnValue(makeQueryBuilder({ data: null, error: null }));
+    const { completeRunningC07RunWithEvidence } =
+      await import("@/lib/chaos/run-repository");
+    expect(
+      await completeRunningC07RunWithEvidence(RUN_ID, "order-1", {
+        paymentAttemptId: "a",
+        paymentId: "p",
+        sourceWebhookEventId: "w",
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("cancelRunningC07Fault (Phase 3D-B final correction round — Blocker A: atomic exact pre-state)", () => {
+  it("transitions a RUNNING C07 run to FAILED/ERROR, scoped to the expected order, preserving fault_state untouched", async () => {
+    const builder = makeQueryBuilder({
+      data: fakeChaosRunRow({
+        scenario_id: "C07",
+        status: "FAILED",
+        outcome: "ERROR",
+      }),
+      error: null,
+    });
+    fromMock.mockReturnValue(builder);
+    const { cancelRunningC07Fault } =
+      await import("@/lib/chaos/run-repository");
+    const fixedNow = new Date("2026-03-03T06:00:00.000Z");
+
+    await cancelRunningC07Fault(
+      RUN_ID,
+      "order-1",
+      false,
+      "operator cancel",
+      () => fixedNow,
+    );
+
+    expect(builder.update).toHaveBeenCalledWith({
+      status: "FAILED",
+      outcome: "ERROR",
+      completed_at: fixedNow.toISOString(),
+      updated_at: fixedNow.toISOString(),
+      error_message_redacted: "operator cancel",
+    });
+    expect(builder.eq).toHaveBeenCalledWith("order_id", "order-1");
+    expect(builder.eq).toHaveBeenCalledWith(
+      "data_classification",
+      "RECORDED_TEST_EVIDENCE",
+    );
+    // fault_state is never part of the update payload.
+    const updatePayload = builder.update.mock.calls[0]![0];
+    expect(updatePayload).not.toHaveProperty("fault_state");
+  });
+
+  it("Blocker A: requires exact fault_state={armed:true,consumed:false} via .filter(..., 'eq', ...) when expectedConsumed=false — never .contains()", async () => {
+    const builder = makeQueryBuilder({
+      data: fakeChaosRunRow({ scenario_id: "C07", status: "FAILED" }),
+      error: null,
+    });
+    fromMock.mockReturnValue(builder);
+    const { cancelRunningC07Fault } =
+      await import("@/lib/chaos/run-repository");
+
+    await cancelRunningC07Fault(RUN_ID, "order-1", false, "operator cancel");
+
+    expect(builder.filter).toHaveBeenCalledWith(
+      "fault_state",
+      "eq",
+      JSON.stringify({ armed: true, consumed: false }),
+    );
+    expect(builder.contains).not.toHaveBeenCalled();
+  });
+
+  it("Blocker A: requires exact fault_state={armed:true,consumed:true} via .filter(..., 'eq', ...) when expectedConsumed=true — never .contains()", async () => {
+    const builder = makeQueryBuilder({
+      data: fakeChaosRunRow({ scenario_id: "C07", status: "FAILED" }),
+      error: null,
+    });
+    fromMock.mockReturnValue(builder);
+    const { cancelRunningC07Fault } =
+      await import("@/lib/chaos/run-repository");
+
+    await cancelRunningC07Fault(RUN_ID, "order-1", true, "operator cancel");
+
+    expect(builder.filter).toHaveBeenCalledWith(
+      "fault_state",
+      "eq",
+      JSON.stringify({ armed: true, consumed: true }),
+    );
+    expect(builder.contains).not.toHaveBeenCalled();
+  });
+
+  it("returns null when the run is not currently RUNNING (or the exact pre-state predicate no longer matches)", async () => {
+    fromMock.mockReturnValue(makeQueryBuilder({ data: null, error: null }));
+    const { cancelRunningC07Fault } =
+      await import("@/lib/chaos/run-repository");
+    expect(
+      await cancelRunningC07Fault(RUN_ID, "order-1", false, "operator cancel"),
+    ).toBeNull();
   });
 });
 

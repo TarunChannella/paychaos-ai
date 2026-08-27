@@ -28,6 +28,7 @@
  */
 import { revalidatePath } from "next/cache";
 
+import { checkAndSuppressC07ClientConfirmation } from "@/lib/chaos/c07-execution-service";
 import {
   createDemoMerchantOrder,
   createRazorpayOrderForMerchantOrder,
@@ -178,24 +179,92 @@ export interface VerifyCheckoutActionResult {
     readonly checkoutVerifiedAt: string | null;
     readonly razorpayPaymentStatus: string | null;
   };
+  /**
+   * Phase 3D-B — present and `true` only when a controlled C07 chaos test
+   * intentionally suppressed this client confirmation
+   * (`checkAndSuppressC07ClientConfirmation`). Never present on the normal
+   * verification path — existing callers that only check `ok`/`payment`
+   * observe unchanged behavior.
+   */
+  readonly suppressed?: boolean;
+  /** Safe, truthful text accompanying `suppressed: true` — never a raw error, never a claim that the payment failed. */
+  readonly message?: string;
 }
 
 const SAFE_CHECKOUT_VERIFY_ERROR_MESSAGE =
   "Could not verify the Checkout response. Please try again.";
 
 /**
+ * Phase 3D-B — the ONE intentionally-authorized frozen-compatibility
+ * addition to this action (this task's Section 13). Never a failure: the
+ * payment may genuinely be succeeding server-side via the webhook path —
+ * this message only explains why the browser's own confirmation was not
+ * used as authority.
+ */
+const SAFE_C07_SUPPRESSION_MESSAGE =
+  "Client confirmation was intentionally suppressed for the PayChaos C07 test. Waiting for verified webhook convergence.";
+
+/**
+ * Phase 3D-B correction round (Blocker 1) — a candidate C07 confirmation
+ * failed authentication (missing trusted Razorpay Order correlation, a
+ * browser/trusted order-id mismatch, an invalid Checkout signature, or the
+ * verifier's own configuration being unavailable). Deliberately the SAME
+ * generic text as an ordinary Checkout verification failure — never
+ * exposes which specific reason applied, the supplied/expected signature,
+ * or any secret/configuration detail.
+ */
+const SAFE_C07_INVALID_CONFIRMATION_MESSAGE =
+  SAFE_CHECKOUT_VERIFY_ERROR_MESSAGE;
+
+/**
  * Accepts the browser's full Checkout success response
  * (`paymentAttemptId`, `razorpayPaymentId`, `razorpayOrderId`,
- * `razorpaySignature`) — ALL untrusted until
- * `verifyCheckoutAndPersistPayment` independently verifies them against
- * this server's own trusted `payment_attempts` row. The returned
- * signature-verification status is genuine server-computed evidence, never
- * an echo of client input. The signature value itself is never returned to
- * the browser and never logged.
+ * `razorpaySignature`) — ALL untrusted until independently verified. The
+ * signature value itself is never returned to the browser and never
+ * logged.
+ *
+ * Phase 3D-B addition (correction round): before any normal verification,
+ * checks whether a controlled C07 chaos test has an active RUNNING fault
+ * for this trusted `paymentAttemptId`'s order
+ * (`checkAndSuppressC07ClientConfirmation` — receives the SAME Checkout
+ * fields already submitted here, scoped entirely server-side, never by any
+ * browser-supplied chaos run id, fault switch, or scenario field):
+ *
+ *   - `SUPPRESSED` — the confirmation was genuinely authenticated (or an
+ *     earlier one already was) against the trusted persisted Razorpay
+ *     Order ID and Checkout signature; `verifyCheckoutAndPersistPayment` is
+ *     never called; a safe, truthful `suppressed` result is returned;
+ *   - `REJECTED_INVALID_CONFIRMATION` — an active fault exists but this
+ *     specific candidate confirmation failed authentication;
+ *     `verifyCheckoutAndPersistPayment` is never called; a safe generic
+ *     error is returned, never exposing which check failed;
+ *   - `NOT_SUPPRESSED` — no active fault (or a malformed/misclassified one,
+ *     which fails closed as not-active) — behavior is byte-for-byte
+ *     identical to the pre-existing contract.
  */
 export async function verifyCheckoutAction(
   input: VerifyCheckoutActionInput,
 ): Promise<VerifyCheckoutActionResult> {
+  const suppression = await checkAndSuppressC07ClientConfirmation({
+    paymentAttemptId: input.paymentAttemptId,
+    razorpayPaymentId: input.razorpayPaymentId,
+    razorpayOrderId: input.razorpayOrderId,
+    razorpaySignature: input.razorpaySignature,
+  });
+  if (suppression.kind === "SUPPRESSED") {
+    return {
+      ok: true,
+      suppressed: true,
+      message: SAFE_C07_SUPPRESSION_MESSAGE,
+    };
+  }
+  if (suppression.kind === "REJECTED_INVALID_CONFIRMATION") {
+    logEvent("chaos_c07_invalid_confirmation_rejected", {
+      reason_category: suppression.reasonCategory,
+    });
+    return { ok: false, error: SAFE_C07_INVALID_CONFIRMATION_MESSAGE };
+  }
+
   try {
     const payment = await verifyCheckoutAndPersistPayment(input);
     revalidatePath("/demo-merchant");

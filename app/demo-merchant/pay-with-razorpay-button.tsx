@@ -41,6 +41,18 @@ const CHECKOUT_SCRIPT_ID = "razorpay-checkout-script";
 const DEFAULT_ERROR_MESSAGE =
   "Could not open Razorpay Checkout. Please try again.";
 
+/**
+ * Phase 3D-B correction round (Blocker 2) — fixed fallback text for a
+ * genuine C07 suppression result, used only if the server response
+ * somehow omitted its own `message` (never expected in practice, but this
+ * component never renders `undefined` as if it were a real message). Kept
+ * identical in spirit to the server's own `SAFE_C07_SUPPRESSION_MESSAGE`
+ * (`app/demo-merchant/actions.ts`) — this is a display-layer fallback only,
+ * not the source of truth for that text.
+ */
+const DEFAULT_C07_SUPPRESSION_MESSAGE =
+  "Client confirmation was intentionally suppressed for the PayChaos C07 test. Waiting for verified webhook convergence.";
+
 interface RazorpayCheckoutSuccessResponse {
   readonly razorpay_payment_id: string;
   readonly razorpay_order_id: string;
@@ -120,9 +132,20 @@ export function PayWithRazorpayButton({
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [verified, setVerified] = useState<VerifiedEvidence | null>(null);
+  /**
+   * Phase 3D-B correction round (Blocker 2) — set only for a genuine C07
+   * suppression result (`result.ok === true && result.suppressed ===
+   * true`). Never implies captured/failed/paid/fulfilled — it only records
+   * that the browser's own confirmation was intentionally not used as
+   * authority for this attempt.
+   */
+  const [c07Suppressed, setC07Suppressed] = useState<string | null>(null);
 
   function handleClick() {
     setError(null);
+    // A fresh Checkout attempt must not carry forward stale suppression UI
+    // state from a previous attempt.
+    setC07Suppressed(null);
     startTransition(async () => {
       const prepared = await prepareCheckoutAction(paymentAttemptId);
       if (!prepared.ok || !prepared.checkout) {
@@ -158,6 +181,18 @@ export function PayWithRazorpayButton({
               razorpayOrderId: response.razorpay_order_id,
               razorpaySignature: response.razorpay_signature,
             });
+            // Phase 3D-B correction round (Blocker 2) — a genuine C07
+            // suppression result must be handled BEFORE the generic
+            // `!result.payment` failure branch below, which would
+            // otherwise misrepresent it as "Could not open Razorpay
+            // Checkout." Never creates verified-Checkout-evidence UI
+            // state, never claims captured/failed/paid/fulfilled.
+            if (result.ok && result.suppressed) {
+              setC07Suppressed(
+                result.message ?? DEFAULT_C07_SUPPRESSION_MESSAGE,
+              );
+              return;
+            }
             if (!result.ok || !result.payment) {
               setError(result.error ?? DEFAULT_ERROR_MESSAGE);
               return;
@@ -189,6 +224,14 @@ export function PayWithRazorpayButton({
       {error && (
         <p role="alert" className="text-xs text-destructive">
           {error}
+        </p>
+      )}
+      {c07Suppressed && (
+        <p
+          className="text-xs text-muted-foreground"
+          data-testid="c07-client-confirmation-suppressed"
+        >
+          {c07Suppressed}
         </p>
       )}
       {verified && (
