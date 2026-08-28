@@ -1030,6 +1030,238 @@ export async function cancelRunningC07Fault(
 }
 
 /**
+ * Phase 3D-E — atomically transitions one eligible PENDING C11-A chaos run
+ * to RUNNING (docs/CHAOS_SCENARIOS.md Section 23, this task's Section 9).
+ * C11-A and C11-B share `scenario_id = 'C11'`/`fault_type IS NULL`/
+ * `data_classification = 'RECORDED_TEST_EVIDENCE'` (this task's Section 3),
+ * so this function's `WHERE` clause additionally requires
+ * `source_webhook_event_id IS NULL`, `payment_id IS NULL`, and
+ * `payment_attempt_id IS NULL` — a C11-B PENDING run always has all three
+ * of those non-null by the time it exists (`lib/chaos/run-service.ts`'s
+ * `resolvePendingRunMetadata` for C11 Mechanism B never persists a PENDING
+ * row without a fully resolved `source_webhook_event_id`/
+ * `paymentAttemptId`), so a C11-B run can never satisfy this predicate.
+ * `order_id IS NOT NULL` is required because C11-A's precondition is always
+ * a genuinely resolved fresh order (PRECHECK-08). The single conditional
+ * `UPDATE ... WHERE ... RETURNING` (the same atomic-conditional-UPDATE
+ * idiom as every other lifecycle transition in this module) guarantees a
+ * competing concurrent claim on the SAME run can never both succeed — only
+ * the winner observes a non-null returned row.
+ *
+ * Returns `null` (never throws for this case) when zero rows matched — the
+ * run does not exist, is not an eligible PENDING C11-A row, or has already
+ * been claimed by a concurrent caller.
+ */
+export async function startPendingC11ARunAtomically(
+  id: string,
+  now: () => Date = () => new Date(),
+): Promise<ChaosRunRow | null> {
+  const client = getSupabaseServerClient();
+  const timestamp = now().toISOString();
+
+  const { data, error } = await client
+    .from("chaos_runs")
+    .update({
+      status: "RUNNING",
+      started_at: timestamp,
+      updated_at: timestamp,
+    })
+    .eq("id", id)
+    .eq("scenario_id", "C11")
+    .eq("status", "PENDING")
+    .is("fault_type", null)
+    .eq("data_classification", "RECORDED_TEST_EVIDENCE")
+    .not("order_id", "is", null)
+    .is("source_webhook_event_id", null)
+    .is("payment_id", null)
+    .is("payment_attempt_id", null)
+    .is("outcome", null)
+    .select()
+    .maybeSingle();
+
+  if (error) {
+    throw new ChaosRunRepositoryError(
+      "CHAOS_RUN_C11A_START_FAILED",
+      "Failed to atomically start the C11-A chaos run.",
+    );
+  }
+
+  return data;
+}
+
+/**
+ * Phase 3D-E — atomically transitions one eligible PENDING C11-A chaos run
+ * to the execution-time BLOCKED shape frozen by Phase 3D-0 (mirrors
+ * `blockPendingC07RunForPreSec007` exactly): `execution_block_code =
+ * 'PRE-SEC-007'`, `failed_precheck_id = NULL`, `started_at = NULL`. Same
+ * C11-A-specific disambiguation as `startPendingC11ARunAtomically` above.
+ *
+ * Returns `null` (never throws for this case) when zero rows matched. The
+ * caller must never treat a `null` return as "blocked successfully".
+ */
+export async function blockPendingC11ARunForPreSec007(
+  id: string,
+  safeReason: string,
+  now: () => Date = () => new Date(),
+): Promise<ChaosRunRow | null> {
+  const client = getSupabaseServerClient();
+  const timestamp = now().toISOString();
+
+  const { data, error } = await client
+    .from("chaos_runs")
+    .update({
+      status: "COMPLETED",
+      outcome: "BLOCKED",
+      failed_precheck_id: null,
+      execution_block_code: "PRE-SEC-007",
+      error_message_redacted: safeReason,
+      started_at: null,
+      completed_at: timestamp,
+      updated_at: timestamp,
+    })
+    .eq("id", id)
+    .eq("status", "PENDING")
+    .eq("scenario_id", "C11")
+    .is("fault_type", null)
+    .eq("data_classification", "RECORDED_TEST_EVIDENCE")
+    .not("order_id", "is", null)
+    .is("source_webhook_event_id", null)
+    .is("payment_id", null)
+    .is("payment_attempt_id", null)
+    .select()
+    .maybeSingle();
+
+  if (error) {
+    throw new ChaosRunRepositoryError(
+      "CHAOS_RUN_C11A_BLOCK_FAILED",
+      "Failed to persist the PRE-SEC-007 blocked C11-A chaos run.",
+    );
+  }
+
+  return data;
+}
+
+/** The authoritative evidence FK selection a C11-A reconciliation completion may populate — never fabricated, only ever the resolved result of `resolveC11AFailureObservationEvidence`. */
+export interface C11AObservationEvidenceLinks {
+  readonly paymentAttemptId: string;
+  readonly paymentId: string;
+  readonly sourceWebhookEventId: string;
+}
+
+/**
+ * Phase 3D-E — atomically transitions a RUNNING C11-A run to
+ * `COMPLETED`/`UNKNOWN` once authoritative `payment.failed` evidence is
+ * resolved (this task's Section 14). Requires `id`/`order_id =
+ * expectedOrderId` (defense-in-depth scoping to the trusted expected
+ * order)/`scenario_id = C11`/`fault_type IS NULL`/`data_classification =
+ * RECORDED_TEST_EVIDENCE`/`status = RUNNING`/`source_webhook_event_id IS
+ * NULL` (the precondition — this run must not already have been completed).
+ * Populates the resolved evidence FK columns. Never accepts `outcome` from
+ * the caller — it is always the hardcoded literal `UNKNOWN`: Phase 3D never
+ * assigns invariant PASS/FAIL (that is Phase 3F's job, INV-003/INV-004/
+ * INV-011).
+ *
+ * Returns `null` (never throws for this case) when zero rows matched. The
+ * caller (`lib/chaos/c11-execution-service.ts`) independently re-validates
+ * the exact returned row shape before ever reporting `COMPLETED`.
+ */
+export async function completeRunningC11ARunWithEvidence(
+  chaosRunId: string,
+  expectedOrderId: string,
+  evidence: C11AObservationEvidenceLinks,
+  now: () => Date = () => new Date(),
+): Promise<ChaosRunRow | null> {
+  const client = getSupabaseServerClient();
+  const timestamp = now().toISOString();
+
+  const { data, error } = await client
+    .from("chaos_runs")
+    .update({
+      status: "COMPLETED",
+      outcome: "UNKNOWN",
+      completed_at: timestamp,
+      updated_at: timestamp,
+      payment_attempt_id: evidence.paymentAttemptId,
+      payment_id: evidence.paymentId,
+      source_webhook_event_id: evidence.sourceWebhookEventId,
+      error_message_redacted: null,
+    })
+    .eq("id", chaosRunId)
+    .eq("order_id", expectedOrderId)
+    .eq("scenario_id", "C11")
+    .is("fault_type", null)
+    .eq("data_classification", "RECORDED_TEST_EVIDENCE")
+    .eq("status", "RUNNING")
+    .is("source_webhook_event_id", null)
+    .select()
+    .maybeSingle();
+
+  if (error) {
+    throw new ChaosRunRepositoryError(
+      "CHAOS_RUN_C11A_COMPLETE_FAILED",
+      "Failed to persist C11-A chaos run completion.",
+    );
+  }
+
+  return data;
+}
+
+/**
+ * Phase 3D-E — records a technical execution failure OR an explicit operator
+ * cancellation on a RUNNING C11-A run: `RUNNING -> FAILED`/`ERROR` (this
+ * task's Sections 15/16). This is NEVER how a merchant reliability FAIL is
+ * represented (that is a later Phase 3F deterministic invariant-evaluation
+ * outcome) — `FAILED`/`ERROR` means the observation/reconciliation itself
+ * could not complete (ambiguous evidence, a technical read failure) OR was
+ * explicitly abandoned by the operator. `safeReason` must already be a
+ * fixed, safe, redacted string — this function never accepts or persists a
+ * raw Postgres/Supabase error, a stack trace, a secret, or a raw payload.
+ * Hardcodes and re-checks the same C11-A-specific scoping as
+ * `completeRunningC11ARunWithEvidence` above (`source_webhook_event_id IS
+ * NULL` — a run that already completed reconciliation, which sets that
+ * field, can never be routed through this function again). Deliberately
+ * does NOT require `payment_attempt_id`/`payment_id IS NULL` — Section 16
+ * requires cancellation to remain available for a RUNNING observation
+ * regardless of whatever the (never-gating) evidence resolution attempted
+ * to read.
+ */
+export async function failRunningC11ARunExecution(
+  id: string,
+  safeReason: string,
+  now: () => Date = () => new Date(),
+): Promise<ChaosRunRow | null> {
+  const client = getSupabaseServerClient();
+  const timestamp = now().toISOString();
+
+  const { data, error } = await client
+    .from("chaos_runs")
+    .update({
+      status: "FAILED",
+      outcome: "ERROR",
+      completed_at: timestamp,
+      updated_at: timestamp,
+      error_message_redacted: safeReason,
+    })
+    .eq("id", id)
+    .eq("scenario_id", "C11")
+    .is("fault_type", null)
+    .eq("data_classification", "RECORDED_TEST_EVIDENCE")
+    .eq("status", "RUNNING")
+    .is("source_webhook_event_id", null)
+    .select()
+    .maybeSingle();
+
+  if (error) {
+    throw new ChaosRunRepositoryError(
+      "CHAOS_RUN_C11A_FAIL_FAILED",
+      "Failed to persist C11-A chaos run technical failure.",
+    );
+  }
+
+  return data;
+}
+
+/**
  * Read-only lookup by internal id. Returns `null` if no such row exists.
  * Throws `ChaosRunRepositoryError` on a genuine DB failure — never returns
  * `null` to mean "the database errored", so a caller cannot mistake an

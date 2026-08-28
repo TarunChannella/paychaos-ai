@@ -119,7 +119,7 @@ describe("lib/chaos/run-repository.ts — module surface", () => {
     expect(source).toMatch(/import\s+["']server-only["']/);
   });
 
-  it("exposes exactly the eighteen approved P0 persistence/lifecycle functions (Phase 3B's original three, Phase 3C's three narrow C01 lifecycle transitions, Phase 3D-A's C03 lifecycle transitions plus two safe-shaped generic terminal helpers, Phase 3D-B's five narrow C07 lifecycle transitions, and Phase 3D-D's three narrow C11-B lifecycle transitions) — no speculative unconstrained lifecycle function", async () => {
+  it("exposes exactly the twenty-two approved P0 persistence/lifecycle functions (Phase 3B's original three, Phase 3C's three narrow C01 lifecycle transitions, Phase 3D-A's C03 lifecycle transitions plus two safe-shaped generic terminal helpers, Phase 3D-B's five narrow C07 lifecycle transitions, Phase 3D-D's three narrow C11-B lifecycle transitions, and Phase 3D-E's four narrow C11-A lifecycle transitions) — no speculative unconstrained lifecycle function", async () => {
     const mod = await import("@/lib/chaos/run-repository");
     // `ChaosRunRepositoryError` is a class, which is also `typeof === "function"`
     // in JS — excluded here deliberately since it is an error type, not a
@@ -149,6 +149,10 @@ describe("lib/chaos/run-repository.ts — module surface", () => {
         "startPendingC11BRunAtomically",
         "completeRunningC11BRunUnknown",
         "failRunningC11BRunExecution",
+        "startPendingC11ARunAtomically",
+        "blockPendingC11ARunForPreSec007",
+        "completeRunningC11ARunWithEvidence",
+        "failRunningC11ARunExecution",
       ].sort(),
     );
     // Generic/speculative names Phase 3B explicitly avoided remain absent.
@@ -1209,6 +1213,242 @@ describe("failRunningC11BRunExecution (Phase 3D-D)", () => {
       await import("@/lib/chaos/run-repository");
     await expect(
       failRunningC11BRunExecution(RUN_ID, "safe reason"),
+    ).rejects.toBeInstanceOf(ChaosRunRepositoryError);
+  });
+});
+
+// ============================================================================
+// PHASE 3D-E — C11-A LIFECYCLE (this task's Sections 9/10/14/15)
+// ============================================================================
+
+describe("startPendingC11ARunAtomically (Phase 3D-E)", () => {
+  it("issues a single atomic UPDATE setting RUNNING + started_at, scoping on the exact C11-A disambiguating shape", async () => {
+    const builder = makeQueryBuilder({
+      data: fakeChaosRunRow({ scenario_id: "C11", status: "RUNNING" }),
+      error: null,
+    });
+    fromMock.mockReturnValue(builder);
+    const { startPendingC11ARunAtomically } =
+      await import("@/lib/chaos/run-repository");
+    const fixedNow = new Date("2026-03-04T00:00:00.000Z");
+
+    const result = await startPendingC11ARunAtomically(RUN_ID, () => fixedNow);
+
+    expect(builder.update).toHaveBeenCalledWith({
+      status: "RUNNING",
+      started_at: fixedNow.toISOString(),
+      updated_at: fixedNow.toISOString(),
+    });
+    expect(builder.eq).toHaveBeenCalledWith("id", RUN_ID);
+    expect(builder.eq).toHaveBeenCalledWith("scenario_id", "C11");
+    expect(builder.eq).toHaveBeenCalledWith("status", "PENDING");
+    expect(builder.is).toHaveBeenCalledWith("fault_type", null);
+    expect(builder.eq).toHaveBeenCalledWith(
+      "data_classification",
+      "RECORDED_TEST_EVIDENCE",
+    );
+    expect(builder.not).toHaveBeenCalledWith("order_id", "is", null);
+    expect(builder.is).toHaveBeenCalledWith("source_webhook_event_id", null);
+    expect(builder.is).toHaveBeenCalledWith("payment_id", null);
+    expect(builder.is).toHaveBeenCalledWith("payment_attempt_id", null);
+    expect(builder.is).toHaveBeenCalledWith("outcome", null);
+    expect(result?.status).toBe("RUNNING");
+  });
+
+  it("returns null when zero rows matched (e.g. a C11-B-shaped row with source_webhook_event_id set)", async () => {
+    fromMock.mockReturnValue(makeQueryBuilder({ data: null, error: null }));
+    const { startPendingC11ARunAtomically } =
+      await import("@/lib/chaos/run-repository");
+    expect(await startPendingC11ARunAtomically(RUN_ID)).toBeNull();
+  });
+
+  it("throws ChaosRunRepositoryError on a Supabase error, never leaking the raw error", async () => {
+    fromMock.mockReturnValue(
+      makeQueryBuilder({
+        data: null,
+        error: { message: "leaked-secret-detail" },
+      }),
+    );
+    const { startPendingC11ARunAtomically, ChaosRunRepositoryError } =
+      await import("@/lib/chaos/run-repository");
+    await expect(startPendingC11ARunAtomically(RUN_ID)).rejects.toBeInstanceOf(
+      ChaosRunRepositoryError,
+    );
+  });
+});
+
+describe("blockPendingC11ARunForPreSec007 (Phase 3D-E)", () => {
+  it("issues a single atomic UPDATE to the execution-time BLOCKED shape, scoped to the exact C11-A disambiguating shape", async () => {
+    const builder = makeQueryBuilder({
+      data: fakeChaosRunRow({
+        scenario_id: "C11",
+        status: "COMPLETED",
+        outcome: "BLOCKED",
+      }),
+      error: null,
+    });
+    fromMock.mockReturnValue(builder);
+    const { blockPendingC11ARunForPreSec007 } =
+      await import("@/lib/chaos/run-repository");
+    const fixedNow = new Date("2026-03-04T01:00:00.000Z");
+
+    await blockPendingC11ARunForPreSec007(
+      RUN_ID,
+      "safe reason",
+      () => fixedNow,
+    );
+
+    expect(builder.update).toHaveBeenCalledWith({
+      status: "COMPLETED",
+      outcome: "BLOCKED",
+      failed_precheck_id: null,
+      execution_block_code: "PRE-SEC-007",
+      error_message_redacted: "safe reason",
+      started_at: null,
+      completed_at: fixedNow.toISOString(),
+      updated_at: fixedNow.toISOString(),
+    });
+    expect(builder.eq).toHaveBeenCalledWith("scenario_id", "C11");
+    expect(builder.is).toHaveBeenCalledWith("fault_type", null);
+    expect(builder.is).toHaveBeenCalledWith("source_webhook_event_id", null);
+  });
+
+  it("returns null when zero rows matched", async () => {
+    fromMock.mockReturnValue(makeQueryBuilder({ data: null, error: null }));
+    const { blockPendingC11ARunForPreSec007 } =
+      await import("@/lib/chaos/run-repository");
+    expect(
+      await blockPendingC11ARunForPreSec007(RUN_ID, "safe reason"),
+    ).toBeNull();
+  });
+});
+
+describe("completeRunningC11ARunWithEvidence (Phase 3D-E)", () => {
+  it("populates the evidence FKs, hardcodes outcome=UNKNOWN, and requires source_webhook_event_id IS NULL as a precondition", async () => {
+    const builder = makeQueryBuilder({
+      data: fakeChaosRunRow({
+        scenario_id: "C11",
+        status: "COMPLETED",
+        outcome: "UNKNOWN",
+      }),
+      error: null,
+    });
+    fromMock.mockReturnValue(builder);
+    const { completeRunningC11ARunWithEvidence } =
+      await import("@/lib/chaos/run-repository");
+    const fixedNow = new Date("2026-03-04T02:00:00.000Z");
+
+    await completeRunningC11ARunWithEvidence(
+      RUN_ID,
+      "order-1",
+      {
+        paymentAttemptId: "attempt-1",
+        paymentId: "payment-1",
+        sourceWebhookEventId: "webhook-1",
+      },
+      () => fixedNow,
+    );
+
+    expect(builder.update).toHaveBeenCalledWith({
+      status: "COMPLETED",
+      outcome: "UNKNOWN",
+      completed_at: fixedNow.toISOString(),
+      updated_at: fixedNow.toISOString(),
+      payment_attempt_id: "attempt-1",
+      payment_id: "payment-1",
+      source_webhook_event_id: "webhook-1",
+      error_message_redacted: null,
+    });
+    expect(builder.eq).toHaveBeenCalledWith("order_id", "order-1");
+    expect(builder.eq).toHaveBeenCalledWith("scenario_id", "C11");
+    expect(builder.eq).toHaveBeenCalledWith("status", "RUNNING");
+    expect(builder.is).toHaveBeenCalledWith("source_webhook_event_id", null);
+  });
+
+  it("returns null when zero rows matched", async () => {
+    fromMock.mockReturnValue(makeQueryBuilder({ data: null, error: null }));
+    const { completeRunningC11ARunWithEvidence } =
+      await import("@/lib/chaos/run-repository");
+    expect(
+      await completeRunningC11ARunWithEvidence(RUN_ID, "order-1", {
+        paymentAttemptId: "a",
+        paymentId: "p",
+        sourceWebhookEventId: "w",
+      }),
+    ).toBeNull();
+  });
+
+  it("throws ChaosRunRepositoryError on a Supabase error, never leaking the raw error", async () => {
+    fromMock.mockReturnValue(
+      makeQueryBuilder({
+        data: null,
+        error: { message: "leaked-secret-detail" },
+      }),
+    );
+    const { completeRunningC11ARunWithEvidence, ChaosRunRepositoryError } =
+      await import("@/lib/chaos/run-repository");
+    await expect(
+      completeRunningC11ARunWithEvidence(RUN_ID, "order-1", {
+        paymentAttemptId: "a",
+        paymentId: "p",
+        sourceWebhookEventId: "w",
+      }),
+    ).rejects.toBeInstanceOf(ChaosRunRepositoryError);
+  });
+});
+
+describe("failRunningC11ARunExecution (Phase 3D-E)", () => {
+  it("transitions a RUNNING C11-A run to FAILED/ERROR with the caller's safe reason, scoped to the exact C11-A disambiguating shape", async () => {
+    const builder = makeQueryBuilder({
+      data: fakeChaosRunRow({
+        scenario_id: "C11",
+        status: "FAILED",
+        outcome: "ERROR",
+      }),
+      error: null,
+    });
+    fromMock.mockReturnValue(builder);
+    const { failRunningC11ARunExecution } =
+      await import("@/lib/chaos/run-repository");
+    const fixedNow = new Date("2026-03-04T03:00:00.000Z");
+
+    await failRunningC11ARunExecution(RUN_ID, "safe reason", () => fixedNow);
+
+    expect(builder.update).toHaveBeenCalledWith({
+      status: "FAILED",
+      outcome: "ERROR",
+      completed_at: fixedNow.toISOString(),
+      updated_at: fixedNow.toISOString(),
+      error_message_redacted: "safe reason",
+    });
+    expect(builder.eq).toHaveBeenCalledWith("scenario_id", "C11");
+    expect(builder.is).toHaveBeenCalledWith("fault_type", null);
+    expect(builder.eq).toHaveBeenCalledWith(
+      "data_classification",
+      "RECORDED_TEST_EVIDENCE",
+    );
+    expect(builder.eq).toHaveBeenCalledWith("status", "RUNNING");
+    expect(builder.is).toHaveBeenCalledWith("source_webhook_event_id", null);
+  });
+
+  it("returns null when zero rows matched (e.g. a PENDING or COMPLETED run)", async () => {
+    fromMock.mockReturnValue(makeQueryBuilder({ data: null, error: null }));
+    const { failRunningC11ARunExecution } =
+      await import("@/lib/chaos/run-repository");
+    expect(await failRunningC11ARunExecution(RUN_ID, "safe reason")).toBeNull();
+  });
+
+  it("throws ChaosRunRepositoryError on a Supabase error, never leaking the raw error", async () => {
+    fromMock.mockReturnValue(
+      makeQueryBuilder({
+        data: null,
+        error: { message: "leaked-secret-detail" },
+      }),
+    );
+    const { failRunningC11ARunExecution, ChaosRunRepositoryError } =
+      await import("@/lib/chaos/run-repository");
+    await expect(
+      failRunningC11ARunExecution(RUN_ID, "safe reason"),
     ).rejects.toBeInstanceOf(ChaosRunRepositoryError);
   });
 });
