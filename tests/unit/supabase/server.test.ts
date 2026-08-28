@@ -259,15 +259,42 @@ describe("Phase 1C-A/2C/2D/2E/2F/3B: Database type is scoped to exactly the 7 ap
     }
   });
 
-  it("event_processing_attempts declares no still-deferred Phase 3 field (fault_action/state_before/state_after) — chaos_run_id is now implemented (Phase 3C)", () => {
+  it("event_processing_attempts declares no still-deferred Phase 3 field — fault_action remains deferred; chaos_run_id (Phase 3C) and state_before/state_after (Phase 3E-A) are now implemented", () => {
     const match = typesSource.match(
       /\bevent_processing_attempts:\s*\{[\s\S]*?\n {6}\};/,
     );
     expect(match).not.toBeNull();
     const block = match![0]!;
-    for (const forbidden of ["fault_action", "state_before", "state_after"]) {
-      expect(block).not.toMatch(new RegExp(`\\b${forbidden}\\b`));
-    }
+    // `fault_action` is the ONLY remaining deferred column
+    // (docs/DATABASE.md Section 14 "Later Phase 3 (deferred)"). Phase 3E-A
+    // deliberately did not add it — see
+    // supabase/migrations/20260901000000_phase3e_evidence_snapshots.sql and
+    // tests/unit/supabase/migration.test.ts's Phase 3E-A block, which
+    // independently asserts no migration ever adds it.
+    expect(block).not.toMatch(/\bfault_action\b/);
+  });
+
+  it("Phase 3E-A: event_processing_attempts DOES declare state_before/state_after as nullable JSON objects (additive evidence-snapshot columns)", () => {
+    const match = typesSource.match(
+      /\bevent_processing_attempts:\s*\{[\s\S]*?\n {6}\};/,
+    );
+    expect(match).not.toBeNull();
+    const block = match![0]!;
+    expect(block).toMatch(
+      /\bstate_before:\s*Record<string,\s*unknown>\s*\|\s*null/,
+    );
+    expect(block).toMatch(
+      /\bstate_after:\s*Record<string,\s*unknown>\s*\|\s*null/,
+    );
+    // Present on Insert and Update as optional, nullable fields too — a
+    // snapshot must always be omittable, since NULL is a valid, truthful
+    // "not captured" state.
+    expect(block).toMatch(
+      /\bstate_before\?:\s*Record<string,\s*unknown>\s*\|\s*null/,
+    );
+    expect(block).toMatch(
+      /\bstate_after\?:\s*Record<string,\s*unknown>\s*\|\s*null/,
+    );
   });
 
   it("Phase 3C: event_processing_attempts DOES declare chaos_run_id (additive column)", () => {

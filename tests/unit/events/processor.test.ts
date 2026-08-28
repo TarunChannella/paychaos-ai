@@ -6,6 +6,36 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // tests/integration/supabase/050-merchant-processing.integration.test.ts.
 vi.mock("server-only", () => ({}));
 
+// Phase 3E-A: `lib/events/processor.ts` now also captures evidence snapshots
+// around the (unchanged) processing call. This file's subject is the frozen
+// Phase 2F processing contract, so the snapshot module is stubbed out to a
+// no-op success here — exactly as the repository under test already is. The
+// instrumentation itself (ordering, failure isolation, argument invariance)
+// is proven separately by
+// tests/unit/events/processor-evidence-instrumentation.test.ts. No assertion
+// below was changed, removed or weakened by this addition.
+vi.mock("@/lib/evidence/evidence-repository", () => ({
+  getProcessingSnapshotEligibility: vi.fn(async () => ({
+    kind: "ELIGIBLE_PENDING",
+    status: "PENDING",
+  })),
+  captureMerchantStateSnapshotForProcessingAttempt: vi.fn(async () => ({
+    version: 1,
+    order: null,
+    paymentAttempt: null,
+    payment: null,
+    fulfilments: null,
+  })),
+  persistProcessingStateBefore: vi.fn(async () => ({
+    outcome: "CAPTURED",
+    snapshot: { version: 1 },
+  })),
+  persistProcessingStateAfter: vi.fn(async () => ({
+    outcome: "CAPTURED",
+    snapshot: { version: 1 },
+  })),
+}));
+
 const processWebhookPaymentEventMock = vi.fn();
 
 // A minimal stand-in for EventProcessingRepositoryError, defined INSIDE the

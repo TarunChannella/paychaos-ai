@@ -1466,3 +1466,213 @@ describe("Phase 3D-0 migration — execution-block audit + C07 concurrency schem
     ]);
   });
 });
+
+describe("Phase 3E-A migration — event_processing_attempts evidence snapshots", () => {
+  // Statically verifies supabase/migrations/20260901000000_phase3e_evidence_snapshots.sql
+  // BEFORE it is manually applied to the real Supabase project — the same
+  // discipline the Phase 3B/3C/3D-0 blocks above already follow. Real
+  // constraint/set-once behavior against Postgres is separately covered by
+  // tests/integration/supabase/060-phase3e-evidence-snapshot.integration.test.ts,
+  // which remains NOT RUN until that manual application happens.
+  const phase3eMigration = migrations.find((m) => m.name.includes("phase3e"));
+  const phase2eMigration = migrations.find((m) => m.name.includes("phase2e"));
+  const phase2fMigration = migrations.find((m) => m.name.includes("phase2f"));
+  const phase3bMigration = migrations.find((m) => m.name.includes("phase3b"));
+  const phase3cMigration = migrations.find((m) => m.name.includes("phase3c"));
+  const phase3dMigration = migrations.find((m) => m.name.includes("phase3d"));
+
+  /** Non-comment lines only — the file's own header legitimately NAMES several things it deliberately does not do. */
+  function functionalSql(sql: string): string {
+    return sql
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("--"))
+      .join("\n");
+  }
+
+  it("1: the new additive migration file exists", () => {
+    expect(phase3eMigration).toBeDefined();
+  });
+
+  it("2: it sorts AFTER every existing migration (chronological filename ordering is preserved, so it can never be applied out of order)", () => {
+    expect(migrations[migrations.length - 1]!.name).toBe(
+      phase3eMigration!.name,
+    );
+    expect(phase3eMigration!.name).toMatch(
+      /^\d{14}_phase3e_evidence_snapshots\.sql$/,
+    );
+  });
+
+  it("3: every historical migration file remains unedited — each still contains its own original CREATE TABLE / CREATE FUNCTION statements, and this file contains none of them", () => {
+    expect(phase2eMigration!.sql).toMatch(
+      /create table\s+public\.event_processing_attempts/i,
+    );
+    expect(phase2fMigration!.sql).toMatch(
+      /create function public\.process_webhook_payment_event/i,
+    );
+    expect(phase3bMigration!.sql).toMatch(/create table\s+public\.chaos_runs/i);
+    expect(phase3cMigration!.sql).toMatch(
+      /create or replace function public\.process_webhook_payment_event/i,
+    );
+    expect(phase3dMigration!.sql).toMatch(
+      /add column execution_block_code text/i,
+    );
+    expect(functionalSql(phase3eMigration!.sql)).not.toMatch(/create\s+table/i);
+    expect(functionalSql(phase3eMigration!.sql)).not.toMatch(
+      /create\s+(or replace\s+)?function/i,
+    );
+  });
+
+  it("4: state_before is added as a NULLABLE jsonb column (no NOT NULL, no DEFAULT)", () => {
+    expect(phase3eMigration!.sql).toMatch(
+      /alter table public\.event_processing_attempts\s+add column state_before jsonb;/i,
+    );
+    expect(phase3eMigration!.sql).not.toMatch(
+      /add column state_before jsonb not null/i,
+    );
+    expect(phase3eMigration!.sql).not.toMatch(
+      /alter column state_before set not null/i,
+    );
+    expect(phase3eMigration!.sql).not.toMatch(
+      /add column state_before jsonb default/i,
+    );
+  });
+
+  it("5: state_after is added as a NULLABLE jsonb column (no NOT NULL, no DEFAULT)", () => {
+    expect(phase3eMigration!.sql).toMatch(
+      /alter table public\.event_processing_attempts\s+add column state_after jsonb;/i,
+    );
+    expect(phase3eMigration!.sql).not.toMatch(
+      /add column state_after jsonb not null/i,
+    );
+    expect(phase3eMigration!.sql).not.toMatch(
+      /alter column state_after set not null/i,
+    );
+    expect(phase3eMigration!.sql).not.toMatch(
+      /add column state_after jsonb default/i,
+    );
+  });
+
+  it("6: both columns carry an explanatory column comment (the repository's established migration convention)", () => {
+    expect(phase3eMigration!.sql).toMatch(
+      /comment on column public\.event_processing_attempts\.state_before is/i,
+    );
+    expect(phase3eMigration!.sql).toMatch(
+      /comment on column public\.event_processing_attempts\.state_after is/i,
+    );
+  });
+
+  it("7: both JSON-object CHECK constraints exist and accept NULL", () => {
+    const beforeMatch = phase3eMigration!.sql.match(
+      /add constraint event_processing_attempts_state_before_is_object check \(([\s\S]*?)\);/i,
+    );
+    expect(beforeMatch).not.toBeNull();
+    expect(beforeMatch![1]!).toMatch(/state_before is null or/i);
+    expect(beforeMatch![1]!).toMatch(
+      /jsonb_typeof\(state_before\) = 'object'/i,
+    );
+
+    const afterMatch = phase3eMigration!.sql.match(
+      /add constraint event_processing_attempts_state_after_is_object check \(([\s\S]*?)\);/i,
+    );
+    expect(afterMatch).not.toBeNull();
+    expect(afterMatch![1]!).toMatch(/state_after is null or/i);
+    expect(afterMatch![1]!).toMatch(/jsonb_typeof\(state_after\) = 'object'/i);
+  });
+
+  it("8: no generic evidence table is created (docs/DATABASE.md Section 31 — evidence lives on existing records)", () => {
+    for (const forbidden of [
+      "evidence_snapshots",
+      "chaos_evidence",
+      "generic_evidence",
+      "evidence_records",
+      "evidence",
+    ]) {
+      expect(phase3eMigration!.sql).not.toMatch(
+        new RegExp(
+          `create table\\s+(if not exists\\s+)?(public\\.)?${forbidden}\\b`,
+          "i",
+        ),
+      );
+    }
+    expect(extractCreateTableNames(combinedSql)).not.toContain("evidence");
+  });
+
+  it("9: no invariant/finding/regression schema is added", () => {
+    for (const forbidden of [
+      "invariant_results",
+      "findings",
+      "regression_runs",
+      "reliability_score_snapshots",
+    ]) {
+      expect(phase3eMigration!.sql).not.toMatch(
+        new RegExp(`create table\\s+public\\.${forbidden}`, "i"),
+      );
+      expect(extractCreateTableNames(combinedSql)).not.toContain(forbidden);
+    }
+    // No PASS/FAIL/UNKNOWN verdict vocabulary is introduced anywhere in the
+    // functional SQL of this migration.
+    expect(functionalSql(phase3eMigration!.sql)).not.toMatch(/'PASS'/);
+    expect(functionalSql(phase3eMigration!.sql)).not.toMatch(/'FAIL'/);
+  });
+
+  it("10: no TEST_FIXTURE / PAYCHAOS_SIMULATION runtime widening — source_kind's CHECK is not touched at all", () => {
+    const functional = functionalSql(phase3eMigration!.sql);
+    expect(functional).not.toMatch(/TEST_FIXTURE/);
+    expect(functional).not.toMatch(/PAYCHAOS_SIMULATION/);
+    expect(functional).not.toMatch(/source_kind/i);
+    expect(phase3eMigration!.sql).not.toMatch(
+      /drop constraint event_processing_attempts_source_kind_valid/i,
+    );
+  });
+
+  it("11: fault_action is NOT added — Phase 3E-A deliberately introduces no unused schema surface", () => {
+    expect(phase3eMigration!.sql).not.toMatch(/add column\s+fault_action\b/i);
+    expect(combinedSql).not.toMatch(/add column\s+fault_action\b/i);
+  });
+
+  it("12: nothing destructive — no DROP TABLE, no DROP COLUMN, no DROP CONSTRAINT, no TRUNCATE, no DELETE, no UPDATE backfill (functional SQL only: the file's own header comment legitimately NAMES these by promising it performs none of them)", () => {
+    const functional = functionalSql(phase3eMigration!.sql);
+    expect(functional).not.toMatch(/drop\s+table/i);
+    expect(functional).not.toMatch(/drop\s+column/i);
+    expect(functional).not.toMatch(/drop\s+constraint/i);
+    expect(functional).not.toMatch(/truncate/i);
+    expect(functional).not.toMatch(/^\s*delete\s+from/im);
+    expect(functional).not.toMatch(/^\s*update\s+public\./im);
+  });
+
+  it("13: it only ever ALTERs event_processing_attempts — no other table, no RLS change, no GRANT, no policy", () => {
+    const alterTableMatches = [
+      ...phase3eMigration!.sql.matchAll(/alter table\s+public\.(\w+)/gi),
+    ];
+    expect(alterTableMatches.length).toBeGreaterThan(0);
+    for (const match of alterTableMatches) {
+      expect(match[1]!.toLowerCase()).toBe("event_processing_attempts");
+    }
+    expect(phase3eMigration!.sql).not.toMatch(/create policy/i);
+    expect(phase3eMigration!.sql).not.toMatch(/\bgrant\b/i);
+    expect(phase3eMigration!.sql).not.toMatch(/\brevoke\b/i);
+    expect(phase3eMigration!.sql).not.toMatch(/enable row level security/i);
+  });
+
+  it("14: contains no secret-shaped value", () => {
+    expect(phase3eMigration!.sql).not.toMatch(/eyJ[A-Za-z0-9_-]{10,}/);
+    expect(phase3eMigration!.sql).not.toMatch(/RAZORPAY_KEY_SECRET/i);
+    expect(phase3eMigration!.sql).not.toMatch(/RAZORPAY_WEBHOOK_SECRET/i);
+    expect(phase3eMigration!.sql).not.toMatch(
+      /SUPABASE_SERVICE_ROLE_KEY\s*=\s*['"]/i,
+    );
+  });
+
+  it("15: the migration set still creates exactly the same 7 approved tables — Phase 3E-A adds no new table", () => {
+    const tableNames = extractCreateTableNames(combinedSql);
+    expect([...tableNames].sort()).toEqual([
+      "chaos_runs",
+      "event_processing_attempts",
+      "fulfilments",
+      "orders",
+      "payment_attempts",
+      "payments",
+      "webhook_events",
+    ]);
+  });
+});

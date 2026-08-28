@@ -1283,9 +1283,12 @@ CHECK constraint**. They stay unimplemented surface until the later phases that 
 because a future phase might need it" reasoning the original Phase 2E migration used to defer all three
 non-`REAL_RAZORPAY_WEBHOOK` values in the first place.
 
-Similarly, `chaos_run_id` is now a real column (Phase 3C), but `fault_action`/`state_before`/
-`state_after` remain deferred — they belong to Phase 3E's evidence-snapshot work, not Phase 3C's
-controlled-replay work.
+Similarly, `chaos_run_id` is a real column as of Phase 3C. `state_before`/`state_after` are added by
+the **Phase 3E-A** migration `supabase/migrations/20260901000000_phase3e_evidence_snapshots.sql`
+(status: **IMPLEMENTED IN REPOSITORY / MANUALLY APPLIED / REAL SUPABASE VERIFIED** — see Section 44). `fault_action`
+remains deferred: Phase 3E-A deliberately did not add it, because the evidence-snapshot work has no
+dependency on it and the run-level fault primitive `chaos_runs.fault_type` remains authoritative. It
+stays pre-approved but unimplemented surface until a phase genuinely produces it.
 
 A `PAYCHAOS_REPLAY` row must additionally satisfy the new
 `event_processing_attempts_replay_provenance_valid` CHECK: `webhook_event_id IS NOT NULL`,
@@ -1369,6 +1372,91 @@ When Razorpay genuinely sends the same `razorpay_event_id` again:
 
 Historical chaos evidence must not be reconstructed solely from the current order row.
 
+### Implemented shape (Phase 3E-A)
+
+Both columns are **nullable `jsonb`, with no default**, each constrained to a JSON **object** or
+`NULL`:
+
+- `event_processing_attempts_state_before_is_object`
+- `event_processing_attempts_state_after_is_object`
+
+The persisted value is a versioned envelope (`{ version: 1, order, paymentAttempt, payment,
+fulfilments }`) built by `lib/evidence/merchant-state-snapshot.ts` from an **explicit allowlist
+projection** — internal ids, internal/provider states, integer `amount_subunits`, `currency`, a
+checkout-verification boolean, and persisted historical timestamps. It never contains a raw Razorpay
+webhook body, a `raw_payload_redacted` copy, a signature, any secret, any customer PII, or any
+LLM/diagnosis/confidence text (Section 38). Fulfilments are sorted by `id` ascending so the same
+database state always yields the same snapshot.
+
+A missing entity is recorded as `null` rather than invented; `fulfilments` is `null` when the owning
+order could not be resolved, and `[]` only when the order WAS resolved and genuinely had none.
+
+### Set-once application rule
+
+Both columns are **write-once**. `lib/evidence/evidence-repository.ts` writes each through a single
+atomic conditional update, so a retry, a duplicate delivery or a replay can never rewrite historical
+evidence (Principle 7). A zero-row match is reported as `ALREADY_CAPTURED` and the pre-existing value
+is preserved and returned.
+
+### Processing-lifecycle rule — snapshots are never backfilled
+
+Set-once alone is **not** sufficient. It prevents an *overwrite* of a non-null value; it does nothing
+about a **late first write** into a column that is still `NULL` — and every pre-Phase-3E row is `NULL`
+by design.
+
+This matters because the frozen `process_webhook_payment_event` transaction is idempotent on
+re-entry: an attempt that succeeded earlier can be passed to `processMerchantWebhookEvent` again and
+returns `outcome = "already_processed"`. Without a second guard, that re-entry would read the
+merchant state *as it is today* and persist it into the still-`NULL` `state_before`, producing
+evidence that claims to describe the state around the *original* processing. That is fabricated
+history.
+
+Therefore a snapshot is created **only when the current invocation is legitimately participating in
+that attempt's processing lifecycle**:
+
+- **`state_before`** carries the lifecycle guard in the write itself:
+  `UPDATE ... WHERE id = $1 AND status = 'PENDING' AND state_before IS NULL`. Both predicates are
+  evaluated by Postgres in one statement, so the write is race-safe: if another caller processes the
+  attempt in between, the stale caller matches zero rows instead of writing a late "before".
+- **`state_after`** cannot use a status predicate (the row is already `SUCCEEDED`/`FAILED` by then).
+  Its lifecycle condition is a property of the invocation — "this call began from a genuinely
+  `PENDING` attempt and just performed its processing" — enforced in `lib/events/processor.ts`, which
+  resolves eligibility *before* invoking the processor.
+- **`PENDING` is the only eligible status.** `PROCESSING` is deliberately excluded even though the
+  frozen RPC admits it: it means an earlier invocation already began this attempt's lifecycle, so a
+  later arrival is a recovery re-entry, not the fresh execution the "before" state describes.
+  `HELD`, `SUCCEEDED`, `FAILED` and `SKIPPED_DUPLICATE` are terminal/non-runnable and equally
+  ineligible.
+- **`already_processed`** never produces a `state_after`, and a `PROCESSING_ATTEMPT_NOT_READY`
+  failure never produces a late `state_after`.
+- **An eligibility read failure** results in no snapshots at all, with merchant processing entirely
+  unchanged.
+
+Consequences, stated plainly: **historical pre-Phase-3E attempts are never reconstructed or
+backfilled**, and a terminal idempotent re-entry never fills in missing snapshots. A `NULL` on a
+non-`PENDING` row is *valid historical truth* — "this snapshot was never captured" — and is reported
+as `NOT_ELIGIBLE`, never treated as persistence corruption to be repaired.
+
+### No generic evidence table
+
+Nothing here introduces an `evidence_snapshots`/`chaos_evidence`/`evidence` table — Section 31
+stands: evidence lives on the existing records and is later referenced by
+`invariant_results.evidence_refs`.
+
+### A missing snapshot is valid
+
+`NULL` truthfully means "this evidence was not durably captured", and it is **authoritative** —
+strictly preferable to a reconstructed value. Snapshot capture is instrumentation AROUND the frozen
+`process_webhook_payment_event` transaction: it never participates in that transaction, and a
+capture failure leaves the column `NULL` rather than fabricating state or altering merchant
+processing. A later invariant evaluation that requires a snapshot it does not have must return
+`UNKNOWN` (Principle 8) — never a fabricated `PASS`.
+
+This is why neither column is `NOT NULL`, why the Phase 3E-A migration performs no backfill, and why
+the processing-lifecycle rule above exists: a snapshot generated today would be a false claim about a
+processing attempt that ran in the past. Snapshots are captured **only for future eligible processing
+executions**.
+
 ---
 
 ## Indexes
@@ -1410,11 +1498,24 @@ Adds, via a new additive migration (never editing the Phase 2E/2F migration file
   function body is never edited on disk — the revision lives entirely in the new Phase 3C migration via
   `CREATE OR REPLACE FUNCTION` with the identical signature).
 
+### Phase 3E-A
+
+Adds, via a new additive migration (never editing the Phase 2E/2F/3C/3D migration files):
+
+- `state_before` (nullable `jsonb`, no default) plus its
+  `event_processing_attempts_state_before_is_object` CHECK;
+- `state_after` (nullable `jsonb`, no default) plus its
+  `event_processing_attempts_state_after_is_object` CHECK;
+- an explanatory `comment on column` for each.
+
+No index is added (neither column is a lookup key), no `GRANT`/`REVOKE`/RLS surface changes, no
+backfill, and no other table is touched. Migration status:
+**IMPLEMENTED IN REPOSITORY / MANUALLY APPLIED / REAL SUPABASE VERIFIED** — see Section 44.
+
 ### Later Phase 3 (deferred)
 
 - `PAYCHAOS_SIMULATION` / `TEST_FIXTURE` source kinds;
-- `fault_action`;
-- `state_before` / `state_after` evidence snapshots (Phase 3E).
+- `fault_action`.
 
 These remain pre-approved but unimplemented until the phases that actually produce them exist.
 
@@ -3050,6 +3151,103 @@ later Phase 3D scenario sub-phase (C03, C07, the C11 fixture, C11-B replay,
 C11-A observation) was implemented entirely against the already-existing
 schema. It is therefore **not** correct to say "Phase 3D had no migrations" —
 Phase 3D-0 had exactly one; the scenario sub-phases after it had none.
+
+### Phase 3E migration — IMPLEMENTED IN REPOSITORY / MANUALLY APPLIED / REAL SUPABASE VERIFIED
+
+```text
+20260901000000_phase3e_evidence_snapshots.sql    Phase 3E-A — evidence-snapshot columns
+```
+
+**Phase 3E-A — `20260901000000_phase3e_evidence_snapshots.sql`** adds, all
+additively, to `public.event_processing_attempts`:
+
+- `state_before` (`jsonb`, **nullable**, no default);
+- `state_after` (`jsonb`, **nullable**, no default);
+- `event_processing_attempts_state_before_is_object`
+  (`state_before IS NULL OR jsonb_typeof(state_before) = 'object'`);
+- `event_processing_attempts_state_after_is_object`
+  (`state_after IS NULL OR jsonb_typeof(state_after) = 'object'`);
+- a `comment on column` for each.
+
+It creates no table, adds no index, changes no `GRANT`/`REVOKE`/RLS surface,
+performs no backfill, drops nothing, and does not add `fault_action` or widen
+`event_processing_attempts_source_kind_valid`. See Section 14 for the full
+semantics (versioned snapshot envelope, set-once write rule, and why `NULL`
+is a valid value that later yields `UNKNOWN` rather than a fabricated `PASS`).
+
+**Status: MANUALLY APPLIED and REAL SUPABASE VERIFIED.**
+
+```text
+Migration            20260901000000_phase3e_evidence_snapshots.sql
+Manual application   YES
+Applied by           the developer, manually
+Application method   Supabase Dashboard -> SQL Editor -> Run
+Application result   Success. No rows returned
+Reapplied by tooling NO (never re-run, never `supabase db push`, never psql)
+Real Supabase        VERIFIED
+Verification test    tests/integration/supabase/060-phase3e-evidence-snapshot.integration.test.ts
+060 result           1 file / 15 tests / 15 passed / 0 failed
+Full Supabase suite  21 files / 234 tests / 234 passed / 0 failed
+Environmental retry  none required
+```
+
+#### What real Supabase proved (060)
+
+Executed against the live project AFTER the manual application, `060`
+confirmed all of the following as real database behavior — not as a
+repository-only claim:
+
+- `state_before` exists; `state_after` exists;
+- both accept JSON **objects**;
+- a **scalar** snapshot value is rejected by the CHECK constraint;
+- an **array** snapshot value is rejected by the CHECK constraint;
+- a fresh, eligible `PENDING` processing attempt persists a real
+  `state_before`;
+- the same fresh processing persists a real `state_after`, with factually
+  different pre/post content;
+- `state_before` is **set-once**; `state_after` is **set-once**;
+- the `state_before` first write requires `PENDING` lifecycle eligibility —
+  `persistProcessingStateBefore` returns `NOT_ELIGIBLE` against real Postgres
+  for a terminal row;
+- a terminal `SUCCEEDED` attempt whose snapshots are `NULL` is **not**
+  retroactively backfilled;
+- an idempotent `already_processed` re-entry does **not** create a late
+  `state_after`;
+- a terminal `FAILED`/non-runnable attempt is **not** backfilled (and still
+  raises `PROCESSING_ATTEMPT_NOT_READY`);
+- the existing merchant-processing result semantics are **unchanged**;
+- snapshot capture never alters `source_kind` — provenance is inherited, not
+  rewritten;
+- all synthetic test-owned rows were cleaned up (child-before-parent, with an
+  independent zero-row proof).
+
+`060` is **SYNTHETIC REAL-DATABASE MECHANICS VERIFICATION**. Its rows are
+test-owned synthetic fixtures; it is never genuine Razorpay provider
+evidence.
+
+#### Historical rows were NOT backfilled (verified)
+
+An independent read-only census taken after the full real-Supabase suite:
+
+```text
+event_processing_attempts total        20
+rows with non-null state_before         0
+rows with non-null state_after          0
+```
+
+Every pre-Phase-3E processing attempt — including all three genuine
+`REAL_RAZORPAY_WEBHOOK` originals behind the approved C07 / C11-B / C11-A
+manual evidence, and C11-B's `PAYCHAOS_REPLAY` attempt — correctly still
+carries `state_before = NULL` / `state_after = NULL`. The approved Phase 3D
+durable evidence itself (chaos runs, orders, payments, fulfilments) was
+confirmed intact and unmutated.
+
+**This is the desired result, not a gap.** Applying the migration
+deliberately performs no backfill, and the application-side lifecycle
+eligibility gate additionally prevents any later idempotent re-entry from
+writing a late first snapshot into one of those historical rows. See Section
+14's "historical NULL semantics" for why a reconstructed snapshot would be
+false evidence.
 
 ---
 

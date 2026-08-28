@@ -36,10 +36,28 @@
  * approved-target vocabulary docs/DATABASE.md Section 14 documents.
  * `PAYCHAOS_SIMULATION`/`TEST_FIXTURE` remain unimplemented surface until
  * their own later phases; adding them to this type would misrepresent what
- * the database will currently accept. `event_processing_attempts` also
- * still excludes `fault_action`/`state_before`/`state_after` — those
- * remain later, separate additive columns (docs/DATABASE.md Section 14
- * "Phase Ownership").
+ * the database will currently accept.
+ *
+ * Phase 3E-A adds the additive `event_processing_attempts.state_before` /
+ * `state_after` evidence-snapshot columns
+ * (supabase/migrations/20260901000000_phase3e_evidence_snapshots.sql — NOT
+ * YET APPLIED to the remote project; this type describes them in advance so
+ * `lib/evidence/evidence-repository.ts` can be written and unit-tested
+ * against a mocked client before the migration is manually reviewed and
+ * applied, exactly as was done for the Phase 3C `chaos_run_id` column).
+ * `event_processing_attempts` still excludes `fault_action` — that remains a
+ * later, separate additive column (docs/DATABASE.md Section 14 "Phase
+ * Ownership"); Phase 3E-A deliberately does not introduce unused schema
+ * surface for it.
+ *
+ * `state_before`/`state_after` are typed `Record<string, unknown> | null`,
+ * matching this file's existing convention for every other JSONB column
+ * (`normalized_event`, `raw_payload_redacted`, `fault_config`,
+ * `fault_state`) — this project has never generated a Supabase `Json` union
+ * type, and the database CHECK constraints
+ * `event_processing_attempts_state_before_is_object` /
+ * `..._state_after_is_object` restrict these columns to a JSON object or
+ * NULL anyway, so the object-shaped TypeScript type is the accurate one.
  *
  * This type only describes shape for `createClient<Database>()`. It is not
  * itself a migration and does not create/alter anything.
@@ -368,6 +386,8 @@ export interface Database {
           is_duplicate_delivery: boolean;
           status: EventProcessingAttemptStatus;
           normalized_event: Record<string, unknown>;
+          state_before: Record<string, unknown> | null;
+          state_after: Record<string, unknown> | null;
           error_code: string | null;
           error_message_redacted: string | null;
           started_at: string;
@@ -383,6 +403,8 @@ export interface Database {
           is_duplicate_delivery?: boolean;
           status?: EventProcessingAttemptStatus;
           normalized_event?: Record<string, unknown>;
+          state_before?: Record<string, unknown> | null;
+          state_after?: Record<string, unknown> | null;
           error_code?: string | null;
           error_message_redacted?: string | null;
           started_at?: string;
@@ -398,6 +420,8 @@ export interface Database {
           is_duplicate_delivery?: boolean;
           status?: EventProcessingAttemptStatus;
           normalized_event?: Record<string, unknown>;
+          state_before?: Record<string, unknown> | null;
+          state_after?: Record<string, unknown> | null;
           error_code?: string | null;
           error_message_redacted?: string | null;
           started_at?: string;
