@@ -1392,6 +1392,64 @@ Diagnosis should primarily consume references to structured evidence rather than
 
 ---
 
+## Per-Chaos-Run Evidence Assembly (Phase 3E-B)
+
+Phase 3E-B adds one **read-only** assembly step between the durable records and the future Money Invariant Engine.
+
+### Read-only by construction
+
+`assembleChaosRunEvidence(chaosRunId)` (`lib/evidence/chaos-evidence-service.ts`) takes exactly one input — an internal `chaos_runs.id` UUID — and performs `SELECT` statements only. It issues no `INSERT`/`UPDATE`/`DELETE`/`UPSERT`/RPC, invokes no chaos execution service, invokes no merchant processing, calls no Razorpay API and makes no network request. Assembling evidence must never be able to change the evidence being assembled.
+
+### No generic evidence table
+
+Phase 3E-B introduces no migration and no `evidence_snapshots`/`chaos_evidence`/`evidence_records` table. Section 31 and `docs/DATABASE.md` stand: evidence lives on the existing records, and is later referenced by `invariant_results.evidence_refs`.
+
+### A versioned in-memory bundle
+
+The result is `ChaosRunEvidenceBundleV1` (`lib/evidence/chaos-run-evidence.ts`) — a versioned, deterministically ordered, **in-memory** projection assembled fresh on every call, never persisted. It carries a safe allowlisted run projection, a safe webhook projection, safe processing-attempt projections split into original provider attempts and chaos-run-linked replay attempts, the canonical source event count, a scenario-specific evidence envelope, deduplicated evidence references and factual evidence gaps. It contains no raw webhook body, no signature, no secret, no customer data, no `normalized_event` blob and no generic `fault_state` blob.
+
+### Persisted processing snapshots remain the historical before/after authority
+
+`event_processing_attempts.state_before` / `state_after` (Phase 3E-A) are the only source of historical merchant state. They are runtime-validated against `MerchantStateSnapshotV1` rather than cast; a `NULL` column stays `NOT_CAPTURED` and a malformed value becomes `INVALID`.
+
+Validation also enforces the snapshot's **order/fulfilments completeness relationship**, because the two fields are not independent: a snapshot that resolved an order must carry a fulfilments **array**, and a snapshot that resolved no order must carry **`null`**. `null` means "the owning order was not resolved, so no claim about fulfilments is made"; `[]` means "the order was resolved and genuinely had zero fulfilment rows". Any other combination is `INVALID`. Neither side is ever transformed to make a shape pass.
+
+### The authoritative original provider attempt
+
+A canonical webhook event may legitimately accumulate several `REAL_RAZORPAY_WEBHOOK` processing attempts over time — attempt 1 `FAILED`, attempt 2 `SUCCEEDED`. That is ordinary retry history, not ambiguity, and the repository's read stays deliberately **broad** so that history is never hidden.
+
+Selecting THE authoritative original is therefore a property of each attempt, never of the array's length or order. An attempt is a candidate only when `source_kind = REAL_RAZORPAY_WEBHOOK`, `chaos_run_id IS NULL`, `status = SUCCEEDED` and `is_duplicate_delivery = false`. Exactly one candidate resolves the authoritative original for C01/C07/C11; zero candidates and two-or-more candidates are each their own factual gap, and the authoritative field is `null` in both cases. Array position, insertion order and "latest timestamp wins" are never used as authority.
+
+Failed and duplicate attempts remain fully visible in the bundle — the assembler only declines to call them authoritative.
+
+### Canonical source completeness
+
+Authoritative provider evidence for C01/C07/C11 also requires the canonical source event itself to have finished processing (`webhook_events.processing_status = 'PROCESSED'`). A source still `RECEIVED`/`PROCESSING`, or one that ended `FAILED`, is a factually incomplete source and is reported as such.
+
+### C03 classification
+
+A valid C03 runtime evidence envelope is explicitly `data_classification = SYNTHETIC_DEMO`; a C03 run claiming otherwise contradicts its own frozen architecture and is reported as a factual gap.
+
+All of the above are **evidence-integrity facts, not money verdicts**.
+
+### Current mutable merchant state is never used to reconstruct history
+
+The assembly repository never reads `orders`, `payment_attempts`, `payments` or `fulfilments` at all. A missing or invalid snapshot can therefore never be silently replaced with today's merchant state — the current state is not reachable from that code path. Historical `NULL` remains authoritative evidence of "not captured".
+
+### C03 has its own processor-independent evidence envelope
+
+C03 creates no canonical webhook row, no processing attempt and no merchant mutation, and all of its merchant/provider FKs are `NULL`. Its envelope is assembled solely from its existing durable `SYNTHETIC_DEMO` verification facts, and reports those absences honestly. No fake webhook, fake processing attempt or fake before/after snapshot is ever manufactured to fit the other scenarios' model.
+
+### Evidence gaps are factual, not verdicts
+
+An evidence gap states that a required factual input could not be established from the durable record. It is never `PASS`, `FAIL`, `UNKNOWN`, `NOT_APPLICABLE` or `ERROR`, and the bundle has no verdict field of any kind.
+
+### Phase 3F remains the only money verdict layer
+
+Phase 3E-B provides deterministic evidence INPUTS. Deciding what those inputs mean — including which gap maps to `UNKNOWN` — remains the Money Invariant Engine's exclusive responsibility (Section 17).
+
+---
+
 # 20. Root-Cause Diagnosis Architecture
 
 P0 diagnosis is deterministic and rule-based.
