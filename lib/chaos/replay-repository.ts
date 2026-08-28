@@ -1,11 +1,16 @@
 /**
- * Phase 3C — server-only persistence boundary for controlled replay
- * (docs/CHAOS_SCENARIOS.md Section 13 "P0 SCENARIO C01").
+ * Phase 3C (C01) / Phase 3D-D (C11-B) — server-only persistence boundary for
+ * controlled replay (docs/CHAOS_SCENARIOS.md Section 13 "P0 SCENARIO C01",
+ * Section 23 "P0 SCENARIO C11").
  *
- * This module performs exactly two operations: (1) a deterministic,
+ * This module performs exactly three operations: (1) a deterministic,
  * fail-closed READ that resolves the one authoritative original
- * `event_processing_attempts` row a chaos run is allowed to replay, and (2)
- * a dedicated INSERT for a new `PAYCHAOS_REPLAY` processing attempt. It
+ * `event_processing_attempts` row a C01 chaos run is allowed to replay
+ * (`resolveAuthoritativeC01ReplaySource`), (1B) the same, narrowed to C11's
+ * `payment.failed` semantics (`resolveAuthoritativeC11ReplaySource`, Phase
+ * 3D-D — a genuinely separate function, never sharing mutable state with or
+ * changing the C01 resolver's behavior), and (2) a dedicated INSERT for a
+ * new `PAYCHAOS_REPLAY` processing attempt, shared by both scenarios. It
  * never touches the live Phase 2 ingestion path
  * (`lib/webhooks/event-processing-repository.ts`'s `insertEventProcessingAttempt`
  * stays untouched — it is embedded in three live production real-webhook
@@ -211,6 +216,163 @@ export async function resolveAuthoritativeC01ReplaySource(
     return null;
   }
   if (kind !== eventType) {
+    return null;
+  }
+  if (eventType !== webhookEvent.event_type) {
+    return null;
+  }
+
+  return {
+    processingAttemptId: attempt.id,
+    webhookEventId: attempt.webhook_event_id,
+    paymentAttemptId: attempt.payment_attempt_id,
+    paymentId: attempt.payment_id,
+    normalizedEvent: attempt.normalized_event,
+  };
+}
+
+/** The C11 Mechanism B `payment.failed` source event type (docs/CHAOS_SCENARIOS.md Section 23 "Inputs / Events Used") — the only event type C11-B may ever replay. Never `payment.captured`/`order.paid` (those are C01's concern). */
+const C11_SOURCE_EVENT_TYPE = "payment.failed" as const;
+
+/** The narrow slice of a `chaos_runs` row this module's C11 source resolution needs — same shape as `C01ReplaySourceQuery`, kept as its own distinct type so a future divergence in either scenario's needs never silently couples the two. */
+export interface C11ReplaySourceQuery {
+  readonly sourceWebhookEventId: string | null;
+  readonly paymentAttemptId: string | null;
+  readonly paymentId: string | null;
+}
+
+export interface ResolvedC11ReplaySource {
+  readonly processingAttemptId: string;
+  readonly webhookEventId: string;
+  readonly paymentAttemptId: string | null;
+  readonly paymentId: string | null;
+  readonly normalizedEvent: Record<string, unknown>;
+}
+
+/**
+ * Resolves the ONE authoritative original `event_processing_attempts` row a
+ * C11-B chaos run may replay (docs/CHAOS_SCENARIOS.md Section 23, Phase
+ * 3D-D). Mirrors `resolveAuthoritativeC01ReplaySource`'s exact fail-closed
+ * discipline above, narrowed to C11's `payment.failed` semantics — a
+ * genuinely separate function that shares no mutable state with, and never
+ * changes the behavior of, the C01 resolver (only the private
+ * `isSafeNormalizedEventObject` shape-check helper is reused, read-only).
+ * Requires ALL of:
+ *   - the correlated canonical `webhook_events` row exists, is
+ *     `source_kind = REAL_RAZORPAY_WEBHOOK`, `signature_verified = true`,
+ *     `event_type = payment.failed`, and `processing_status = PROCESSED`
+ *     (this task's Section 4 — stricter than C01's resolver, which does not
+ *     require a particular `processing_status`);
+ *   - an `event_processing_attempts` row exists with
+ *     `source_kind = REAL_RAZORPAY_WEBHOOK`, `status = SUCCEEDED`,
+ *     `is_duplicate_delivery = false`, `webhook_event_id` matching the run's
+ *     `source_webhook_event_id`, and `payment_attempt_id`/`payment_id`
+ *     matching the run's own correlation (including truthful NULL equality
+ *     — the same semantics as the C01 resolver);
+ *   - exactly ONE such row exists (zero or more than one both fail closed —
+ *     never "latest"/"first"/arbitrary);
+ *   - its `normalized_event` is a JSON object whose `sourceKind` is
+ *     `REAL_RAZORPAY_WEBHOOK`, whose `eventType` is exactly
+ *     `payment.failed`, whose `kind` equals `payment.failed`, whose
+ *     `razorpayPaymentStatus` is exactly `failed`, and whose `eventType`
+ *     agrees with the correlated canonical `webhook_events.event_type`.
+ *
+ * Returns `null` (never fabricates a source, never guesses) if any of that
+ * does not hold. Throws `ChaosReplayRepositoryError` only on a genuine read
+ * failure, distinct from "not found"/"not eligible".
+ */
+export async function resolveAuthoritativeC11ReplaySource(
+  run: C11ReplaySourceQuery,
+): Promise<ResolvedC11ReplaySource | null> {
+  if (!run.sourceWebhookEventId) {
+    return null;
+  }
+
+  const client = getSupabaseServerClient();
+
+  const { data: webhookEvent, error: webhookError } = await client
+    .from("webhook_events")
+    .select("*")
+    .eq("id", run.sourceWebhookEventId)
+    .maybeSingle();
+
+  if (webhookError) {
+    throw new ChaosReplayRepositoryError(
+      "CHAOS_REPLAY_C11_WEBHOOK_LOOKUP_FAILED",
+      "Failed to load the correlated webhook event.",
+    );
+  }
+  if (!webhookEvent) {
+    return null;
+  }
+  if (
+    webhookEvent.source_kind !== "REAL_RAZORPAY_WEBHOOK" ||
+    webhookEvent.signature_verified !== true ||
+    webhookEvent.event_type !== C11_SOURCE_EVENT_TYPE ||
+    webhookEvent.processing_status !== "PROCESSED"
+  ) {
+    return null;
+  }
+
+  let query = client
+    .from("event_processing_attempts")
+    .select("*")
+    .eq("webhook_event_id", run.sourceWebhookEventId)
+    .eq(
+      "source_kind",
+      "REAL_RAZORPAY_WEBHOOK" satisfies EventProcessingAttemptSourceKind,
+    )
+    .eq("status", "SUCCEEDED")
+    .eq("is_duplicate_delivery", false);
+
+  query =
+    run.paymentAttemptId === null
+      ? query.is("payment_attempt_id", null)
+      : query.eq("payment_attempt_id", run.paymentAttemptId);
+
+  query =
+    run.paymentId === null
+      ? query.is("payment_id", null)
+      : query.eq("payment_id", run.paymentId);
+
+  const { data: candidates, error } = await query;
+
+  if (error) {
+    throw new ChaosReplayRepositoryError(
+      "CHAOS_REPLAY_C11_SOURCE_LOOKUP_FAILED",
+      "Failed to load candidate source processing attempts.",
+    );
+  }
+
+  // Zero candidates: nothing suitable. More than one: no deterministic way
+  // to prove which is the canonical original — fail closed either way,
+  // never pick "the latest" (same discipline as the C01 resolver above).
+  if (!candidates || candidates.length !== 1) {
+    return null;
+  }
+
+  const attempt = candidates[0]!;
+
+  if (!attempt.webhook_event_id) {
+    return null;
+  }
+
+  if (!isSafeNormalizedEventObject(attempt.normalized_event)) {
+    return null;
+  }
+  const { sourceKind, eventType, kind, razorpayPaymentStatus } =
+    attempt.normalized_event;
+
+  if (sourceKind !== "REAL_RAZORPAY_WEBHOOK") {
+    return null;
+  }
+  if (eventType !== C11_SOURCE_EVENT_TYPE) {
+    return null;
+  }
+  if (kind !== C11_SOURCE_EVENT_TYPE) {
+    return null;
+  }
+  if (razorpayPaymentStatus !== "failed") {
     return null;
   }
   if (eventType !== webhookEvent.event_type) {

@@ -290,12 +290,19 @@ Prettier --check on all 5 Phase 3D-C files: PASS, no reformatting needed.
 ## 15. Deferred Work (Phase 3D-D and later)
 
 ```text
-C11-B runtime TEST_FIXTURE replay (resolveAuthoritativeC11ReplaySource,
-  C11_REPLAY_ATTEMPT_COUNT, replay route/service/run lifecycle) — Phase 3D-D,
-  not started
+C11-B controlled REAL_WEBHOOK_EVENT runtime replay/execution
+  (resolveAuthoritativeC11ReplaySource, C11_REPLAY_ATTEMPT_COUNT, new
+  C11-specific run-lifecycle functions, execution service, route) —
+  Phase 3D-D, not started. Uses the already-captured authentic
+  `payment.failed` webhook (webhook_event_id
+  e0df759e-bbde-45c3-aa80-a5a2d6b61be9), NOT this fixture. Requires NO
+  migration — reuses the already-accepted `PAYCHAOS_REPLAY` source_kind.
 C11-A manual real-failure observation verification                — Phase 3D-D/E
-event_processing_attempts.source_kind CHECK widening for TEST_FIXTURE
-  (already pre-approved in docs/DATABASE.md, not yet enabled)      — Phase 3D-D, if needed
+event_processing_attempts.source_kind / webhook_events.source_kind CHECK
+  widening for TEST_FIXTURE (pre-approved in docs/DATABASE.md, still not
+  enabled) — no runtime consumer is currently planned; this fixture's
+  TEST_FIXTURE classification remains test-infrastructure-only
+  permanently (PRECHECK-07 always blocks it)                       — deferred indefinitely
 Money invariant PASS/FAIL evaluation (INV-003/004/011)              — Phase 3F
 Evidence snapshot system                                            — Phase 3E
 Findings                                                             — Phase 3G

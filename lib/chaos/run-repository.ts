@@ -325,6 +325,151 @@ export async function failRunningC01RunExecution(
 }
 
 /**
+ * Phase 3D-D — atomically transitions one eligible PENDING C11-B chaos run
+ * to RUNNING (docs/CHAOS_SCENARIOS.md Section 23 "P0 SCENARIO C11"). Every
+ * eligibility fact is hardcoded and re-checked against the durably
+ * persisted row itself — this function never accepts a caller-supplied
+ * scenario/classification/fault/mechanism-eligibility override:
+ * `scenario_id = 'C11'`, `status = 'PENDING'`, `fault_type IS NULL` (C11 has
+ * no fault primitive of its own — `lib/chaos/registry.ts`),
+ * `data_classification = 'RECORDED_TEST_EVIDENCE'`,
+ * `source_webhook_event_id IS NOT NULL`, `outcome IS NULL`. The single
+ * conditional `UPDATE ... WHERE ... RETURNING` (the same atomic-conditional
+ * idiom as every other lifecycle transition in this module) guarantees a
+ * competing concurrent claim on the SAME run can never both succeed — only
+ * the winner observes a non-null returned row.
+ *
+ * A distinct, C11-specific export (not a reuse of `startPendingC01RunAtomically`)
+ * so audit/review can trace exactly which scenario a given start
+ * transition belongs to, even though the underlying SQL shape is similar.
+ */
+export async function startPendingC11BRunAtomically(
+  id: string,
+  now: () => Date = () => new Date(),
+): Promise<ChaosRunRow | null> {
+  const client = getSupabaseServerClient();
+  const timestamp = now().toISOString();
+
+  const { data, error } = await client
+    .from("chaos_runs")
+    .update({
+      status: "RUNNING",
+      started_at: timestamp,
+      updated_at: timestamp,
+    })
+    .eq("id", id)
+    .eq("scenario_id", "C11")
+    .eq("status", "PENDING")
+    .is("fault_type", null)
+    .eq("data_classification", "RECORDED_TEST_EVIDENCE")
+    .not("source_webhook_event_id", "is", null)
+    .is("outcome", null)
+    .select()
+    .maybeSingle();
+
+  if (error) {
+    throw new ChaosRunRepositoryError(
+      "CHAOS_RUN_C11B_START_FAILED",
+      "Failed to atomically start the C11-B chaos run.",
+    );
+  }
+
+  return data;
+}
+
+/**
+ * Phase 3D-D — completes a successfully-replayed RUNNING C11-B run:
+ * `RUNNING -> COMPLETED`/`UNKNOWN`. `status = COMPLETED` means the chaos
+ * mechanism execution completed; `outcome = UNKNOWN` means no deterministic
+ * Money Invariant evaluation has run yet (Phase 3F's job) — this is NEVER a
+ * merchant reliability PASS/FAIL verdict. Hardcodes and re-checks
+ * `scenario_id = 'C11'`/`fault_type IS NULL`/`data_classification =
+ * 'RECORDED_TEST_EVIDENCE'`/`status = 'RUNNING'` — stricter than the C01
+ * equivalent (which does not re-check `scenario_id`), a deliberate
+ * additional exactness for C11. Returns `null` if that precondition somehow
+ * does not hold; the caller treats it as a technical anomaly.
+ */
+export async function completeRunningC11BRunUnknown(
+  id: string,
+  now: () => Date = () => new Date(),
+): Promise<ChaosRunRow | null> {
+  const client = getSupabaseServerClient();
+  const timestamp = now().toISOString();
+
+  const { data, error } = await client
+    .from("chaos_runs")
+    .update({
+      status: "COMPLETED",
+      outcome: "UNKNOWN",
+      completed_at: timestamp,
+      updated_at: timestamp,
+      error_message_redacted: null,
+    })
+    .eq("id", id)
+    .eq("scenario_id", "C11")
+    .is("fault_type", null)
+    .eq("data_classification", "RECORDED_TEST_EVIDENCE")
+    .eq("status", "RUNNING")
+    .select()
+    .maybeSingle();
+
+  if (error) {
+    throw new ChaosRunRepositoryError(
+      "CHAOS_RUN_C11B_COMPLETE_FAILED",
+      "Failed to persist C11-B chaos run completion.",
+    );
+  }
+
+  return data;
+}
+
+/**
+ * Phase 3D-D — records a technical execution failure on a RUNNING C11-B
+ * run: `RUNNING -> FAILED`/`ERROR`. NEVER how a merchant reliability FAIL is
+ * represented (that is a later Phase 3F deterministic invariant-evaluation
+ * outcome) — `FAILED`/`ERROR` means the replay execution itself could not
+ * complete for a technical reason. `safeReason` must already be a fixed,
+ * safe, redacted string — this function never accepts or persists a raw
+ * Postgres/Supabase error, a stack trace, a secret, or a raw payload.
+ * Hardcodes and re-checks the same exact C11-B scoping as
+ * `completeRunningC11BRunUnknown` above.
+ */
+export async function failRunningC11BRunExecution(
+  id: string,
+  safeReason: string,
+  now: () => Date = () => new Date(),
+): Promise<ChaosRunRow | null> {
+  const client = getSupabaseServerClient();
+  const timestamp = now().toISOString();
+
+  const { data, error } = await client
+    .from("chaos_runs")
+    .update({
+      status: "FAILED",
+      outcome: "ERROR",
+      completed_at: timestamp,
+      updated_at: timestamp,
+      error_message_redacted: safeReason,
+    })
+    .eq("id", id)
+    .eq("scenario_id", "C11")
+    .is("fault_type", null)
+    .eq("data_classification", "RECORDED_TEST_EVIDENCE")
+    .eq("status", "RUNNING")
+    .select()
+    .maybeSingle();
+
+  if (error) {
+    throw new ChaosRunRepositoryError(
+      "CHAOS_RUN_C11B_FAIL_FAILED",
+      "Failed to persist C11-B chaos run technical failure.",
+    );
+  }
+
+  return data;
+}
+
+/**
  * Phase 3D-A — atomically transitions one eligible PENDING C03 run to the
  * execution-time BLOCKED shape frozen by Phase 3D-0
  * (`supabase/migrations/20260831000000_phase3d_execution_safety.sql`):

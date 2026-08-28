@@ -546,6 +546,547 @@ describe("resolveAuthoritativeC01ReplaySource", () => {
   });
 });
 
+function fakeC11WebhookEventRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: WEBHOOK_EVENT_ID,
+    razorpay_event_id: "evt_test_failed_123",
+    event_type: "payment.failed",
+    source_kind: "REAL_RAZORPAY_WEBHOOK",
+    signature_verified: true,
+    processing_status: "PROCESSED",
+    payment_attempt_id: ORDER_ATTEMPT_ID,
+    payment_id: PAYMENT_ID,
+    ...overrides,
+  };
+}
+
+function fakeC11OriginalAttemptRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: ORIGINAL_ATTEMPT_ID,
+    webhook_event_id: WEBHOOK_EVENT_ID,
+    payment_attempt_id: ORDER_ATTEMPT_ID,
+    payment_id: PAYMENT_ID,
+    chaos_run_id: null,
+    source_kind: "REAL_RAZORPAY_WEBHOOK",
+    is_duplicate_delivery: false,
+    status: "SUCCEEDED",
+    normalized_event: {
+      sourceKind: "REAL_RAZORPAY_WEBHOOK",
+      eventType: "payment.failed",
+      kind: "payment.failed",
+      razorpayPaymentStatus: "failed",
+    },
+    ...overrides,
+  };
+}
+
+describe("resolveAuthoritativeC11ReplaySource", () => {
+  it("resolves the single authoritative payment.failed candidate when everything agrees", async () => {
+    mockFromByTable({
+      webhook_events: makeQueryBuilder({
+        data: fakeC11WebhookEventRow(),
+        error: null,
+      }),
+      event_processing_attempts: makeQueryBuilder({
+        data: [fakeC11OriginalAttemptRow()],
+        error: null,
+      }),
+    });
+    const { resolveAuthoritativeC11ReplaySource } =
+      await import("@/lib/chaos/replay-repository");
+
+    const result = await resolveAuthoritativeC11ReplaySource({
+      sourceWebhookEventId: WEBHOOK_EVENT_ID,
+      paymentAttemptId: ORDER_ATTEMPT_ID,
+      paymentId: PAYMENT_ID,
+    });
+
+    expect(result).toEqual({
+      processingAttemptId: ORIGINAL_ATTEMPT_ID,
+      webhookEventId: WEBHOOK_EVENT_ID,
+      paymentAttemptId: ORDER_ATTEMPT_ID,
+      paymentId: PAYMENT_ID,
+      normalizedEvent: {
+        sourceKind: "REAL_RAZORPAY_WEBHOOK",
+        eventType: "payment.failed",
+        kind: "payment.failed",
+        razorpayPaymentStatus: "failed",
+      },
+    });
+  });
+
+  it("returns null when sourceWebhookEventId is null — never guesses", async () => {
+    const { resolveAuthoritativeC11ReplaySource } =
+      await import("@/lib/chaos/replay-repository");
+    const result = await resolveAuthoritativeC11ReplaySource({
+      sourceWebhookEventId: null,
+      paymentAttemptId: ORDER_ATTEMPT_ID,
+      paymentId: PAYMENT_ID,
+    });
+    expect(result).toBeNull();
+    expect(fromMock).not.toHaveBeenCalled();
+  });
+
+  it("returns null when the canonical webhook event_type is not payment.failed", async () => {
+    mockFromByTable({
+      webhook_events: makeQueryBuilder({
+        data: fakeC11WebhookEventRow({ event_type: "payment.captured" }),
+        error: null,
+      }),
+    });
+    const { resolveAuthoritativeC11ReplaySource } =
+      await import("@/lib/chaos/replay-repository");
+    const result = await resolveAuthoritativeC11ReplaySource({
+      sourceWebhookEventId: WEBHOOK_EVENT_ID,
+      paymentAttemptId: ORDER_ATTEMPT_ID,
+      paymentId: PAYMENT_ID,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when signature_verified=false", async () => {
+    mockFromByTable({
+      webhook_events: makeQueryBuilder({
+        data: fakeC11WebhookEventRow({ signature_verified: false }),
+        error: null,
+      }),
+    });
+    const { resolveAuthoritativeC11ReplaySource } =
+      await import("@/lib/chaos/replay-repository");
+    const result = await resolveAuthoritativeC11ReplaySource({
+      sourceWebhookEventId: WEBHOOK_EVENT_ID,
+      paymentAttemptId: ORDER_ATTEMPT_ID,
+      paymentId: PAYMENT_ID,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when the canonical webhook source_kind is not REAL_RAZORPAY_WEBHOOK", async () => {
+    mockFromByTable({
+      webhook_events: makeQueryBuilder({
+        data: fakeC11WebhookEventRow({ source_kind: "PAYCHAOS_REPLAY" }),
+        error: null,
+      }),
+    });
+    const { resolveAuthoritativeC11ReplaySource } =
+      await import("@/lib/chaos/replay-repository");
+    const result = await resolveAuthoritativeC11ReplaySource({
+      sourceWebhookEventId: WEBHOOK_EVENT_ID,
+      paymentAttemptId: ORDER_ATTEMPT_ID,
+      paymentId: PAYMENT_ID,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when processing_status is not PROCESSED (stricter than the C01 resolver by design)", async () => {
+    mockFromByTable({
+      webhook_events: makeQueryBuilder({
+        data: fakeC11WebhookEventRow({ processing_status: "RECEIVED" }),
+        error: null,
+      }),
+    });
+    const { resolveAuthoritativeC11ReplaySource } =
+      await import("@/lib/chaos/replay-repository");
+    const result = await resolveAuthoritativeC11ReplaySource({
+      sourceWebhookEventId: WEBHOOK_EVENT_ID,
+      paymentAttemptId: ORDER_ATTEMPT_ID,
+      paymentId: PAYMENT_ID,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when zero candidate processing attempts exist", async () => {
+    mockFromByTable({
+      webhook_events: makeQueryBuilder({
+        data: fakeC11WebhookEventRow(),
+        error: null,
+      }),
+      event_processing_attempts: makeQueryBuilder({ data: [], error: null }),
+    });
+    const { resolveAuthoritativeC11ReplaySource } =
+      await import("@/lib/chaos/replay-repository");
+    const result = await resolveAuthoritativeC11ReplaySource({
+      sourceWebhookEventId: WEBHOOK_EVENT_ID,
+      paymentAttemptId: ORDER_ATTEMPT_ID,
+      paymentId: PAYMENT_ID,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null (fails closed, never picks 'the latest') when MORE THAN ONE candidate exists", async () => {
+    mockFromByTable({
+      webhook_events: makeQueryBuilder({
+        data: fakeC11WebhookEventRow(),
+        error: null,
+      }),
+      event_processing_attempts: makeQueryBuilder({
+        data: [
+          fakeC11OriginalAttemptRow({
+            id: "aaaaaaaa-0000-0000-0000-000000000001",
+          }),
+          fakeC11OriginalAttemptRow({
+            id: "aaaaaaaa-0000-0000-0000-000000000002",
+          }),
+        ],
+        error: null,
+      }),
+    });
+    const { resolveAuthoritativeC11ReplaySource } =
+      await import("@/lib/chaos/replay-repository");
+    const result = await resolveAuthoritativeC11ReplaySource({
+      sourceWebhookEventId: WEBHOOK_EVENT_ID,
+      paymentAttemptId: ORDER_ATTEMPT_ID,
+      paymentId: PAYMENT_ID,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("filters candidates to source_kind=REAL_RAZORPAY_WEBHOOK, status=SUCCEEDED, is_duplicate_delivery=false at the query level", async () => {
+    const attemptsBuilder = makeQueryBuilder({
+      data: [fakeC11OriginalAttemptRow()],
+      error: null,
+    });
+    mockFromByTable({
+      webhook_events: makeQueryBuilder({
+        data: fakeC11WebhookEventRow(),
+        error: null,
+      }),
+      event_processing_attempts: attemptsBuilder,
+    });
+    const { resolveAuthoritativeC11ReplaySource } =
+      await import("@/lib/chaos/replay-repository");
+
+    await resolveAuthoritativeC11ReplaySource({
+      sourceWebhookEventId: WEBHOOK_EVENT_ID,
+      paymentAttemptId: ORDER_ATTEMPT_ID,
+      paymentId: PAYMENT_ID,
+    });
+
+    expect(attemptsBuilder.eq).toHaveBeenCalledWith(
+      "webhook_event_id",
+      WEBHOOK_EVENT_ID,
+    );
+    expect(attemptsBuilder.eq).toHaveBeenCalledWith(
+      "source_kind",
+      "REAL_RAZORPAY_WEBHOOK",
+    );
+    expect(attemptsBuilder.eq).toHaveBeenCalledWith("status", "SUCCEEDED");
+    expect(attemptsBuilder.eq).toHaveBeenCalledWith(
+      "is_duplicate_delivery",
+      false,
+    );
+  });
+
+  it("returns null when the ONLY candidate's own source_kind is not REAL_RAZORPAY_WEBHOOK (query-level filter proven by returning zero rows for a mismatched filter)", async () => {
+    mockFromByTable({
+      webhook_events: makeQueryBuilder({
+        data: fakeC11WebhookEventRow(),
+        error: null,
+      }),
+      event_processing_attempts: makeQueryBuilder({ data: [], error: null }),
+    });
+    const { resolveAuthoritativeC11ReplaySource } =
+      await import("@/lib/chaos/replay-repository");
+    const result = await resolveAuthoritativeC11ReplaySource({
+      sourceWebhookEventId: WEBHOOK_EVENT_ID,
+      paymentAttemptId: ORDER_ATTEMPT_ID,
+      paymentId: PAYMENT_ID,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when the resolved attempt's is_duplicate_delivery is true (query-level filter proven by returning zero rows)", async () => {
+    mockFromByTable({
+      webhook_events: makeQueryBuilder({
+        data: fakeC11WebhookEventRow(),
+        error: null,
+      }),
+      event_processing_attempts: makeQueryBuilder({ data: [], error: null }),
+    });
+    const { resolveAuthoritativeC11ReplaySource } =
+      await import("@/lib/chaos/replay-repository");
+    const result = await resolveAuthoritativeC11ReplaySource({
+      sourceWebhookEventId: WEBHOOK_EVENT_ID,
+      paymentAttemptId: ORDER_ATTEMPT_ID,
+      paymentId: PAYMENT_ID,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when the resolved attempt's normalized_event is not an object", async () => {
+    mockFromByTable({
+      webhook_events: makeQueryBuilder({
+        data: fakeC11WebhookEventRow(),
+        error: null,
+      }),
+      event_processing_attempts: makeQueryBuilder({
+        data: [fakeC11OriginalAttemptRow({ normalized_event: [1, 2, 3] })],
+        error: null,
+      }),
+    });
+    const { resolveAuthoritativeC11ReplaySource } =
+      await import("@/lib/chaos/replay-repository");
+    const result = await resolveAuthoritativeC11ReplaySource({
+      sourceWebhookEventId: WEBHOOK_EVENT_ID,
+      paymentAttemptId: ORDER_ATTEMPT_ID,
+      paymentId: PAYMENT_ID,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when normalized_event.eventType is not payment.failed", async () => {
+    mockFromByTable({
+      webhook_events: makeQueryBuilder({
+        data: fakeC11WebhookEventRow(),
+        error: null,
+      }),
+      event_processing_attempts: makeQueryBuilder({
+        data: [
+          fakeC11OriginalAttemptRow({
+            normalized_event: {
+              sourceKind: "REAL_RAZORPAY_WEBHOOK",
+              eventType: "payment.captured",
+              kind: "payment.captured",
+              razorpayPaymentStatus: "failed",
+            },
+          }),
+        ],
+        error: null,
+      }),
+    });
+    const { resolveAuthoritativeC11ReplaySource } =
+      await import("@/lib/chaos/replay-repository");
+    const result = await resolveAuthoritativeC11ReplaySource({
+      sourceWebhookEventId: WEBHOOK_EVENT_ID,
+      paymentAttemptId: ORDER_ATTEMPT_ID,
+      paymentId: PAYMENT_ID,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when normalized_event.kind does not equal payment.failed", async () => {
+    mockFromByTable({
+      webhook_events: makeQueryBuilder({
+        data: fakeC11WebhookEventRow(),
+        error: null,
+      }),
+      event_processing_attempts: makeQueryBuilder({
+        data: [
+          fakeC11OriginalAttemptRow({
+            normalized_event: {
+              sourceKind: "REAL_RAZORPAY_WEBHOOK",
+              eventType: "payment.failed",
+              kind: "order.paid",
+              razorpayPaymentStatus: "failed",
+            },
+          }),
+        ],
+        error: null,
+      }),
+    });
+    const { resolveAuthoritativeC11ReplaySource } =
+      await import("@/lib/chaos/replay-repository");
+    const result = await resolveAuthoritativeC11ReplaySource({
+      sourceWebhookEventId: WEBHOOK_EVENT_ID,
+      paymentAttemptId: ORDER_ATTEMPT_ID,
+      paymentId: PAYMENT_ID,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when normalized_event.sourceKind is not REAL_RAZORPAY_WEBHOOK", async () => {
+    mockFromByTable({
+      webhook_events: makeQueryBuilder({
+        data: fakeC11WebhookEventRow(),
+        error: null,
+      }),
+      event_processing_attempts: makeQueryBuilder({
+        data: [
+          fakeC11OriginalAttemptRow({
+            normalized_event: {
+              sourceKind: "PAYCHAOS_REPLAY",
+              eventType: "payment.failed",
+              kind: "payment.failed",
+              razorpayPaymentStatus: "failed",
+            },
+          }),
+        ],
+        error: null,
+      }),
+    });
+    const { resolveAuthoritativeC11ReplaySource } =
+      await import("@/lib/chaos/replay-repository");
+    const result = await resolveAuthoritativeC11ReplaySource({
+      sourceWebhookEventId: WEBHOOK_EVENT_ID,
+      paymentAttemptId: ORDER_ATTEMPT_ID,
+      paymentId: PAYMENT_ID,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when normalized_event.razorpayPaymentStatus is not failed", async () => {
+    mockFromByTable({
+      webhook_events: makeQueryBuilder({
+        data: fakeC11WebhookEventRow(),
+        error: null,
+      }),
+      event_processing_attempts: makeQueryBuilder({
+        data: [
+          fakeC11OriginalAttemptRow({
+            normalized_event: {
+              sourceKind: "REAL_RAZORPAY_WEBHOOK",
+              eventType: "payment.failed",
+              kind: "payment.failed",
+              razorpayPaymentStatus: "captured",
+            },
+          }),
+        ],
+        error: null,
+      }),
+    });
+    const { resolveAuthoritativeC11ReplaySource } =
+      await import("@/lib/chaos/replay-repository");
+    const result = await resolveAuthoritativeC11ReplaySource({
+      sourceWebhookEventId: WEBHOOK_EVENT_ID,
+      paymentAttemptId: ORDER_ATTEMPT_ID,
+      paymentId: PAYMENT_ID,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when the resolved attempt's own webhook_event_id is missing (defensive — should not happen given the query filter, but never trusted via a non-null assertion)", async () => {
+    mockFromByTable({
+      webhook_events: makeQueryBuilder({
+        data: fakeC11WebhookEventRow(),
+        error: null,
+      }),
+      event_processing_attempts: makeQueryBuilder({
+        data: [fakeC11OriginalAttemptRow({ webhook_event_id: null })],
+        error: null,
+      }),
+    });
+    const { resolveAuthoritativeC11ReplaySource } =
+      await import("@/lib/chaos/replay-repository");
+    const result = await resolveAuthoritativeC11ReplaySource({
+      sourceWebhookEventId: WEBHOOK_EVENT_ID,
+      paymentAttemptId: ORDER_ATTEMPT_ID,
+      paymentId: PAYMENT_ID,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("correlation mismatch — the run's own payment_attempt_id/payment_id are passed as the exact .eq() query filters, so a genuinely mismatched run correlates to zero rows in real Postgres (see the query-args proof above; this test documents the run-side correlation fields used)", async () => {
+    const attemptsBuilder = makeQueryBuilder({
+      data: [fakeC11OriginalAttemptRow()],
+      error: null,
+    });
+    mockFromByTable({
+      webhook_events: makeQueryBuilder({
+        data: fakeC11WebhookEventRow(),
+        error: null,
+      }),
+      event_processing_attempts: attemptsBuilder,
+    });
+    const { resolveAuthoritativeC11ReplaySource } =
+      await import("@/lib/chaos/replay-repository");
+
+    const OTHER_ATTEMPT_ID = "77777777-7777-7777-7777-777777777777";
+    const OTHER_PAYMENT_ID = "88888888-8888-8888-8888-888888888888";
+    await resolveAuthoritativeC11ReplaySource({
+      sourceWebhookEventId: WEBHOOK_EVENT_ID,
+      paymentAttemptId: OTHER_ATTEMPT_ID,
+      paymentId: OTHER_PAYMENT_ID,
+    });
+
+    expect(attemptsBuilder.eq).toHaveBeenCalledWith(
+      "payment_attempt_id",
+      OTHER_ATTEMPT_ID,
+    );
+    expect(attemptsBuilder.eq).toHaveBeenCalledWith(
+      "payment_id",
+      OTHER_PAYMENT_ID,
+    );
+    expect(attemptsBuilder.eq).not.toHaveBeenCalledWith(
+      "payment_attempt_id",
+      ORDER_ATTEMPT_ID,
+    );
+  });
+
+  it("throws ChaosReplayRepositoryError on a webhook_events lookup failure, never leaking the raw error", async () => {
+    mockFromByTable({
+      webhook_events: makeQueryBuilder({
+        data: null,
+        error: { message: "leaked-secret-detail" },
+      }),
+    });
+    const { resolveAuthoritativeC11ReplaySource, ChaosReplayRepositoryError } =
+      await import("@/lib/chaos/replay-repository");
+    await expect(
+      resolveAuthoritativeC11ReplaySource({
+        sourceWebhookEventId: WEBHOOK_EVENT_ID,
+        paymentAttemptId: ORDER_ATTEMPT_ID,
+        paymentId: PAYMENT_ID,
+      }),
+    ).rejects.toBeInstanceOf(ChaosReplayRepositoryError);
+  });
+
+  it("throws ChaosReplayRepositoryError on a candidate-lookup failure, never leaking the raw error", async () => {
+    mockFromByTable({
+      webhook_events: makeQueryBuilder({
+        data: fakeC11WebhookEventRow(),
+        error: null,
+      }),
+      event_processing_attempts: makeQueryBuilder({
+        data: null,
+        error: { message: "leaked-secret-detail" },
+      }),
+    });
+    const { resolveAuthoritativeC11ReplaySource, ChaosReplayRepositoryError } =
+      await import("@/lib/chaos/replay-repository");
+    await expect(
+      resolveAuthoritativeC11ReplaySource({
+        sourceWebhookEventId: WEBHOOK_EVENT_ID,
+        paymentAttemptId: ORDER_ATTEMPT_ID,
+        paymentId: PAYMENT_ID,
+      }),
+    ).rejects.toBeInstanceOf(ChaosReplayRepositoryError);
+  });
+
+  it("uses truthful NULL equality (.is) when the run's own payment_id is NULL", async () => {
+    const attemptsBuilder = makeQueryBuilder({
+      data: [fakeC11OriginalAttemptRow({ payment_id: null })],
+      error: null,
+    });
+    mockFromByTable({
+      webhook_events: makeQueryBuilder({
+        data: fakeC11WebhookEventRow({ payment_id: null }),
+        error: null,
+      }),
+      event_processing_attempts: attemptsBuilder,
+    });
+    const { resolveAuthoritativeC11ReplaySource } =
+      await import("@/lib/chaos/replay-repository");
+
+    await resolveAuthoritativeC11ReplaySource({
+      sourceWebhookEventId: WEBHOOK_EVENT_ID,
+      paymentAttemptId: ORDER_ATTEMPT_ID,
+      paymentId: null,
+    });
+
+    expect(attemptsBuilder.is).toHaveBeenCalledWith("payment_id", null);
+    expect(attemptsBuilder.eq).not.toHaveBeenCalledWith(
+      "payment_id",
+      expect.anything(),
+    );
+  });
+
+  it("never changes C01's resolver — resolveAuthoritativeC01ReplaySource is still exported and independently importable", async () => {
+    const { resolveAuthoritativeC01ReplaySource } =
+      await import("@/lib/chaos/replay-repository");
+    expect(typeof resolveAuthoritativeC01ReplaySource).toBe("function");
+  });
+});
+
 describe("insertReplayProcessingAttempt", () => {
   function fakeInsertedRow(overrides: Record<string, unknown> = {}) {
     return {
