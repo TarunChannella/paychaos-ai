@@ -1,0 +1,57 @@
+{
+  "metadata": {
+    "classification": "TEST_FIXTURE",
+    "provenance": "CAPTURED_RAZORPAY_TEST_MODE_FIXTURE",
+    "sourceEventType": "payment.failed",
+    "sanitized": true,
+    "sourceSignatureVerifiedAtCapture": true,
+    "sourceProcessingStatusAtCapture": "PROCESSED",
+    "sourceCanonicalWebhookEventId": "e0df759e-bbde-45c3-aa80-a5a2d6b61be9",
+    "sourceProviderCreatedAt": "2026-08-27T19:04:06+00:00",
+    "capturedAt": "2026-08-28",
+    "capturedFrom": "One genuine Razorpay Test Mode Netbanking failed payment, delivered to the deployed PayChaos Razorpay Test Mode webhook endpoint (never Razorpay Live/Production Mode), signature-verified, and processed by the real merchant processor (source webhook event e0df759e-bbde-45c3-aa80-a5a2d6b61be9). Loading this fixture in a test is NOT a new Razorpay delivery and must never be treated as one.",
+    "runtimeSourceKindMustNeverBe": "REAL_RAZORPAY_WEBHOOK",
+    "derivedFrom": "webhook_events.raw_payload_redacted for the source event above — the original unredacted raw request body was never persisted anywhere in this application (only its SHA-256 integrity hash) and is therefore not, and cannot be, reproduced here. This fixture's `payload` object is the same allowlisted shape lib/webhooks/redaction.ts's buildRedactedWebhookEvidence produces, reconstructed with only structural envelope keys added around the captured business/error fields.",
+    "providerIdsReplaced": true,
+    "providerIdReplacementNote": "payment.id and payment.order_id below, and the fixtureRazorpayEventId value, were replaced with deterministic fixture-only identifiers during sanitization (never the merchant's real captured Test Mode payment/order/event IDs). Every other field — event, entity, amount, currency, status, error_code, error_source, error_step, error_reason — is copied unchanged from the authentic redacted source evidence.",
+    "fixtureRazorpayEventId": "evt_fixture_c11_failed_001",
+    "forbiddenFieldsConfirmedAbsent": [
+      "email",
+      "contact",
+      "phone",
+      "vpa",
+      "upi",
+      "card",
+      "card_number",
+      "pan",
+      "cvv",
+      "otp",
+      "token",
+      "signature",
+      "razorpay_signature",
+      "authorization",
+      "bank_account",
+      "customer",
+      "key_secret",
+      "webhook_secret",
+      "service_role",
+      "password"
+    ]
+  },
+  "payload": {
+    "event": "payment.failed",
+    "entity": "event",
+    "created_at": 1787857446,
+    "payment": {
+      "id": "pay_fixture_c11_failed_001",
+      "order_id": "order_fixture_c11_failed_001",
+      "amount": 50000,
+      "currency": "INR",
+      "status": "failed",
+      "error_code": "BAD_REQUEST_ERROR",
+      "error_source": "bank",
+      "error_step": "payment_authorization",
+      "error_reason": "payment_failed"
+    }
+  }
+}
