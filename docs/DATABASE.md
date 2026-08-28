@@ -1445,7 +1445,8 @@ There is no separate `chaos_scenarios` database table.
 | `status` | `text` | No | `'PENDING'` | CHECK approved values | Run lifecycle |
 | `outcome` | `text` | Yes | `NULL` | CHECK approved values | Aggregate scenario outcome |
 | `fault_type` | `text` | **Yes** | `NULL` | CHECK approved values | Fault primitive used, when the scenario has one |
-| `failed_precheck_id` | `text` | **Yes** | `NULL` | CHECK approved values | Which PRECHECK-01..10 blocked this run |
+| `failed_precheck_id` | `text` | **Yes** | `NULL` | CHECK approved values | Which PRECHECK-01..10 blocked this run at CREATION time |
+| `execution_block_code` | `text` | **Yes** | `NULL` | `chaos_runs_execution_block_code_valid` (`NULL` or `'PRE-SEC-007'`) | Which EXECUTION-TIME PRE-SEC-xxx check blocked this already-persisted PENDING run immediately before mechanism execution began — **added in Phase 3D-0** (see Phase Ownership below) |
 | `fault_config` | `jsonb` | No | `{}` | object | Immutable requested fault configuration |
 | `fault_state` | `jsonb` | No | `{}` | object | Runtime hold/release/transient state |
 | `data_classification` | `text` | No | **none** | CHECK | Real/synthetic classification — must be supplied explicitly |
@@ -1492,13 +1493,33 @@ A run blocked by a failed safety/prerequisite precheck may be finalized with:
 status = COMPLETED
 outcome = BLOCKED
 failed_precheck_id = <the PRECHECK-xx that blocked it>
+execution_block_code = NULL
 error_message_redacted = <safe reason>
 started_at = NULL
 completed_at = <finalization time>
 ```
 
-without executing replay/fault injection. `started_at` remains `NULL` for a
-BLOCKED run because execution never actually began.
+A run blocked at EXECUTION time (Phase 3D-0 onward) — a chaos run that was
+already durably persisted as `PENDING`, but whose mechanism was refused
+immediately before execution began — is finalized with the mirror shape:
+
+```text
+status = COMPLETED
+outcome = BLOCKED
+failed_precheck_id = NULL
+execution_block_code = 'PRE-SEC-007'
+error_message_redacted = <safe reason>
+started_at = NULL
+completed_at = <finalization time>
+```
+
+Exactly one of `failed_precheck_id`/`execution_block_code` is non-null on a
+BLOCKED row — never both, never neither (enforced by
+`chaos_runs_blocked_state_consistent`, below).
+
+In both cases the run is finalized without executing replay/fault injection.
+`started_at` remains `NULL` for a BLOCKED run because execution never
+actually began.
 
 Detailed correctness still comes from individual:
 
@@ -1535,22 +1556,103 @@ scenario are eligible.
 
 ---
 
+## `execution_block_code`
+
+**Added in Phase 3D-0** (`supabase/migrations/20260831000000_phase3d_execution_safety.sql`).
+
+```text
+PRE-SEC-007
+```
+
+`text`, nullable, `NULL` by default and `NULL` for every run this does not
+apply to. Constrained by `chaos_runs_execution_block_code_valid`:
+
+```text
+execution_block_code IS NULL
+  OR execution_block_code = 'PRE-SEC-007'
+```
+
+`PRE-SEC-007` (required server secrets exist) is currently the **only**
+allowed non-null value. This column is deliberately **not** a generic
+unrestricted PRE-SEC code catalogue — it holds exactly the one value Phase
+3D-0 has a genuine, execution-time use for. Widening it would require its own
+approved migration.
+
+### `execution_block_code` vs `failed_precheck_id`
+
+These record two structurally different kinds of block and must never be
+conflated:
+
+| | `failed_precheck_id` | `execution_block_code` |
+|---|---|---|
+| When | **CREATION time** | **EXECUTION time** |
+| Catalogue | `PRECHECK-01`..`PRECHECK-10` (Section 11) | `PRE-SEC-xxx` (`docs/SECURITY.md`) |
+| Run state at block | The request **never became** a persisted `PENDING` run | An already-persisted `PENDING` run exists; its mechanism was refused immediately before execution began |
+| Currently allowed | `PRECHECK-07`/`08`/`09`/`10` (see above) | `PRE-SEC-007` only |
+
+### PRE-SEC checks deliberately NOT stored here
+
+- **`PRE-SEC-010`** is **not** represented as an `execution_block_code`. It
+  is the HTTP/session authorization boundary, enforced at the untrusted route
+  before the execution service is ever allowed to act on the
+  already-persisted chaos run. A caller rejected there never reaches the
+  execution service, so no execution-time block row is written for it.
+- **`PRE-SEC-011`** is **not** represented as an `execution_block_code`
+  either. It is structurally satisfied by the mere existence of the
+  already-persisted `chaos_runs` row itself (this document's "audit path
+  satisfying PRE-SEC-011") — it is never a distinct block reason.
+
+---
+
 ## Consistency Constraints
 
 ```text
 chaos_runs_blocked_state_consistent
 chaos_runs_pending_state_consistent
+chaos_runs_execution_block_code_valid
 ```
 
-`chaos_runs_blocked_state_consistent` guarantees that whenever
-`outcome = 'BLOCKED'`, the row is also `status = 'COMPLETED'`,
-`failed_precheck_id` and `error_message_redacted` are both non-null,
-`started_at` is `NULL`, and `completed_at` is non-null — and that
-`failed_precheck_id` is `NULL` on every row whose outcome is not `BLOCKED`.
-`chaos_runs_pending_state_consistent` guarantees that a `PENDING` row always
-has `outcome`/`failed_precheck_id`/`started_at`/`completed_at` all `NULL`.
-Both are enforced at the database level, not only in application code
-(docs/ARCHITECTURE.md Section 25). Neither constrains future
+Both state-consistency constraints were **revised in Phase 3D-0** to account
+for `execution_block_code`. Their current (authoritative) form:
+
+**`chaos_runs_blocked_state_consistent`** — for a row with
+`outcome = 'BLOCKED'`, guarantees ALL of:
+
+```text
+status               = 'COMPLETED'
+exactly one of:
+  failed_precheck_id   non-null  AND  execution_block_code  NULL
+  failed_precheck_id   NULL      AND  execution_block_code  non-null
+error_message_redacted  non-null
+started_at              NULL
+completed_at            non-null
+```
+
+Never both blocking identifiers, never neither. For any row whose outcome is
+**not** `BLOCKED`, both `failed_precheck_id` and `execution_block_code` are
+`NULL`. This preserves every valid pre-Phase-3D-0 BLOCKED row shape unchanged
+(`failed_precheck_id` set, `execution_block_code` `NULL` is exactly the old
+accepted shape); the execution-time shape is purely additive.
+
+**`chaos_runs_pending_state_consistent`** — guarantees a `PENDING` row always
+has ALL of:
+
+```text
+outcome                NULL
+failed_precheck_id     NULL
+execution_block_code   NULL
+started_at             NULL
+completed_at           NULL
+```
+
+(`execution_block_code IS NULL` was the Phase 3D-0 addition; every other
+lifecycle rule is unchanged.)
+
+**`chaos_runs_execution_block_code_valid`** — see the
+`execution_block_code` section above.
+
+All are enforced at the database level, not only in application code
+(docs/ARCHITECTURE.md Section 25). None constrains future
 `RUNNING`/`COMPLETED`-with-`PASS`/`FAIL`/`UNKNOWN`/`ERROR`/`FAILED`-status
 semantics — those belong to whichever later phase actually executes a
 mechanism.
@@ -1628,13 +1730,66 @@ Required:
 - `(status, created_at)`;
 - `(data_classification, completed_at)`.
 
+### `chaos_runs_one_active_c07_fault_per_order_idx` (Phase 3D-0)
+
+A **partial UNIQUE index** on `chaos_runs(order_id)`, with the predicate:
+
+```text
+scenario_id  = 'C07'
+AND fault_type   = 'DROP_CLIENT_CONFIRMATION'
+AND status       = 'RUNNING'
+AND order_id IS NOT NULL
+```
+
+**Invariant it enforces:** at most **ONE** active `RUNNING`
+C07/`DROP_CLIENT_CONFIRMATION` chaos run may exist for the same order at any
+one time. This is database-enforced concurrency safety — a partial unique
+index, not a table-level lock and not an application-level `if` check, per
+this project's principle that PostgreSQL (not application code alone) must
+protect a concurrency invariant it is capable of enforcing
+(docs/ARCHITECTURE.md Section 25).
+
+Scope clarifications — the partial predicate makes all of these true:
+
+- It has **zero effect on C01/C03/C11** rows.
+- It has **zero effect on C07 rows in `PENDING`/`COMPLETED`/`FAILED`** — only
+  `RUNNING` rows are counted.
+- It has **zero effect on `RUNNING` C07 rows for a different order**.
+- It does **not** prevent a later C07 run for the same order: once an earlier
+  run leaves `RUNNING` (any terminal status), the index no longer counts it,
+  so a subsequent run for that order may become `RUNNING` again. This is a
+  **concurrency boundary, not a permanent one-run-per-order limit**.
+- It does **not** globally enable or arm a fault — fault state remains
+  per-run (`fault_type`/`fault_config`/`fault_state`), per the "no global
+  fault-settings table" rule above.
+
 ---
 
 ## Phase Ownership
 
 Created:
 
-**Phase 3**
+**Phase 3** (Phase 3B — `20260829000000_phase3b_chaos_runs.sql`)
+
+Modified:
+
+**Phase 3D-0** — `supabase/migrations/20260831000000_phase3d_execution_safety.sql`
+adds the `execution_block_code` column and its
+`chaos_runs_execution_block_code_valid` CHECK, replaces
+`chaos_runs_blocked_state_consistent` and
+`chaos_runs_pending_state_consistent` with their `execution_block_code`-aware
+forms, and adds the
+`chaos_runs_one_active_c07_fault_per_order_idx` partial unique index. It is
+purely additive: no existing column was removed or retyped, no previously
+valid row shape became invalid, and the Phase 3B/3C migrations remain
+byte-for-byte unchanged on disk.
+
+Phase 3D-A, 3D-B, 3D-C, 3D-D, and 3D-E introduced **no migration** — every
+later Phase 3D scenario sub-phase was implemented entirely against the
+already-existing schema. In particular, `TEST_FIXTURE` remains a documented
+future `source_kind` value that is **not** accepted by any current CHECK
+constraint and has **no runtime database path** (see the Column/Value Phasing
+Note); it is source-controlled sanitized test data only.
 
 ---
 
@@ -2866,6 +3021,35 @@ for:
 - replay/simulation provenance;
 - fault evidence;
 - before/after state snapshots.
+
+### Phase 3 migrations actually applied (authoritative)
+
+```text
+20260829000000_phase3b_chaos_runs.sql            Phase 3B — creates chaos_runs
+20260830000000_phase3c_controlled_replay.sql     Phase 3C — controlled replay support
+20260831000000_phase3d_execution_safety.sql      Phase 3D-0 — execution-safety additions
+```
+
+**Phase 3D-0 — `20260831000000_phase3d_execution_safety.sql`** adds, all
+additively:
+
+- `chaos_runs.execution_block_code` (`text`, nullable);
+- the `chaos_runs_execution_block_code_valid` CHECK (`NULL` or
+  `'PRE-SEC-007'`);
+- a revised `chaos_runs_blocked_state_consistent` (exactly one of
+  `failed_precheck_id`/`execution_block_code` non-null on a BLOCKED row);
+- a revised `chaos_runs_pending_state_consistent` (adds
+  `execution_block_code IS NULL` to the PENDING requirement);
+- the `chaos_runs_one_active_c07_fault_per_order_idx` partial unique index
+  (at most one `RUNNING` C07/`DROP_CLIENT_CONFIRMATION` run per order).
+
+See Section 15 (`chaos_runs`) for the full semantics of each.
+
+**Phase 3D-A, 3D-B, 3D-C, 3D-D, and 3D-E introduced NO migration.** Every
+later Phase 3D scenario sub-phase (C03, C07, the C11 fixture, C11-B replay,
+C11-A observation) was implemented entirely against the already-existing
+schema. It is therefore **not** correct to say "Phase 3D had no migrations" —
+Phase 3D-0 had exactly one; the scenario sub-phases after it had none.
 
 ---
 
