@@ -32,12 +32,22 @@ export default function Home() {
         ever used.
       </p>
 
-      <Link
-        href="/demo-merchant"
-        className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-      >
-        Open Demo Merchant
-      </Link>
+      <div className="flex flex-wrap items-center justify-center gap-3">
+        <Link
+          href="/demo-merchant"
+          className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+        >
+          Open Demo Merchant
+        </Link>
+
+        {/* Phase 3H entry point into the Chaos Lab. */}
+        <Link
+          href="/chaos"
+          className="inline-flex items-center justify-center rounded-md border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent"
+        >
+          Open Chaos Lab
+        </Link>
+      </div>
     </div>
   );
 }

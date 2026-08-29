@@ -175,9 +175,96 @@ describe("middleware — gate enabled", () => {
   });
 });
 
+/**
+ * Phase 3H — `/chaos` is the operator surface that can START a chaos run, so
+ * it is gated exactly like `/demo-merchant`. docs/SECURITY.md lists
+ * "unauthorized chaos execution" as a threat this project must defend
+ * against; an unauthenticated Chaos Lab would be that threat realised.
+ */
+describe("middleware — Chaos Lab is protected (Phase 3H)", () => {
+  it("redirects /chaos to /access when no session cookie is present", async () => {
+    getAccessGateEnvMock.mockReturnValue({
+      mode: "enabled",
+      accessToken: "t",
+      sessionSecret: FAKE_SECRET,
+    });
+    verifySessionTokenMock.mockReturnValue(false);
+
+    const response = await callMiddleware("http://localhost/chaos");
+
+    expect(isRedirect(response)).toBe(true);
+  });
+
+  it("protects every nested chaos sub-path — scenarios and runs alike", async () => {
+    getAccessGateEnvMock.mockReturnValue({
+      mode: "enabled",
+      accessToken: "t",
+      sessionSecret: FAKE_SECRET,
+    });
+    verifySessionTokenMock.mockReturnValue(false);
+
+    for (const path of [
+      "/chaos/scenarios/C01",
+      "/chaos/scenarios/C11",
+      "/chaos/runs/00000000-0000-4000-8000-000000000000",
+    ]) {
+      const response = await callMiddleware(`http://localhost${path}`);
+      expect(isRedirect(response), path).toBe(true);
+    }
+  });
+
+  it("passes /chaos through when the session cookie verifies", async () => {
+    getAccessGateEnvMock.mockReturnValue({
+      mode: "enabled",
+      accessToken: "t",
+      sessionSecret: FAKE_SECRET,
+    });
+    verifySessionTokenMock.mockReturnValue(true);
+
+    const response = await callMiddleware(
+      "http://localhost/chaos",
+      "paychaos_session=valid",
+    );
+
+    expect(isRedirect(response)).toBe(false);
+  });
+
+  it("fails closed on /chaos when the gate config itself is invalid", async () => {
+    getAccessGateEnvMock.mockImplementation(() => {
+      throw new Error("bad config");
+    });
+
+    const response = await callMiddleware("http://localhost/chaos");
+
+    expect(response.status).toBe(503);
+  });
+
+  it("does NOT gate a path that merely starts with the same letters", async () => {
+    // `/chaos-public` is not a sub-path of `/chaos`; prefix matching must be
+    // segment-aware or an unrelated future route would silently require login.
+    getAccessGateEnvMock.mockReturnValue({
+      mode: "enabled",
+      accessToken: "t",
+      sessionSecret: FAKE_SECRET,
+    });
+
+    const response = await callMiddleware("http://localhost/chaos-public");
+
+    expect(isRedirect(response)).toBe(false);
+    expect(getAccessGateEnvMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("middleware config matcher", () => {
-  it("only declares the Demo Merchant path", async () => {
+  it("declares exactly the two mutation-capable operator surfaces", async () => {
     const { config } = await import("@/middleware");
-    expect(config.matcher).toEqual(["/demo-merchant/:path*"]);
+    expect(config.matcher).toEqual(["/demo-merchant/:path*", "/chaos/:path*"]);
+  });
+
+  it("never declares the public webhook or the login route", async () => {
+    const { config } = await import("@/middleware");
+    const declared = config.matcher.join(" ");
+    expect(declared).not.toContain("webhook");
+    expect(declared).not.toContain("/api/access");
   });
 });
