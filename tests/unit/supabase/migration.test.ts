@@ -69,11 +69,12 @@ describe("Migration set creates exactly the approved Phase 1 + Phase 2B + Phase 
   // (supabase/migrations/20260829000000_phase3b_chaos_runs.sql,
   // docs/DATABASE.md Section 15) — this is the current approved cumulative
   // table set, not a Phase 1 boundary violation.
-  it("creates orders, payment_attempts, payments, fulfilments, webhook_events, event_processing_attempts, chaos_runs and nothing else", () => {
+  it("creates orders, payment_attempts, payments, fulfilments, webhook_events, event_processing_attempts, chaos_runs, invariant_results and nothing else", () => {
     expect([...tableNames].sort()).toEqual([
       "chaos_runs",
       "event_processing_attempts",
       "fulfilments",
+      "invariant_results",
       "orders",
       "payment_attempts",
       "payments",
@@ -81,9 +82,12 @@ describe("Migration set creates exactly the approved Phase 1 + Phase 2B + Phase 
     ]);
   });
 
-  it("does not create any other Phase 3C+/4+ table", () => {
+  // `invariant_results` left this list in Phase 3F-A: it is now the exact
+  // approved new table (supabase/migrations/20260902000000_phase3f_invariant_results.sql,
+  // docs/DATABASE.md Section 16) and is asserted positively above. Every
+  // Phase 4 table remains forbidden.
+  it("does not create any other Phase 4+ table", () => {
     const forbidden = [
-      "invariant_results",
       "findings",
       "regression_runs",
       "reliability_score_snapshots",
@@ -272,14 +276,14 @@ describe("Phase 1C-A no permissive anon/authenticated policy (#14)", () => {
     }
   });
 
-  it("every TABLE GRANT targets only the 7 approved tables", () => {
+  it("every TABLE GRANT targets only the 8 approved tables", () => {
     const tableGrantLines = combinedSql
       .split("\n")
       .filter((line) => /^\s*grant\s.*\bon\s+(?!function\b)/i.test(line));
     expect(tableGrantLines.length).toBeGreaterThan(0);
     for (const line of tableGrantLines) {
       expect(line).toMatch(
-        /public\.(orders|payment_attempts|payments|fulfilments|webhook_events|event_processing_attempts|chaos_runs)\b/i,
+        /public\.(orders|payment_attempts|payments|fulfilments|webhook_events|event_processing_attempts|chaos_runs|invariant_results)\b/i,
       );
     }
   });
@@ -328,13 +332,13 @@ describe("Phase 1C-A correction — no unnecessary pgcrypto extension", () => {
     expect(combinedSql).not.toMatch(/create extension[^;]*pgcrypto/i);
   });
 
-  it("gen_random_uuid() remains the UUID default for all seven tables", () => {
+  it("gen_random_uuid() remains the UUID default for all eight tables", () => {
     const occurrences = [
       ...combinedSql.matchAll(
         /id uuid primary key default gen_random_uuid\(\)/gi,
       ),
     ];
-    expect(occurrences.length).toBe(7);
+    expect(occurrences.length).toBe(8);
   });
 });
 
@@ -726,12 +730,32 @@ describe("Phase 1C-A correction — explicit browser-role revocation", () => {
     expect(combinedSql).not.toMatch(/grant[^;]*\bto\s+authenticated\b/i);
   });
 
-  it("service_role retains explicit CRUD grants on exactly the seven tables", () => {
+  // Phase 3F-A: `invariant_results` is the EIGHTH granted table and is
+  // deliberately the ONLY one without UPDATE — a persisted invariant result
+  // is immutable append-only evidence (docs/MONEY_INVARIANTS.md Section 49),
+  // so the append-only guarantee is enforced by privilege, not merely by
+  // repository convention. This assertion is split rather than relaxed: the
+  // seven mutable tables must still each carry full CRUD, and
+  // invariant_results must carry SELECT/INSERT/DELETE and never UPDATE.
+  it("service_role retains explicit CRUD grants on exactly the seven mutable tables, plus an append-only grant on invariant_results", () => {
     const tableGrantLines = combinedSql
       .split("\n")
       .filter((line) => /^\s*grant\s.*\bon\s+(?!function\b)/i.test(line));
-    expect(tableGrantLines.length).toBe(7);
-    for (const line of tableGrantLines) {
+    expect(tableGrantLines.length).toBe(8);
+
+    const invariantGrants = tableGrantLines.filter((line) =>
+      /public\.invariant_results\b/i.test(line),
+    );
+    expect(invariantGrants.length).toBe(1);
+    expect(invariantGrants[0]!).toMatch(/select,\s*insert,\s*delete/i);
+    expect(invariantGrants[0]!).not.toMatch(/\bupdate\b/i);
+    expect(invariantGrants[0]!).toMatch(/to service_role/i);
+
+    const mutableGrants = tableGrantLines.filter(
+      (line) => !/public\.invariant_results\b/i.test(line),
+    );
+    expect(mutableGrants.length).toBe(7);
+    for (const line of mutableGrants) {
       expect(line).toMatch(/select,\s*insert,\s*update,\s*delete/i);
       expect(line).toMatch(/to service_role/i);
       expect(line).toMatch(
@@ -740,7 +764,7 @@ describe("Phase 1C-A correction — explicit browser-role revocation", () => {
     }
   });
 
-  it("RLS remains enabled on all seven tables", () => {
+  it("RLS remains enabled on all eight tables", () => {
     for (const table of [
       "orders",
       "payment_attempts",
@@ -749,6 +773,7 @@ describe("Phase 1C-A correction — explicit browser-role revocation", () => {
       "webhook_events",
       "event_processing_attempts",
       "chaos_runs",
+      "invariant_results",
     ]) {
       const re = new RegExp(
         `alter table public\\.${table} enable row level security`,
@@ -1306,12 +1331,14 @@ describe("Phase 3C migration — controlled replay compatibility (architect-appr
     });
   });
 
-  it("the migration set still creates exactly the same 7 approved tables — Phase 3C adds no new table", () => {
+  it("Phase 3C itself adds no new table — the cumulative set gains one only in Phase 3F-A (invariant_results)", () => {
+    expect(extractCreateTableNames(phase3cMigration!.sql)).toEqual([]);
     const tableNames = extractCreateTableNames(combinedSql);
     expect([...tableNames].sort()).toEqual([
       "chaos_runs",
       "event_processing_attempts",
       "fulfilments",
+      "invariant_results",
       "orders",
       "payment_attempts",
       "payments",
@@ -1453,12 +1480,14 @@ describe("Phase 3D-0 migration — execution-block audit + C07 concurrency schem
     }
   });
 
-  it("13: the migration set still creates exactly the same 7 approved tables — Phase 3D-0 adds no new table", () => {
+  it("13: Phase 3D-0 itself adds no new table — the cumulative set gains a table only in Phase 3F-A (invariant_results)", () => {
+    expect(extractCreateTableNames(phase3dMigration!.sql)).toEqual([]);
     const tableNames = extractCreateTableNames(combinedSql);
     expect([...tableNames].sort()).toEqual([
       "chaos_runs",
       "event_processing_attempts",
       "fulfilments",
+      "invariant_results",
       "orders",
       "payment_attempts",
       "payments",
@@ -1493,10 +1522,17 @@ describe("Phase 3E-A migration — event_processing_attempts evidence snapshots"
     expect(phase3eMigration).toBeDefined();
   });
 
-  it("2: it sorts AFTER every existing migration (chronological filename ordering is preserved, so it can never be applied out of order)", () => {
-    expect(migrations[migrations.length - 1]!.name).toBe(
-      phase3eMigration!.name,
+  it("2: it sorts AFTER every migration that precedes it and BEFORE the Phase 3F-A migration (chronological filename ordering is preserved, so nothing can be applied out of order)", () => {
+    const index = migrations.findIndex(
+      (m) => m.name === phase3eMigration!.name,
     );
+    expect(index).toBeGreaterThan(-1);
+    for (const earlier of migrations.slice(0, index)) {
+      expect(earlier.name < phase3eMigration!.name).toBe(true);
+    }
+    expect(migrations.slice(index + 1).map((m) => m.name)).toEqual([
+      "20260902000000_phase3f_invariant_results.sql",
+    ]);
     expect(phase3eMigration!.name).toMatch(
       /^\d{14}_phase3e_evidence_snapshots\.sql$/,
     );
@@ -1597,7 +1633,7 @@ describe("Phase 3E-A migration — event_processing_attempts evidence snapshots"
     expect(extractCreateTableNames(combinedSql)).not.toContain("evidence");
   });
 
-  it("9: no invariant/finding/regression schema is added", () => {
+  it("9: no invariant/finding/regression schema is added by THIS migration (invariant_results arrives only in the later Phase 3F-A migration)", () => {
     for (const forbidden of [
       "invariant_results",
       "findings",
@@ -1607,6 +1643,15 @@ describe("Phase 3E-A migration — event_processing_attempts evidence snapshots"
       expect(phase3eMigration!.sql).not.toMatch(
         new RegExp(`create table\\s+public\\.${forbidden}`, "i"),
       );
+    }
+    // Still absent from the cumulative migration set entirely — Phase 4
+    // tables only. `invariant_results` is deliberately excluded from this
+    // second list because it is now an approved table.
+    for (const forbidden of [
+      "findings",
+      "regression_runs",
+      "reliability_score_snapshots",
+    ]) {
       expect(extractCreateTableNames(combinedSql)).not.toContain(forbidden);
     }
     // No PASS/FAIL/UNKNOWN verdict vocabulary is introduced anywhere in the
@@ -1663,16 +1708,327 @@ describe("Phase 3E-A migration — event_processing_attempts evidence snapshots"
     );
   });
 
-  it("15: the migration set still creates exactly the same 7 approved tables — Phase 3E-A adds no new table", () => {
+  it("15: Phase 3E-A itself adds no new table — the cumulative set gains one only in Phase 3F-A (invariant_results)", () => {
+    expect(extractCreateTableNames(phase3eMigration!.sql)).toEqual([]);
     const tableNames = extractCreateTableNames(combinedSql);
     expect([...tableNames].sort()).toEqual([
       "chaos_runs",
       "event_processing_attempts",
       "fulfilments",
+      "invariant_results",
       "orders",
       "payment_attempts",
       "payments",
       "webhook_events",
     ]);
+  });
+});
+
+describe("Phase 3F-A migration — invariant_results (the first Money Invariant table)", () => {
+  const phase3fMigration = migrations.find((m) => m.name.includes("phase3f"));
+
+  function functional(sql: string): string {
+    return sql
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("--"))
+      .join("\n");
+  }
+
+  it("1: exists, is the expected filename and sorts last in the migration set", () => {
+    expect(phase3fMigration).toBeDefined();
+    expect(phase3fMigration!.name).toBe(
+      "20260902000000_phase3f_invariant_results.sql",
+    );
+    expect(migrations[migrations.length - 1]!.name).toBe(
+      phase3fMigration!.name,
+    );
+  });
+
+  it("2: creates exactly one table, and it is invariant_results", () => {
+    const created = extractCreateTableNames(phase3fMigration!.sql);
+    expect(created).toEqual(["invariant_results"]);
+  });
+
+  it("3: declares every required column and invents none", () => {
+    const match = phase3fMigration!.sql.match(
+      /create table\s+public\.invariant_results\s*\(([\s\S]*?)\n\);/i,
+    );
+    expect(match).not.toBeNull();
+    const block = match![1]!;
+    for (const column of [
+      "id",
+      "invariant_id",
+      "invariant_version",
+      "order_id",
+      "payment_attempt_id",
+      "payment_id",
+      "chaos_run_id",
+      "result",
+      "severity",
+      "expected_summary",
+      "observed_summary",
+      "reason",
+      "evidence_refs",
+      "evaluated_at",
+    ]) {
+      expect(block).toMatch(new RegExp(`\\b${column}\\b`));
+    }
+    for (const forbidden of [
+      "deterministic_reason",
+      "scenario_run_id",
+      "diagnosis_code",
+      "root_cause",
+      "recommendation",
+      "confidence",
+      "reliability_score",
+      "finding_id",
+    ]) {
+      expect(block).not.toMatch(new RegExp(`\\b${forbidden}`, "i"));
+    }
+  });
+
+  it("4: all four entity correlations are NULLABLE — the C03 shape (architect correction)", () => {
+    const match = phase3fMigration!.sql.match(
+      /create table\s+public\.invariant_results\s*\(([\s\S]*?)\n\);/i,
+    );
+    const block = match![1]!;
+    for (const column of [
+      "order_id",
+      "payment_attempt_id",
+      "payment_id",
+      "chaos_run_id",
+    ]) {
+      const line = block
+        .split("\n")
+        .find((l) => l.trim().startsWith(`${column} `));
+      expect(line).toBeDefined();
+      expect(line!).not.toMatch(/not null/i);
+      expect(line!).toMatch(
+        /references public\.\w+ \(id\) on delete restrict/i,
+      );
+    }
+  });
+
+  it("4b: invariant_results_subject_present requires at least ONE of the four correlations to be non-null (architect blocker 3F-A-01 — no orphan authoritative result)", () => {
+    const match = phase3fMigration!.sql.match(
+      /constraint invariant_results_subject_present check \(([\s\S]*?)\n  \)\n\);/i,
+    );
+    expect(match).not.toBeNull();
+    const body = match![1]!;
+
+    // Exactly the four correlation columns, OR-ed, each tested for NOT NULL.
+    const clauses = [...body.matchAll(/(\w+) is not null/gi)].map((m) =>
+      m[1]!.toLowerCase(),
+    );
+    expect(clauses).toEqual([
+      "order_id",
+      "payment_attempt_id",
+      "payment_id",
+      "chaos_run_id",
+    ]);
+    // OR, never AND — an AND would wrongly require all four.
+    expect(body).toMatch(/\bor\b/i);
+    expect(body).not.toMatch(/\band\b/i);
+    expect(body).not.toMatch(/\bis null\b/i);
+  });
+
+  it("4c: C03's shape stays legal — the constraint requires no order_id and no payment_attempt_id, and no individual correlation became NOT NULL", () => {
+    const createBlock = phase3fMigration!.sql.match(
+      /create table\s+public\.invariant_results\s*\(([\s\S]*?)\n\);/i,
+    )![1]!;
+
+    // No individual correlation column is NOT NULL — the subject rule is a
+    // table-level CHECK, never a per-column NOT NULL.
+    for (const column of [
+      "order_id",
+      "payment_attempt_id",
+      "payment_id",
+      "chaos_run_id",
+    ]) {
+      const line = createBlock
+        .split("\n")
+        .find((l) => l.trim().startsWith(`${column} `));
+      expect(line).toBeDefined();
+      expect(line!).not.toMatch(/not null/i);
+    }
+
+    const subjectBody = phase3fMigration!.sql.match(
+      /constraint invariant_results_subject_present check \(([\s\S]*?)\n  \)\n\);/i,
+    )![1]!;
+    // A C03 row supplies ONLY chaos_run_id; that clause alone must satisfy
+    // the constraint, so order_id/payment_attempt_id must not be mandatory
+    // anywhere in it.
+    expect(subjectBody).toMatch(/chaos_run_id is not null/i);
+    expect(subjectBody).not.toMatch(/order_id is not null\s+and/i);
+    expect(subjectBody).not.toMatch(/payment_attempt_id is not null\s+and/i);
+  });
+
+  it("5: no foreign key uses CASCADE or SET NULL", () => {
+    expect(functional(phase3fMigration!.sql)).not.toMatch(/on delete cascade/i);
+    expect(functional(phase3fMigration!.sql)).not.toMatch(
+      /on delete set null/i,
+    );
+    const restricts = [
+      ...phase3fMigration!.sql.matchAll(/on delete restrict/gi),
+    ];
+    expect(restricts.length).toBe(4);
+  });
+
+  it("6: result accepts EXACTLY PASS/FAIL/UNKNOWN — NOT_APPLICABLE and ERROR have no schema representation", () => {
+    const match = phase3fMigration!.sql.match(
+      /constraint invariant_results_result_valid check \(([\s\S]*?)\)\s*,/i,
+    );
+    expect(match).not.toBeNull();
+    expect(match![1]!).toMatch(/result in \('PASS', 'FAIL', 'UNKNOWN'\)/i);
+    expect(functional(phase3fMigration!.sql)).not.toMatch(/'NOT_APPLICABLE'/);
+    expect(functional(phase3fMigration!.sql)).not.toMatch(/'ERROR'/);
+  });
+
+  it("7: severity accepts exactly LOW/MEDIUM/HIGH/CRITICAL with no INFO or WARNING", () => {
+    const match = phase3fMigration!.sql.match(
+      /constraint invariant_results_severity_valid check \(([\s\S]*?)\)\s*,/i,
+    );
+    expect(match).not.toBeNull();
+    expect(match![1]!).toMatch(
+      /severity in \('LOW', 'MEDIUM', 'HIGH', 'CRITICAL'\)/i,
+    );
+    expect(functional(phase3fMigration!.sql)).not.toMatch(/'INFO'/);
+    expect(functional(phase3fMigration!.sql)).not.toMatch(/'WARNING'/);
+  });
+
+  it("8: invariant_id is constrained to the twelve P0 IDs and excludes the P1 IDs", () => {
+    const match = phase3fMigration!.sql.match(
+      /constraint invariant_results_invariant_id_valid check \(([\s\S]*?)\n  \),/i,
+    );
+    expect(match).not.toBeNull();
+    const ids = [...match![1]!.matchAll(/'(INV-\d{3})'/g)].map((m) => m[1]!);
+    expect(ids).toEqual([
+      "INV-001",
+      "INV-002",
+      "INV-003",
+      "INV-004",
+      "INV-005",
+      "INV-006",
+      "INV-007",
+      "INV-008",
+      "INV-009",
+      "INV-010",
+      "INV-011",
+      "INV-012",
+    ]);
+    expect(functional(phase3fMigration!.sql)).not.toMatch(/'INV-013'/);
+    expect(functional(phase3fMigration!.sql)).not.toMatch(/'INV-014'/);
+  });
+
+  it("9: invariant_version is text NOT NULL DEFAULT '1' and evidence_refs is jsonb NOT NULL DEFAULT '[]'", () => {
+    expect(phase3fMigration!.sql).toMatch(
+      /invariant_version text not null default '1'/i,
+    );
+    expect(phase3fMigration!.sql).toMatch(
+      /evidence_refs jsonb not null default '\[\]'/i,
+    );
+    expect(phase3fMigration!.sql).toMatch(
+      /jsonb_typeof\(evidence_refs\) = 'array'/i,
+    );
+  });
+
+  it("10: the partial unique index is on (chaos_run_id, invariant_id) WHERE chaos_run_id IS NOT NULL", () => {
+    expect(phase3fMigration!.sql).toMatch(
+      /create unique index invariant_results_chaos_run_invariant_uniq\s*\n\s*on public\.invariant_results \(chaos_run_id, invariant_id\)\s*\n\s*where chaos_run_id is not null;/i,
+    );
+    expect(phase3fMigration!.sql).not.toMatch(
+      /create unique index[\s\S]{0,120}\(invariant_id\)/i,
+    );
+  });
+
+  it("11: declares every required index and no speculative extra", () => {
+    const indexes = [
+      ...phase3fMigration!.sql.matchAll(
+        /create (?:unique )?index (\w+)\s+on public\.invariant_results/gi,
+      ),
+    ].map((m) => m[1]!);
+    expect([...indexes].sort()).toEqual([
+      "invariant_results_chaos_run_invariant_uniq",
+      "invariant_results_evaluated_at_idx",
+      "invariant_results_payment_attempt_id_idx",
+      "invariant_results_payment_id_idx",
+      "invariant_results_result_idx",
+      "invariant_results_severity_idx",
+    ]);
+  });
+
+  it("12: enables RLS, creates no policy, and revokes anon/authenticated", () => {
+    expect(phase3fMigration!.sql).toMatch(
+      /alter table public\.invariant_results enable row level security;/i,
+    );
+    expect(phase3fMigration!.sql).not.toMatch(/create policy/i);
+    expect(phase3fMigration!.sql).toMatch(
+      /revoke all privileges on table public\.invariant_results from anon, authenticated;/i,
+    );
+  });
+
+  it("13: grants service_role SELECT/INSERT/DELETE and NO UPDATE to any role — append-only by privilege", () => {
+    expect(phase3fMigration!.sql).toMatch(
+      /grant select, insert, delete on public\.invariant_results to service_role;/i,
+    );
+    const grants = [...phase3fMigration!.sql.matchAll(/^\s*grant .*$/gim)];
+    expect(grants.length).toBe(1);
+    for (const grant of grants) {
+      expect(grant[0]!).not.toMatch(/\bupdate\b/i);
+    }
+    expect(functional(phase3fMigration!.sql)).not.toMatch(/grant all/i);
+  });
+
+  it("14: alters no existing table and creates no function, trigger or view", () => {
+    for (const table of [
+      "orders",
+      "payment_attempts",
+      "payments",
+      "fulfilments",
+      "webhook_events",
+      "event_processing_attempts",
+      "chaos_runs",
+    ]) {
+      expect(phase3fMigration!.sql).not.toMatch(
+        new RegExp(`alter table\\s+public\\.${table}\\b`, "i"),
+      );
+    }
+    expect(functional(phase3fMigration!.sql)).not.toMatch(/create function/i);
+    expect(functional(phase3fMigration!.sql)).not.toMatch(/create trigger/i);
+    expect(functional(phase3fMigration!.sql)).not.toMatch(/create view/i);
+    expect(functional(phase3fMigration!.sql)).not.toMatch(/create or replace/i);
+  });
+
+  it("15: creates no Phase 4 table", () => {
+    for (const forbidden of [
+      "findings",
+      "regression_runs",
+      "reliability_score_snapshots",
+      "merchants",
+    ]) {
+      expect(phase3fMigration!.sql).not.toMatch(
+        new RegExp(
+          `create table\\s+(if not exists\\s+)?(public\\.)?${forbidden}\\b`,
+          "i",
+        ),
+      );
+      expect(extractCreateTableNames(combinedSql)).not.toContain(forbidden);
+    }
+  });
+
+  it("16: inserts no row — this is a schema-only migration", () => {
+    expect(functional(phase3fMigration!.sql)).not.toMatch(/\binsert\s+into\b/i);
+    expect(functional(phase3fMigration!.sql)).not.toMatch(
+      /\bupdate\s+public\./i,
+    );
+    expect(functional(phase3fMigration!.sql)).not.toMatch(/\bdelete\s+from\b/i);
+  });
+
+  it("17: contains no secret", () => {
+    expect(phase3fMigration!.sql).not.toMatch(/RAZORPAY_KEY_SECRET/i);
+    expect(phase3fMigration!.sql).not.toMatch(/RAZORPAY_WEBHOOK_SECRET/i);
+    expect(phase3fMigration!.sql).not.toMatch(
+      /SUPABASE_SERVICE_ROLE_KEY\s*=\s*['"]/i,
+    );
   });
 });

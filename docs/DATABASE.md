@@ -1958,22 +1958,72 @@ AI output does not modify it.
 
 ## Table Definition
 
+**Implemented by** `supabase/migrations/20260902000000_phase3f_invariant_results.sql` (Phase 3F-A). The table below is the AS-IMPLEMENTED schema, not a plan.
+
 | Column | Type | Nullable? | Default | Constraints | Purpose |
 |---|---|---:|---|---|---|
-| `id` | `uuid` | No | generated UUID | PRIMARY KEY | Evaluation ID |
-| `invariant_id` | `text` | No | — | — | Stable invariant catalogue ID |
+| `id` | `uuid` | No | `gen_random_uuid()` | PRIMARY KEY | Evaluation ID |
+| `invariant_id` | `text` | No | — | CHECK (INV-001…INV-012) | Stable invariant catalogue ID |
 | `invariant_version` | `text` | No | `'1'` | — | Version of deterministic rule |
-| `order_id` | `uuid` | No | — | FK → `orders.id` | Evaluated order |
-| `payment_attempt_id` | `uuid` | No | — | FK → `payment_attempts.id` | Evaluated payment attempt |
-| `payment_id` | `uuid` | Yes | `NULL` | FK → `payments.id` | Specific payment where applicable |
-| `chaos_run_id` | `uuid` | Yes | `NULL` | FK → `chaos_runs.id` | Chaos execution; null for baseline |
+| `order_id` | `uuid` | **Yes** | `NULL` | FK → `orders.id` ON DELETE RESTRICT | Evaluated order, when one exists |
+| `payment_attempt_id` | `uuid` | **Yes** | `NULL` | FK → `payment_attempts.id` ON DELETE RESTRICT | Evaluated payment attempt, when one exists |
+| `payment_id` | `uuid` | Yes | `NULL` | FK → `payments.id` ON DELETE RESTRICT | Specific payment where applicable |
+| `chaos_run_id` | `uuid` | Yes | `NULL` | FK → `chaos_runs.id` ON DELETE RESTRICT | Chaos execution; null for baseline. **Required for C03** — see the subject-anchor rule below |
 | `result` | `text` | No | — | CHECK | PASS/FAIL/UNKNOWN |
 | `severity` | `text` | No | — | CHECK | Risk severity snapshot |
 | `expected_summary` | `text` | No | — | — | Expected deterministic condition |
 | `observed_summary` | `text` | No | — | — | Actual observed condition |
 | `reason` | `text` | No | — | — | Deterministic explanation |
-| `evidence_refs` | `jsonb` | No | `[]` | array | Structured references to evidence |
+| `evidence_refs` | `jsonb` | No | `'[]'` | CHECK `jsonb_typeof(...) = 'array'` | Structured references to evidence |
 | `evaluated_at` | `timestamptz` | No | `now()` | — | Evaluation time |
+
+---
+
+## Architect Nullability Correction (Phase 3F-A, binding)
+
+The pre-implementation version of the table above declared `order_id` and `payment_attempt_id` as **NOT NULL**. That was incorrect and is corrected here, exactly as the identical correction was already applied to `chaos_runs` in Phase 3B.
+
+**C03 has no merchant order, no payment attempt and no payment at all.** Its Mechanism C targets PayChaos's own fixed internal webhook-verification path (`lib/chaos/c03-execution-service.ts`), which performs two HMAC checks and touches no merchant entity whatsoever. Every approved C03 chaos run carries all four correlation FKs as `NULL`.
+
+A NOT NULL `order_id` would therefore force an INV-005 result to fabricate a link to an order the scenario never examined. `docs/MONEY_INVARIANTS.md` Section 12 and CLAUDE.md Section 12 both forbid this: **a `NULL` link is preferred over a false one.**
+
+All four correlation columns are consequently nullable **individually**. The foreign key still applies whenever a value is non-null, and every one uses `ON DELETE RESTRICT` — no `CASCADE`, no `SET NULL`. A C03 evaluation is anchored to `chaos_run_id` plus the factual mutation evidence persisted on that run's `fault_state`.
+
+---
+
+## Subject Anchor — `invariant_results_subject_present`
+
+Individually nullable is **not** the same as "all four may be `NULL` together". A row with `order_id`, `payment_attempt_id`, `payment_id` and `chaos_run_id` all `NULL` would be an orphan authoritative money verdict about nothing — untraceable to any durable subject. No legitimate evaluation produces one.
+
+The migration therefore enforces:
+
+```sql
+constraint invariant_results_subject_present check (
+  order_id is not null
+  or payment_attempt_id is not null
+  or payment_id is not null
+  or chaos_run_id is not null
+)
+```
+
+**No individual foreign key is `NOT NULL`.** The constraint only requires that at least one anchor exists.
+
+| Evaluation shape | `order_id` | `payment_attempt_id` | `payment_id` | `chaos_run_id` | Accepted? |
+|---|---|---|---|---|---|
+| **C03** | `NULL` | `NULL` | `NULL` | **NON-NULL** | Yes |
+| Baseline order evaluation | **NON-NULL** | `NULL` | `NULL` | `NULL` | Yes |
+| Baseline payment-attempt evaluation | any | **NON-NULL** | any | `NULL` | Yes |
+| Baseline payment evaluation | any | any | **NON-NULL** | `NULL` | Yes |
+| Chaos evaluation with a merchant subject | NON-NULL | NON-NULL | NON-NULL | NON-NULL | Yes |
+| Orphan | `NULL` | `NULL` | `NULL` | `NULL` | **REJECTED** |
+
+**`chaos_run_id` is `NULL`-able only because baseline evaluation is supported.** A baseline evaluation still has a real merchant/payment subject. Conversely, **`chaos_run_id` is required for C03**: it is the sole correlation a C03 result can truthfully carry, so a C03 result without it would have no subject at all and is rejected.
+
+---
+
+## `invariant_id`
+
+Constrained by CHECK to exactly the twelve frozen P0 catalogue IDs `INV-001`…`INV-012` (`docs/MONEY_INVARIANTS.md` Section 14). The P1 IDs `INV-013`/`INV-014` are rejected at the database, so an unapproved invariant can never be persisted as a P0 result. `lib/invariants/registry.ts` owns the same twelve IDs in TypeScript.
 
 ---
 
@@ -1984,6 +2034,12 @@ PASS
 FAIL
 UNKNOWN
 ```
+
+**Exactly these three, enforced by CHECK.**
+
+`NOT_APPLICABLE` and `ERROR` are **in-memory evaluation dispositions only** (`docs/MONEY_INVARIANTS.md` Sections 32/36/37/38). They have deliberately **no schema representation**: the database fails closed rather than allowing "the rule did not apply" or "the evaluator crashed" to be stored as though it were authoritative payment truth. `lib/invariants/types.ts` makes the same split at compile time — a non-persistable evaluation is a structurally different type with no `severity`/`expected_summary`/`observed_summary`, so it cannot reach a persistence call.
+
+`UNKNOWN` **is** authoritative: it means the rule applied but the evidence was insufficient. It must never be read, scored or displayed as `PASS`.
 
 ---
 
@@ -2002,22 +2058,28 @@ Severity is stored as a snapshot so historical findings remain explainable even 
 
 ## Evidence References
 
-`evidence_refs` may reference records such as:
+`evidence_refs` references records such as:
 
 ```text
-WEBHOOK_EVENT
-PROCESSING_ATTEMPT
+ORDER
+PAYMENT_ATTEMPT
 PAYMENT
 FULFILMENT
+WEBHOOK_EVENT
+EVENT_PROCESSING_ATTEMPT
 CHAOS_RUN
 ```
 
-Each reference must contain:
+This is the same list `docs/MONEY_INVARIANTS.md` Section 42 carries. An earlier version of this section abbreviated `EVENT_PROCESSING_ATTEMPT` to `PROCESSING_ATTEMPT`; the longer spelling — which matches the real `event_processing_attempts` table — is the correct one and is what `lib/invariants/types.ts` implements.
+
+Each reference must contain exactly:
 
 - evidence kind;
 - internal UUID.
 
-Do not copy entire webhook payloads into invariant results.
+The database CHECK enforces only that `evidence_refs` is a **JSON array**. The per-element `{kind, id}` shape is owned by `lib/invariants/types.ts`, deliberately rather than by hand-written JSON-schema validation in SQL.
+
+Never write into `evidence_refs`: a raw webhook payload, `normalized_event`, a signature, `raw_body_sha256`, a secret, customer PII, diagnosis text, recommendation text, or any AI output. The two-field shape exists precisely so there is nowhere to put them.
 
 ---
 
@@ -2025,14 +2087,16 @@ Do not copy entire webhook payloads into invariant results.
 
 For a chaos run, one invariant should normally be evaluated once.
 
-Required partial unique index:
+Required partial unique index (implemented as `invariant_results_chaos_run_invariant_uniq`):
 
 ```text
 UNIQUE(chaos_run_id, invariant_id)
 WHERE chaos_run_id IS NOT NULL
 ```
 
-Baseline evaluation may occur more than once, so baseline rows are not forced into this uniqueness rule.
+Baseline evaluation may occur more than once, so baseline rows (`chaos_run_id IS NULL`) are deliberately **not** forced into this uniqueness rule — the index is partial for exactly that reason.
+
+Uniqueness is **not** placed on `invariant_id` alone: different chaos runs are different historical evaluations of the same rule, and all of them must be retained. There is no `UPSERT` path and no `FAIL → PASS` update path; application-level evaluation idempotency belongs to Phase 3F-C.
 
 ---
 
@@ -2045,6 +2109,21 @@ FAIL → PASS
 ```
 
 A re-test creates a **new** result.
+
+This is enforced by **privilege**, not merely by repository convention. The Phase 3F-A migration grants **no `UPDATE` on `invariant_results` to any role, including `service_role`** — a deliberate narrowing versus every other table in this project, all of which carry full CRUD. A future service-layer bug attempting to rewrite a `FAIL` into a `PASS` fails at the database. `lib/supabase/types.ts` reinforces this at compile time by typing the table's `Update` member as `never`.
+
+`DELETE` **is** retained for `service_role`, because Section 39 "Reset Scope"/"Reset Order" lists `invariant_results` as step 3 of the intentional administrative Demo Reset. That is a controlled, explicitly documented operation — not normal application behavior.
+
+---
+
+## RLS and Privileges (as implemented)
+
+```text
+RLS:            enabled, ZERO policies
+anon:           REVOKE ALL — no read, no write
+authenticated:  REVOKE ALL — no read, no write
+service_role:   GRANT SELECT, INSERT, DELETE   (no UPDATE, by design)
+```
 
 ---
 
@@ -2065,7 +2144,9 @@ Required:
 
 Created:
 
-**Phase 3**
+**Phase 3F-A** — `supabase/migrations/20260902000000_phase3f_invariant_results.sql`.
+
+Phase 3F-A creates this schema only. It ships **no evaluator**: the deterministic INV-001…INV-012 rules are Phase 3F-B, and evaluation orchestration/persistence is Phase 3F-C. No row is written by the migration.
 
 ---
 
@@ -3292,6 +3373,50 @@ eligibility gate additionally prevents any later idempotent re-entry from
 writing a late first snapshot into one of those historical rows. See Section
 14's "historical NULL semantics" for why a reconstructed snapshot would be
 false evidence.
+
+---
+
+### Phase 3F migration — IMPLEMENTED IN REPOSITORY / NOT YET APPLIED
+
+```text
+20260902000000_phase3f_invariant_results.sql     Phase 3F-A — invariant_results
+```
+
+**Phase 3F-A — `20260902000000_phase3f_invariant_results.sql`** creates
+exactly one table, `public.invariant_results` (Section 16), with:
+
+- all fourteen approved columns and no invented column;
+- all four entity correlations **nullable**, every FK `ON DELETE RESTRICT`;
+- `invariant_results_invariant_id_valid` (INV-001…INV-012 only);
+- `invariant_results_result_valid` (`PASS`/`FAIL`/`UNKNOWN` only);
+- `invariant_results_severity_valid` (`LOW`/`MEDIUM`/`HIGH`/`CRITICAL` only);
+- `invariant_results_evidence_refs_is_array`;
+- `invariant_results_subject_present` (at least one of `order_id` /
+  `payment_attempt_id` / `payment_id` / `chaos_run_id` non-null — no
+  individual column is NOT NULL);
+- the partial unique index
+  `invariant_results_chaos_run_invariant_uniq (chaos_run_id, invariant_id)
+  WHERE chaos_run_id IS NOT NULL`, plus the five required non-unique indexes;
+- RLS enabled with zero policies, `REVOKE ALL` from `anon`/`authenticated`,
+  and `GRANT SELECT, INSERT, DELETE` — **no `UPDATE`** — to `service_role`.
+
+It is purely additive: it alters no existing table, creates no function,
+trigger or view, writes no row, and creates no Phase 4 table.
+
+**Status: NOT YET APPLIED.**
+
+```text
+Migration            20260902000000_phase3f_invariant_results.sql
+Manual application   NO — pending architect review
+Real Supabase        NOT VERIFIED
+Verification test    tests/integration/supabase/063-phase3f-invariant-results.integration.test.ts
+063 result           not runnable until the migration is manually applied
+```
+
+`063` is committed in advance and must not be executed before the manual
+application. Until then it fails with a "table not found in schema cache"
+style error for every test — an expected pre-migration state, not a product
+regression, and never to be worked around.
 
 ---
 

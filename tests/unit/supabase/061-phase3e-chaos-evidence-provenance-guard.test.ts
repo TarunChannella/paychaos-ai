@@ -246,8 +246,13 @@ describe("061-phase3e-chaos-evidence-assembly.integration.test.ts — provenance
     expect(integrationFiles.filter((name) => name.startsWith("062-"))).toEqual([
       "062-phase3f-evidence-compatibility.integration.test.ts",
     ]);
+    // 063 is the Phase 3F-A invariant_results schema suite, added after this
+    // file, and is pinned by exact name for the same reason as 062.
+    expect(integrationFiles.filter((name) => name.startsWith("063-"))).toEqual([
+      "063-phase3f-invariant-results.integration.test.ts",
+    ]);
     expect(
-      integrationFiles.filter((name) => name.startsWith("063-")),
+      integrationFiles.filter((name) => name.startsWith("064-")),
     ).toHaveLength(0);
     expect(functionalSource).not.toMatch(/create\s+table/i);
     expect(functionalSource).not.toMatch(/alter\s+table/i);

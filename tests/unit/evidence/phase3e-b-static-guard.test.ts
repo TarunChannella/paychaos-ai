@@ -642,7 +642,16 @@ describe("Phase 3E-B does not modify frozen Phase 3A-3E-A mechanics", () => {
     }
   });
 
-  it("29: no new migration was introduced and no evidence table exists anywhere", () => {
+  // Phase 3F-A added exactly one approved migration
+  // (20260902000000_phase3f_invariant_results.sql, docs/DATABASE.md Section
+  // 16). This guard advances to pin that exact filename rather than being
+  // relaxed: the rule it enforces is that the Phase 3E-B evidence surface
+  // itself introduced no migration and that no GENERIC evidence table exists,
+  // not that the migration set is permanently frozen at ten files.
+  // `invariant_results` therefore leaves the forbidden CREATE TABLE list, but
+  // stays forbidden in the Phase 3E-B evidence sources below — those modules
+  // must still never name the invariant table.
+  it("29: the migration set is exactly the approved files, no evidence table exists anywhere, and the Phase 3E-B surface names no invariant table", () => {
     const migrations = fs
       .readdirSync(path.join(repoRoot, "supabase", "migrations"))
       .sort();
@@ -657,8 +666,18 @@ describe("Phase 3E-B does not modify frozen Phase 3A-3E-A mechanics", () => {
       "20260830000000_phase3c_controlled_replay.sql",
       "20260831000000_phase3d_execution_safety.sql",
       "20260901000000_phase3e_evidence_snapshots.sql",
+      "20260902000000_phase3f_invariant_results.sql",
     ]);
 
+    const migrationSql = migrations.map((migration) =>
+      fs.readFileSync(
+        path.join(repoRoot, "supabase", "migrations", migration),
+        "utf-8",
+      ),
+    );
+
+    // No GENERIC evidence table may be created by any migration, and the
+    // Phase 3E-B evidence surface may name none of these.
     for (const forbidden of [
       "evidence_snapshots",
       "chaos_evidence",
@@ -666,21 +685,28 @@ describe("Phase 3E-B does not modify frozen Phase 3A-3E-A mechanics", () => {
       "evidence_packs",
       "scenario_evidence",
       "generic_evidence",
-      "invariant_results",
     ]) {
       for (const source of allFunctionalSources) {
         expect(source).not.toContain(forbidden);
       }
-      for (const migration of migrations) {
-        const sql = fs.readFileSync(
-          path.join(repoRoot, "supabase", "migrations", migration),
-          "utf-8",
-        );
+      for (const sql of migrationSql) {
         expect(sql).not.toMatch(
           new RegExp(`create\\s+table[^;]*${forbidden}`, "i"),
         );
       }
     }
+
+    // `invariant_results` is now an approved table, so it is no longer
+    // forbidden in the migration set — but the frozen Phase 3E-B evidence
+    // modules must still never reference it. The evidence layer assigns and
+    // persists no verdict.
+    for (const source of allFunctionalSources) {
+      expect(source).not.toContain("invariant_results");
+    }
+    const invariantCreates = migrationSql.filter((sql) =>
+      /create\s+table\s+public\.invariant_results\b/i.test(sql),
+    );
+    expect(invariantCreates.length).toBe(1);
   });
 
   it("30: `fault_action` is still not part of the schema or of this surface", () => {

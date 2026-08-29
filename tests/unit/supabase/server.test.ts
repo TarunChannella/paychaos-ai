@@ -242,7 +242,7 @@ describe("Phase 1C-A/2C/2D/2E/2F/3B: Database type is scoped to exactly the 7 ap
     "utf-8",
   );
 
-  it("declares the 7 approved table keys (Phase 1: orders/payment_attempts/fulfilments; Phase 2C: payments; Phase 2D: webhook_events; Phase 2E: event_processing_attempts; Phase 3B: chaos_runs)", () => {
+  it("declares the 8 approved table keys (Phase 1: orders/payment_attempts/fulfilments; Phase 2C: payments; Phase 2D: webhook_events; Phase 2E: event_processing_attempts; Phase 3B: chaos_runs; Phase 3F-A: invariant_results)", () => {
     expect(typesSource).toMatch(/\borders:\s*{/);
     expect(typesSource).toMatch(/\bpayment_attempts:\s*{/);
     expect(typesSource).toMatch(/\bpayments:\s*{/);
@@ -250,10 +250,18 @@ describe("Phase 1C-A/2C/2D/2E/2F/3B: Database type is scoped to exactly the 7 ap
     expect(typesSource).toMatch(/\bwebhook_events:\s*{/);
     expect(typesSource).toMatch(/\bevent_processing_attempts:\s*{/);
     expect(typesSource).toMatch(/\bchaos_runs:\s*{/);
+    expect(typesSource).toMatch(/\binvariant_results:\s*{/);
   });
 
-  it("declares no Phase 3C+/4+ table", () => {
-    const forbidden = ["invariant_results", "findings", "regression_runs"];
+  // `invariant_results` left this list in Phase 3F-A: it is now the exact
+  // approved new table (docs/DATABASE.md Section 16) and is asserted
+  // positively above. Every Phase 4 table remains forbidden.
+  it("declares no Phase 4+ table", () => {
+    const forbidden = [
+      "findings",
+      "regression_runs",
+      "reliability_score_snapshots",
+    ];
     for (const name of forbidden) {
       expect(typesSource).not.toMatch(new RegExp(`\\b${name}:\\s*{`));
     }

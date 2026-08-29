@@ -28,9 +28,19 @@
  * unit-tested against a mocked client before the migration is manually
  * reviewed and applied).
  *
- * Do NOT add Phase 3C+ tables here (`invariant_results`, `findings`,
- * `regression_runs`) — those are created and typed by the phases that own
- * them. `event_processing_attempts.source_kind` here is deliberately
+ * Phase 3F-A adds the additive `invariant_results` table
+ * (supabase/migrations/20260902000000_phase3f_invariant_results.sql — NOT
+ * YET APPLIED to the remote project; this type describes it in advance so
+ * the Phase 3F-C repository can later be written and unit-tested against a
+ * mocked client before the migration is manually reviewed and applied,
+ * exactly as was done for the Phase 3B `chaos_runs` table and the Phase 3E-A
+ * snapshot columns). Its `Update` member is typed `never` on purpose — the
+ * migration grants no UPDATE privilege to any role, because a persisted
+ * invariant result is immutable append-only evidence.
+ *
+ * Do NOT add Phase 4 tables here (`findings`, `regression_runs`,
+ * `reliability_score_snapshots`) — those are created and typed by the phases
+ * that own them. `event_processing_attempts.source_kind` here is deliberately
  * scoped to exactly the two values the current CHECK constraint allows
  * (`REAL_RAZORPAY_WEBHOOK`, `PAYCHAOS_REPLAY`) — NOT the full four-value
  * approved-target vocabulary docs/DATABASE.md Section 14 documents.
@@ -131,6 +141,51 @@ export type ChaosRunDataClassification =
  * supabase/migrations/20260831000000_phase3d_execution_safety.sql.
  */
 export type ChaosRunExecutionBlockCode = "PRE-SEC-007";
+
+/**
+ * Phase 3F-A — `invariant_results` column vocabularies.
+ *
+ * These mirror the migration's CHECK constraints EXACTLY. They deliberately
+ * duplicate, rather than import, `lib/invariants/types.ts`: this file
+ * describes what the DATABASE will accept, and `lib/invariants/` describes
+ * the evaluation domain. Keeping them separate means a future domain-level
+ * widening cannot silently claim the database accepts a value its CHECK
+ * still rejects. `tests/unit/invariants/types.test.ts` asserts the two stay
+ * in agreement.
+ *
+ * `InvariantResultValue` is exactly PASS/FAIL/UNKNOWN. `NOT_APPLICABLE` and
+ * `ERROR` are in-memory evaluation dispositions only and are deliberately
+ * absent — there is no database representation for them.
+ */
+export type InvariantResultValue = "PASS" | "FAIL" | "UNKNOWN";
+
+export type InvariantResultSeverity = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+
+export type InvariantResultInvariantId =
+  | "INV-001"
+  | "INV-002"
+  | "INV-003"
+  | "INV-004"
+  | "INV-005"
+  | "INV-006"
+  | "INV-007"
+  | "INV-008"
+  | "INV-009"
+  | "INV-010"
+  | "INV-011"
+  | "INV-012";
+
+/**
+ * One `evidence_refs` array element: a REFERENCE to an existing record, never
+ * a copy of the evidence. The database CHECK only enforces that
+ * `evidence_refs` is a JSON array; this two-field shape is where the
+ * per-element contract lives, deliberately rather than in hand-written
+ * JSON-schema validation in SQL.
+ */
+export interface InvariantResultEvidenceRef {
+  kind: string;
+  id: string;
+}
 
 export interface Database {
   public: {
@@ -608,6 +663,78 @@ export interface Database {
             columns: ["source_webhook_event_id"];
             isOneToOne: false;
             referencedRelation: "webhook_events";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      invariant_results: {
+        Row: {
+          id: string;
+          invariant_id: InvariantResultInvariantId;
+          invariant_version: string;
+          order_id: string | null;
+          payment_attempt_id: string | null;
+          payment_id: string | null;
+          chaos_run_id: string | null;
+          result: InvariantResultValue;
+          severity: InvariantResultSeverity;
+          expected_summary: string;
+          observed_summary: string;
+          reason: string;
+          evidence_refs: InvariantResultEvidenceRef[];
+          evaluated_at: string;
+        };
+        Insert: {
+          id?: string;
+          invariant_id: InvariantResultInvariantId;
+          invariant_version?: string;
+          order_id?: string | null;
+          payment_attempt_id?: string | null;
+          payment_id?: string | null;
+          chaos_run_id?: string | null;
+          result: InvariantResultValue;
+          severity: InvariantResultSeverity;
+          expected_summary: string;
+          observed_summary: string;
+          reason: string;
+          evidence_refs?: InvariantResultEvidenceRef[];
+          evaluated_at?: string;
+        };
+        // Deliberately `never`: the Phase 3F-A migration grants NO UPDATE
+        // privilege on this table to ANY role, including service_role,
+        // because a persisted invariant result is immutable append-only
+        // evidence (docs/MONEY_INVARIANTS.md Section 49). A re-evaluation
+        // INSERTs a new row. Typing this as `never` makes an attempted
+        // `.update(...)` on `invariant_results` a compile-time error rather
+        // than a runtime privilege error.
+        Update: never;
+        Relationships: [
+          {
+            foreignKeyName: "invariant_results_order_id_fkey";
+            columns: ["order_id"];
+            isOneToOne: false;
+            referencedRelation: "orders";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "invariant_results_payment_attempt_id_fkey";
+            columns: ["payment_attempt_id"];
+            isOneToOne: false;
+            referencedRelation: "payment_attempts";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "invariant_results_payment_id_fkey";
+            columns: ["payment_id"];
+            isOneToOne: false;
+            referencedRelation: "payments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "invariant_results_chaos_run_id_fkey";
+            columns: ["chaos_run_id"];
+            isOneToOne: false;
+            referencedRelation: "chaos_runs";
             referencedColumns: ["id"];
           },
         ];

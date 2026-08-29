@@ -2637,6 +2637,32 @@ If actual testing proves this unsafe or unreliable, revisiting it requires an ar
 
 ---
 
+## ADR-A18 — Invariant Results Are Append-Only by Privilege, and Correlations May Be `NULL`
+
+**Context.** Phase 3F-A implements `public.invariant_results`, the first table that stores authoritative deterministic money verdicts. Two properties of the pre-implementation plan could not survive contact with the real system.
+
+First, the planning schema declared `order_id` and `payment_attempt_id` **NOT NULL**. C03 — the only executable invalid-signature scenario — has no merchant order, no payment attempt and no payment at all: its Mechanism C targets PayChaos's own fixed internal verification path. Every approved C03 chaos run already carries all four correlation FKs as `NULL`. A NOT NULL column would have forced an INV-005 result to fabricate a link to an order the evaluation never examined.
+
+Second, "immutable" was only a documented convention. Every other table in this project grants `service_role` full CRUD, so nothing at the database would have stopped a service-layer bug from rewriting a `FAIL` into a `PASS`.
+
+**Decision.**
+
+1. All four entity correlations on `invariant_results` are **individually nullable**, with `ON DELETE RESTRICT` foreign keys that still apply whenever a value is non-null. A `NULL` link is preferred over a false one. This is **not** permission for all four to be `NULL` at once: `invariant_results_subject_present` requires at least one anchor, so an orphan authoritative verdict about no subject is rejected. A C03 evaluation is anchored to `chaos_run_id` — which is therefore **required** for C03 — plus the factual mutation evidence on that run. `chaos_run_id` is nullable only because baseline evaluation is supported, and a baseline evaluation still carries a real order/payment-attempt/payment subject.
+2. `invariant_results` is **append-only by privilege**: the migration grants `SELECT`, `INSERT` and `DELETE` to `service_role` and **no `UPDATE` to any role**. A re-evaluation appends a new row. `DELETE` is retained solely because the documented administrative Demo Reset (`docs/DATABASE.md` §39) deletes from this table.
+3. `NOT_APPLICABLE` and `ERROR` get **no schema representation**. They are in-memory dispositions; the CHECK on `result` accepts only `PASS`/`FAIL`/`UNKNOWN`, and `lib/invariants/types.ts` makes a non-persistable evaluation a structurally different type so the compiler rejects it before the database has to.
+
+**Consequences.** Three independent layers now protect the same guarantee — TypeScript discriminated union, database CHECK, database privilege. `lib/supabase/types.ts` types the table's `Update` member as `never`. The frozen `lib/chaos/types.ts` `InvariantId` union stays byte-unchanged at its eight scenario-referenced IDs; the full twelve-invariant catalogue lives in `lib/invariants/`, which owns it.
+
+**Rejected alternative — fabricate an order link for C03 to satisfy NOT NULL.** This would invent a correlation the evaluation never examined, which `docs/MONEY_INVARIANTS.md` §12 and CLAUDE.md §12 both forbid.
+
+**Rejected alternative — leave every correlation freely nullable with no floor.** Dropping NOT NULL solves C03 but permits an all-`NULL` row: an authoritative money verdict traceable to no durable subject. The narrow `invariant_results_subject_present` CHECK keeps C03 legal while making the orphan case impossible, without turning any single column back into NOT NULL.
+
+**Rejected alternative — grant `UPDATE` for consistency with the other tables.** Consistency is not a reason to leave the one table holding money verdicts writable. The narrowing is the point.
+
+**Rejected alternative — add `NOT_APPLICABLE`/`ERROR` to the `result` CHECK.** Neither is payment truth. Storing "the evaluator crashed" beside a real verdict invites it being read as one, and would let an evaluation failure quietly count as evidence of correctness.
+
+---
+
 ## ADR-A16 — No Multi-Tenant Merchant Platform in P0
 
 **Decision:** P0 is a controlled single Demo Merchant / buildathon workspace.
