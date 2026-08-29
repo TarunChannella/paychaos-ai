@@ -256,8 +256,13 @@ describe("061-phase3e-chaos-evidence-assembly.integration.test.ts — provenance
     expect(integrationFiles.filter((name) => name.startsWith("064-"))).toEqual([
       "064-phase3f-invariant-evaluation.integration.test.ts",
     ]);
+    // 065 is the Phase 3G finding-generation suite, added after this file,
+    // and is pinned by exact name for the same reason as 062, 063 and 064.
+    expect(integrationFiles.filter((name) => name.startsWith("065-"))).toEqual([
+      "065-phase3g-findings.integration.test.ts",
+    ]);
     expect(
-      integrationFiles.filter((name) => name.startsWith("065-")),
+      integrationFiles.filter((name) => name.startsWith("066-")),
     ).toHaveLength(0);
     expect(functionalSource).not.toMatch(/create\s+table/i);
     expect(functionalSource).not.toMatch(/alter\s+table/i);

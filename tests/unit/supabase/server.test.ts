@@ -256,15 +256,17 @@ describe("Phase 1C-A/2C/2D/2E/2F/3B: Database type is scoped to exactly the 7 ap
   // `invariant_results` left this list in Phase 3F-A: it is now the exact
   // approved new table (docs/DATABASE.md Section 16) and is asserted
   // positively above. Every Phase 4 table remains forbidden.
-  it("declares no Phase 4+ table", () => {
-    const forbidden = [
-      "findings",
-      "regression_runs",
-      "reliability_score_snapshots",
-    ];
+  it("declares no Phase 4+ table, and DOES declare the Phase 3G findings table", () => {
+    // `findings` left this list in Phase 3G: docs/DATABASE.md Section 17
+    // "Phase Ownership" and docs/PHASE_PLAN.md Section 3G both place its
+    // CREATE in Phase 3, so the type belongs here now. Advanced, not
+    // loosened — it is asserted positively below, and every genuine Phase 4
+    // table remains forbidden.
+    const forbidden = ["regression_runs", "reliability_score_snapshots"];
     for (const name of forbidden) {
       expect(typesSource).not.toMatch(new RegExp(`\\b${name}:\\s*{`));
     }
+    expect(typesSource).toMatch(/\bfindings:\s*\{/);
   });
 
   it("event_processing_attempts declares no still-deferred Phase 3 field — fault_action remains deferred; chaos_run_id (Phase 3C) and state_before/state_after (Phase 3E-A) are now implemented", () => {

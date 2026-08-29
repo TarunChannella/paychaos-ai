@@ -29,18 +29,32 @@
  * reviewed and applied).
  *
  * Phase 3F-A adds the additive `invariant_results` table
- * (supabase/migrations/20260902000000_phase3f_invariant_results.sql — NOT
- * YET APPLIED to the remote project; this type describes it in advance so
- * the Phase 3F-C repository can later be written and unit-tested against a
- * mocked client before the migration is manually reviewed and applied,
- * exactly as was done for the Phase 3B `chaos_runs` table and the Phase 3E-A
- * snapshot columns). Its `Update` member is typed `never` on purpose — the
- * migration grants no UPDATE privilege to any role, because a persisted
- * invariant result is immutable append-only evidence.
+ * (supabase/migrations/20260902000000_phase3f_invariant_results.sql — applied
+ * to the remote project during the Phase 3F-A real-verification round). Its
+ * `Update` member is typed `never` on purpose — the migration grants no
+ * UPDATE privilege to any role, because a persisted invariant result is
+ * immutable append-only evidence.
  *
- * Do NOT add Phase 4 tables here (`findings`, `regression_runs`,
+ * Phase 3G adds the additive `findings` table
+ * (supabase/migrations/20260903000000_phase3g_findings.sql — NOT YET APPLIED
+ * to the remote project; this type describes it in advance so the Phase 3G
+ * repository can be written and unit-tested against a mocked client before
+ * the migration is manually reviewed and applied, exactly as was done for the
+ * Phase 3B `chaos_runs` table, the Phase 3E-A snapshot columns and the Phase
+ * 3F-A `invariant_results` table). Unlike `invariant_results`, its `Update`
+ * member is a real type: the migration DOES grant `service_role` UPDATE,
+ * because a finding is a mutable lifecycle object by documented design
+ * (docs/DATABASE.md Section 17). That is a DATABASE capability for Phase 4 —
+ * Phase 3G production code performs no UPDATE on `findings` at all, which
+ * `tests/unit/findings/phase3g-static-guard.test.ts` enforces at the source
+ * level.
+ *
+ * Do NOT add Phase 4 tables here (`regression_runs`,
  * `reliability_score_snapshots`) — those are created and typed by the phases
- * that own them. `event_processing_attempts.source_kind` here is deliberately
+ * that own them. `findings` is NOT one of them: docs/DATABASE.md Section 17
+ * "Phase Ownership" and docs/PHASE_PLAN.md Section 3G both place its CREATE
+ * in Phase 3, with Phase 4 only populating its diagnosis/recommendation
+ * columns. `event_processing_attempts.source_kind` here is deliberately
  * scoped to exactly the two values the current CHECK constraint allows
  * (`REAL_RAZORPAY_WEBHOOK`, `PAYCHAOS_REPLAY`) — NOT the full four-value
  * approved-target vocabulary docs/DATABASE.md Section 14 documents.
@@ -50,11 +64,11 @@
  *
  * Phase 3E-A adds the additive `event_processing_attempts.state_before` /
  * `state_after` evidence-snapshot columns
- * (supabase/migrations/20260901000000_phase3e_evidence_snapshots.sql — NOT
- * YET APPLIED to the remote project; this type describes them in advance so
- * `lib/evidence/evidence-repository.ts` can be written and unit-tested
- * against a mocked client before the migration is manually reviewed and
- * applied, exactly as was done for the Phase 3C `chaos_run_id` column).
+ * (supabase/migrations/20260901000000_phase3e_evidence_snapshots.sql —
+ * applied to the remote project during the Phase 3E-A real-verification
+ * round; this type was written in advance of that so
+ * `lib/evidence/evidence-repository.ts` could be unit-tested against a mocked
+ * client first, exactly as was done for the Phase 3C `chaos_run_id` column).
  * `event_processing_attempts` still excludes `fault_action` — that remains a
  * later, separate additive column (docs/DATABASE.md Section 14 "Phase
  * Ownership"); Phase 3E-A deliberately does not introduce unused schema
@@ -174,6 +188,24 @@ export type InvariantResultInvariantId =
   | "INV-010"
   | "INV-011"
   | "INV-012";
+
+/**
+ * Phase 3G — `findings` column vocabularies.
+ *
+ * These mirror the migration's CHECK constraints EXACTLY, and deliberately
+ * live here rather than being imported from `lib/findings/types.ts`, for the
+ * same reason the invariant vocabularies above do: this file describes what
+ * the DATABASE will accept.
+ *
+ * `FindingDiagnosisStrength` is an evidence-STRENGTH label, never a
+ * probabilistic confidence percentage (docs/DATABASE.md Section 17). Both
+ * vocabularies are Phase 4 surface at the value level — Phase 3G writes only
+ * `status: "OPEN"` and leaves `diagnosis_strength` NULL.
+ */
+export type FindingStatus = "OPEN" | "STILL_FAILING" | "RESOLVED";
+
+export type FindingDiagnosisStrength =
+  "STRONG_EVIDENCE" | "PARTIAL_EVIDENCE" | "INSUFFICIENT_EVIDENCE";
 
 /**
  * One `evidence_refs` array element: a REFERENCE to an existing record, never
@@ -735,6 +767,69 @@ export interface Database {
             columns: ["chaos_run_id"];
             isOneToOne: false;
             referencedRelation: "chaos_runs";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      findings: {
+        Row: {
+          id: string;
+          invariant_result_id: string;
+          status: FindingStatus;
+          title: string;
+          diagnosis_code: string | null;
+          diagnosis_strength: FindingDiagnosisStrength | null;
+          diagnosis_summary: string | null;
+          recommendation_code: string | null;
+          recommendation_text: string | null;
+          diagnosed_at: string | null;
+          resolved_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        // Phase 3G supplies ONLY `invariant_result_id` and `title`; `status`
+        // defaults to 'OPEN' and both timestamps default to now(). Every
+        // diagnosis/recommendation/resolution field is optional here because
+        // the DATABASE allows Phase 4 to set it — not because Phase 3G may.
+        Insert: {
+          id?: string;
+          invariant_result_id: string;
+          status?: FindingStatus;
+          title: string;
+          diagnosis_code?: string | null;
+          diagnosis_strength?: FindingDiagnosisStrength | null;
+          diagnosis_summary?: string | null;
+          recommendation_code?: string | null;
+          recommendation_text?: string | null;
+          diagnosed_at?: string | null;
+          resolved_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        // A real type, unlike `invariant_results["Update"]` which is `never`.
+        // The Phase 3G migration grants `service_role` UPDATE because a
+        // finding is a mutable lifecycle object (OPEN -> STILL_FAILING ->
+        // RESOLVED, plus Phase 4 diagnosis/recommendation). `id` and
+        // `invariant_result_id` are omitted deliberately: the identity of a
+        // finding and the failed evaluation it reports are never re-pointed.
+        Update: {
+          status?: FindingStatus;
+          title?: string;
+          diagnosis_code?: string | null;
+          diagnosis_strength?: FindingDiagnosisStrength | null;
+          diagnosis_summary?: string | null;
+          recommendation_code?: string | null;
+          recommendation_text?: string | null;
+          diagnosed_at?: string | null;
+          resolved_at?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "findings_invariant_result_id_fkey";
+            columns: ["invariant_result_id"];
+            isOneToOne: true;
+            referencedRelation: "invariant_results";
             referencedColumns: ["id"];
           },
         ];

@@ -283,9 +283,20 @@ describe("Phase 3F-C surface — static safety guard", () => {
     const migrations = fs
       .readdirSync(path.join(repoRoot, "supabase", "migrations"))
       .sort();
-    expect(migrations[migrations.length - 1]).toBe(
+
+    // ADVANCED, NOT LOOSENED. Phase 3G legitimately added the twelfth
+    // migration, so "the 3F-A migration sorts last" is now historically
+    // stale. The property this guard actually protects is narrower and is
+    // asserted by exact name: the whole of Phase 3F introduced EXACTLY ONE
+    // migration — `invariant_results` — and Phase 3F-C introduced none of
+    // its own. A generic count would prove neither.
+    expect(migrations.filter((m) => m.includes("phase3f"))).toEqual([
       "20260902000000_phase3f_invariant_results.sql",
+    ]);
+    expect(migrations.filter((m) => m.includes("phase3f-c"))).toEqual([]);
+    expect(migrations[migrations.length - 1]).toBe(
+      "20260903000000_phase3g_findings.sql",
     );
-    expect(migrations).toHaveLength(11);
+    expect(migrations).toHaveLength(12);
   });
 });

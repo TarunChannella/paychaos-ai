@@ -667,6 +667,7 @@ describe("Phase 3E-B does not modify frozen Phase 3A-3E-A mechanics", () => {
       "20260831000000_phase3d_execution_safety.sql",
       "20260901000000_phase3e_evidence_snapshots.sql",
       "20260902000000_phase3f_invariant_results.sql",
+      "20260903000000_phase3g_findings.sql",
     ]);
 
     const migrationSql = migrations.map((migration) =>
@@ -707,6 +708,18 @@ describe("Phase 3E-B does not modify frozen Phase 3A-3E-A mechanics", () => {
       /create\s+table\s+public\.invariant_results\b/i.test(sql),
     );
     expect(invariantCreates.length).toBe(1);
+
+    // `findings` is likewise an approved table as of Phase 3G — created
+    // exactly once — but the frozen Phase 3E-B evidence modules must never
+    // reference it either. The evidence layer reports no issue and creates
+    // no finding.
+    for (const source of allFunctionalSources) {
+      expect(source).not.toContain("findings");
+    }
+    const findingCreates = migrationSql.filter((sql) =>
+      /create\s+table\s+public\.findings\b/i.test(sql),
+    );
+    expect(findingCreates.length).toBe(1);
   });
 
   it("30: `fault_action` is still not part of the schema or of this surface", () => {
