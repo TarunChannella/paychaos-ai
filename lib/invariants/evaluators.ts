@@ -416,6 +416,36 @@ function openToFulfilledAuthority(
 }
 
 /**
+ * Does this run have a merchant/fulfilment SUBJECT at all?
+ *
+ * Structural, never a scenario-name check. A subject exists when the run
+ * truthfully correlates to an order, a payment attempt or a payment, or when
+ * any captured snapshot resolved one of those entities.
+ *
+ * This is the distinction blocker 3F-C-01 exposed. "No subject exists" and
+ * "a subject exists but its evidence was not captured" are different facts:
+ * the first makes a subject-scoped invariant INAPPLICABLE, the second makes it
+ * UNPROVEN. Collapsing them turns C03 — which by construction has no order,
+ * no payment attempt, no payment and no processing attempt — into a
+ * permanently `UNKNOWN` fulfilment rule instead of an inapplicable one.
+ */
+function hasMerchantSubject(bundle: ChaosRunEvidenceBundleV1): boolean {
+  if (
+    bundle.run.orderId !== null ||
+    bundle.run.paymentAttemptId !== null ||
+    bundle.run.paymentId !== null
+  ) {
+    return true;
+  }
+  return collectCapturedSnapshots(bundle).some(
+    (snapshot) =>
+      snapshot.order !== null ||
+      snapshot.paymentAttempt !== null ||
+      snapshot.payment !== null,
+  );
+}
+
+/**
  * The run's canonical source webhook when it is verified provider evidence.
  *
  * INV-001 §7 and INV-006 §7 both require it, and INV-012 needs it before an
@@ -840,26 +870,49 @@ export function evaluateInv004(
   const expected =
     "every FULFIL_ORDER fulfilment satisfies all five conditions: linked payment exists, belongs to the order via its attempt, authoritative capture evidence exists, is verified server-side, and amounts/currency match";
 
-  if (snapshotsWithFulfilments(bundle).length === 0) {
-    return unknown(
+  // --- APPLICABILITY FIRST (blocker 3F-C-01). ---
+  //
+  // §19 §7's precondition is "one or more fulfilment records exist for the
+  // order". Establishing whether that CAN be true is a question about the
+  // subject, and it must be answered before asking whether the evidence was
+  // captured. The original ordering asked about snapshots first, so a run with
+  // no merchant subject at all reported UNKNOWN — missing evidence — when the
+  // precondition was in fact provably false.
+  const fulfilments = observedFulfilments(bundle);
+  if (fulfilments.length === 0) {
+    // CASE A — no merchant/fulfilment subject exists. The rule cannot apply,
+    // and no amount of snapshot evidence would change that.
+    if (!hasMerchantSubject(bundle)) {
+      return notApplicable(
+        bundle,
+        id,
+        "This run has no correlated order, payment attempt or payment, so there is no merchant subject from which a fulfilment could exist and this invariant's precondition cannot hold.",
+        attemptRefs(bundle),
+      );
+    }
+    // CASE B — a merchant subject DOES exist, but its fulfilment evidence was
+    // never captured. The precondition is unproven, not false.
+    if (snapshotsWithFulfilments(bundle).length === 0) {
+      return unknown(
+        bundle,
+        id,
+        expected,
+        "merchant subject present; fulfilment evidence = not captured",
+        "A merchant subject exists for this run, but no captured snapshot carries the fulfilment collection, so it cannot be established whether any fulfilment requires a capture basis.",
+        attemptRefs(bundle),
+      );
+    }
+    // CASE C — the collection WAS captured and is empty, so the precondition
+    // is proven false.
+    return notApplicable(
       bundle,
       id,
-      expected,
-      "fulfilment evidence = not captured",
-      "No captured snapshot carries the fulfilment collection, so it cannot be established whether any fulfilment requires a capture basis.",
+      "The captured fulfilment collection is empty, so no FULFIL_ORDER fulfilment exists whose payment basis could be required.",
       attemptRefs(bundle),
     );
   }
 
-  const fulfilments = observedFulfilments(bundle);
-  if (fulfilments.length === 0) {
-    return notApplicable(
-      bundle,
-      id,
-      "No FULFIL_ORDER fulfilment exists for this run, so there is nothing whose payment basis could be required.",
-      attemptRefs(bundle),
-    );
-  }
+  // CASE D — one or more fulfilments exist: the five-condition rule applies.
 
   const captureWebhook = bundle.authoritativeCaptureWebhook;
   const baseRefs = [

@@ -6,10 +6,15 @@ OFFLINE TESTED          = YES
 REAL SUPABASE VERIFIED  = NO
 MANUALLY VERIFIED       = NO
 DOCUMENTED              = YES
-ARCHITECT APPROVED      = YES
+ARCHITECT APPROVED      = NO   (post-freeze correction pending review)
+FROZEN                  = NO
 ```
 
-**ARCHITECT FINAL REVIEW: APPROVED.** The pure deterministic evaluator boundary is frozen. This is **not** the completion of Phase 3F — 3F-C (orchestration + append-only persistence + real verification) has not started, and official Phase 3F remains INCOMPLETE.
+> **SUPERSEDED FREEZE.** Commit `e4e4b56943dbc922d1341db55d6b71d4a0a3d315` was approved and frozen, then Phase 3F-C integration discovered a confirmed correctness bug in `evaluateInv004` (see **§0 POST-FREEZE CORRECTION** below). **That commit contains the bug and is no longer the final Phase 3F-B freeze candidate.** The corrected revision in this working tree awaits architect review and a replacement freeze commit. Official Phase 3F remains INCOMPLETE.
+
+The paragraph below records the review that approved the now-superseded commit and is retained as history.
+
+**ARCHITECT REVIEW OF `e4e4b56` (superseded): APPROVED.** The pure deterministic evaluator boundary was frozen at that commit. This is **not** the completion of Phase 3F — 3F-C (orchestration + append-only persistence + real verification) has not started, and official Phase 3F remains INCOMPLETE.
 
 Two lifecycle states are deliberately `NO` and do **not** block freezing this boundary:
 
@@ -31,6 +36,59 @@ git diff --check                                 PASS
 ```
 
 Parent commit: `91feb29669ef8d5d3769dec63b94feaba5e01bea` (the frozen Phase 3F-A invariant foundation).
+
+---
+
+## 0. POST-FREEZE CORRECTION — BLOCKER 3F-C-01
+
+**Confirmed correctness bug in a frozen phase, found by Phase 3F-C integration.** The frozen boundary was reopened narrowly on architect ruling to fix it; the documented C03 expectations were NOT amended.
+
+### Original bug
+
+`evaluateInv004` tested **snapshot availability before structural applicability**:
+
+```ts
+if (snapshotsWithFulfilments(bundle).length === 0) return unknown(...);   // ran first
+const fulfilments = observedFulfilments(bundle);
+if (fulfilments.length === 0) return notApplicable(...);                  // unreachable for C03
+```
+
+### Consequence
+
+A C03 run has no order, no payment attempt, no payment and **zero processing attempts by construction**, so it has zero captured snapshots. The first branch always fired and C03's INV-004 returned **`UNKNOWN`** instead of `NOT_APPLICABLE`. The `NOT_APPLICABLE` branch was reachable only once a fulfilment collection _had_ been captured — which C03 can never do.
+
+Downstream this would have persisted an extra authoritative `UNKNOWN` row per C03 run and driven the fresh C03 aggregate to `UNKNOWN` instead of `PASS`, contradicting `docs/CHAOS_SCENARIOS.md`, the evidence-compatibility handoff, and this handoff's own applicability table.
+
+### Correct rule (now implemented)
+
+```text
+no merchant/fulfilment subject                      -> NOT_APPLICABLE
+merchant subject exists, fulfilment evidence absent -> UNKNOWN
+captured fulfilment collection is empty             -> NOT_APPLICABLE
+one or more fulfilments exist                       -> evaluate the five conditions
+```
+
+The crucial distinction is **NO SUBJECT** versus **SUBJECT EXISTS BUT EVIDENCE NOT CAPTURED**. Applicability is now decided first, from a structural `hasMerchantSubject(bundle)` check over the run's truthful correlations plus any merchant entity a captured snapshot resolved. It is **not** a scenario-name check — a test asserts an identically-structured bundle labelled `C11` reaches the same disposition as one labelled `C03`.
+
+### What did NOT change
+
+INV-004's five conditions, its relational validation, its authoritative-capture rule (internal AND provider identity), its trusted-webhook money clause and its every-fulfilment rule are all untouched. No other invariant, no shared helper, no evidence or chaos contract, and no migration were modified.
+
+### Historical behaviour preserved
+
+C07, C11-B and C11-A have real correlated merchant subjects and merely lack pre-Phase-3E snapshots, so they take the **UNKNOWN** branch exactly as before. Only the no-subject case moved.
+
+### Why the correction was allowed
+
+A confirmed correctness bug discovered in a frozen phase, per the project rule permitting a minimal change to a completed phase when a genuine bug exists. The alternative — having the Phase 3F-C service convert `UNKNOWN` into `NOT_APPLICABLE` — was rejected: orchestration must never override a payment verdict.
+
+### Corrected-revision gates
+
+```text
+Focused (tests/unit/invariants)                  5 files /  304 tests /  304 passed / 0 failed
+Frozen regressions (evidence + chaos + supabase) 34 files / 1179 tests / 1179 passed / 0 failed
+Full offline (npx vitest run)                   82 files / 2243 tests / 2243 passed / 0 failed
+```
 
 **This is evaluator logic only.** Phase 3F-B persists nothing. There is no `invariant_results` repository, no INSERT/UPDATE/UPSERT, no `evaluateChaosRun` orchestration, no evidence loading from Supabase, no chaos-run outcome derivation, no findings, no diagnosis, no recommendations, no reliability score, no UI, and no Phase 3G/3H work. No new migration was created.
 

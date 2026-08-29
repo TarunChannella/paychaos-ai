@@ -806,6 +806,175 @@ describe("INV-004 — fulfilment requires verified successful payment", () => {
   it("NARROW-03 E — an exact verified payment.captured for the resolved payment is valid authority", () => {
     expect(evaluateInv004(bundle()).disposition).toBe("PASS");
   });
+
+  // ==========================================================================
+  // BLOCKER 3F-C-01 — applicability is decided BEFORE evidence availability
+  // ==========================================================================
+  //
+  // The original ordering asked "was a fulfilment collection captured?" before
+  // asking "can a fulfilment exist for this run at all?". A C03 run has no
+  // order, no payment attempt, no payment and no processing attempt by
+  // construction, so it has zero captured snapshots and was reported UNKNOWN —
+  // missing evidence — when its precondition was in fact provably false.
+  //
+  // The crucial distinction these tests lock in:
+  //     NO SUBJECT                       -> NOT_APPLICABLE
+  //     SUBJECT EXISTS, EVIDENCE ABSENT  -> UNKNOWN
+
+  /** The approved C03 shape: no merchant correlation and no processing attempt. */
+  const c03NoSubjectBundle = (
+    scenarioOverrides: Parameters<typeof c03Scenario>[0] = {},
+  ) =>
+    bundle({
+      scenarioId: "C03",
+      orderId: null,
+      paymentAttemptId: null,
+      paymentId: null,
+      sourceWebhook: null,
+      originalProcessingAttempts: [],
+      canonicalSourceEventCount: null,
+      authoritativeCapture: { kind: "NO_SUBJECT" },
+      authoritativeCaptureWebhook: null,
+      scenarioEvidence: c03Scenario(scenarioOverrides),
+    });
+
+  it("3F-C-01 A — a C03 structural no-subject run is NOT_APPLICABLE, never UNKNOWN", () => {
+    const result = evaluateInv004(
+      c03NoSubjectBundle({
+        mutationEvidence: { before: c03Side(), after: c03Side() },
+      }),
+    );
+    expect(result.disposition).toBe("NOT_APPLICABLE");
+    expect(result.reason).toContain("no merchant subject");
+  });
+
+  it("3F-C-01 B — the historical C03 shape (no subject, no snapshots) is also NOT_APPLICABLE", () => {
+    // Historical snapshot absence must not turn a structurally inapplicable
+    // rule into UNKNOWN.
+    const result = evaluateInv004(c03NoSubjectBundle());
+    expect(result.disposition).toBe("NOT_APPLICABLE");
+    expect(result.disposition).not.toBe("UNKNOWN");
+  });
+
+  it("3F-C-01 C — a merchant subject WITH no captured fulfilment evidence stays UNKNOWN", () => {
+    // This is the C07 / C11-B / C11-A historical shape: a real correlated
+    // order exists, but Phase 3E snapshots predate the run.
+    const result = evaluateInv004(
+      bundle({
+        originalProcessingAttempts: [
+          attempt({ stateBefore: notCaptured, stateAfter: notCaptured }),
+        ],
+      }),
+    );
+    expect(result.disposition).toBe("UNKNOWN");
+    expect(persistableOf(result).observedSummary).toContain(
+      "merchant subject present",
+    );
+  });
+
+  it("3F-C-01 C2 — a subject established only by a captured snapshot also stays UNKNOWN", () => {
+    // No run-level correlation, but a captured snapshot resolved an order, so
+    // a subject genuinely exists and its uncaptured fulfilment set is UNKNOWN.
+    const orderOnly = snapshot({
+      withPaymentAttempt: false,
+      withPayment: false,
+      fulfilments: null,
+    });
+    const result = evaluateInv004(
+      bundle({
+        orderId: null,
+        paymentAttemptId: null,
+        paymentId: null,
+        originalProcessingAttempts: [
+          attempt({
+            stateBefore: captured(orderOnly),
+            stateAfter: captured(orderOnly),
+          }),
+        ],
+      }),
+    );
+    expect(result.disposition).toBe("UNKNOWN");
+  });
+
+  it("3F-C-01 D — a CAPTURED but empty fulfilment collection is NOT_APPLICABLE", () => {
+    const none = snapshot({ fulfilments: [] });
+    const result = evaluateInv004(
+      bundle({
+        originalProcessingAttempts: [
+          attempt({ stateBefore: captured(none), stateAfter: captured(none) }),
+        ],
+      }),
+    );
+    expect(result.disposition).toBe("NOT_APPLICABLE");
+    expect(result.reason).toContain("captured fulfilment collection is empty");
+  });
+
+  it("3F-C-01 E — a healthy fulfilment still runs the full five-condition path", () => {
+    expect(evaluateInv004(bundle()).disposition).toBe("PASS");
+  });
+
+  it("3F-C-01 F — an invalid fulfilment path still FAILs; missing capture is still UNKNOWN", () => {
+    const wrongPayment = snapshot({
+      fulfilments: [
+        fulfilment({ paymentId: "99999999-9999-4999-8999-999999999999" }),
+      ],
+    });
+    expect(
+      evaluateInv004(
+        bundle({
+          originalProcessingAttempts: [
+            attempt({
+              stateBefore: captured(wrongPayment),
+              stateAfter: captured(wrongPayment),
+            }),
+          ],
+        }),
+      ).disposition,
+    ).toBe("FAIL");
+    expect(
+      evaluateInv004(
+        bundle({
+          authoritativeCapture: { kind: "SEARCH_INCOMPLETE" },
+          authoritativeCaptureWebhook: null,
+        }),
+      ).disposition,
+    ).toBe("UNKNOWN");
+  });
+
+  it("3F-C-01 G — applicability is STRUCTURAL, not a scenario-name check", () => {
+    // Same no-subject structure, labelled C11 rather than C03. The evaluator
+    // must reach the identical disposition: it reads correlations and captured
+    // entities, never the scenario id.
+    const noSubjectC11 = bundle({
+      scenarioId: "C11",
+      orderId: null,
+      paymentAttemptId: null,
+      paymentId: null,
+      sourceWebhook: null,
+      originalProcessingAttempts: [],
+      canonicalSourceEventCount: null,
+      authoritativeCapture: { kind: "NO_SUBJECT" },
+      authoritativeCaptureWebhook: null,
+    });
+    expect(evaluateInv004(noSubjectC11).disposition).toBe("NOT_APPLICABLE");
+    expect(evaluateInv004(c03NoSubjectBundle()).disposition).toBe(
+      "NOT_APPLICABLE",
+    );
+  });
+
+  it("3F-C-01 — the C03 aggregate inputs are now the documented pair", () => {
+    // Fresh C03: INV-004 NOT_APPLICABLE + INV-005 PASS.
+    const fresh = c03NoSubjectBundle({
+      mutationEvidence: { before: c03Side(), after: c03Side() },
+    });
+    expect(evaluateInv004(fresh).disposition).toBe("NOT_APPLICABLE");
+    expect(evaluateInv005(fresh).disposition).toBe("PASS");
+
+    // Historical C03: INV-004 NOT_APPLICABLE + INV-005 UNKNOWN.
+    const historical = c03NoSubjectBundle();
+    expect(evaluateInv004(historical).disposition).toBe("NOT_APPLICABLE");
+    expect(evaluateInv005(historical).disposition).toBe("UNKNOWN");
+  });
 });
 
 // ============================================================================
