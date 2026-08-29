@@ -145,3 +145,51 @@ describe("app/api/webhooks/razorpay/route.ts remains byte-for-byte unmodified by
     expect(source).not.toMatch(/chaos/i);
   });
 });
+
+describe("Phase 3F evidence-compatibility correction — C03 stays verification-only", () => {
+  const serviceFunctional = readFunctionalSource(
+    "lib/chaos/c03-execution-service.ts",
+  );
+
+  it("still imports NO evidence-surface module (phase3e-a guards 24/25b intent preserved)", () => {
+    expect(serviceFunctional).not.toMatch(/from\s*["']@\/lib\/evidence\//);
+    expect(serviceFunctional).not.toMatch(/state_before/);
+    expect(serviceFunctional).not.toMatch(/state_after/);
+  });
+
+  it("captures mutation evidence through the read-only chaos snapshot repository only", () => {
+    expect(serviceFunctional).toMatch(
+      /import \{ captureC03MutationSnapshot \} from\s*["']@\/lib\/chaos\/c03-mutation-snapshot-repository["']/,
+    );
+  });
+
+  it("still creates no canonical webhook row, no processing attempt, and no merchant mutation", () => {
+    for (const forbidden of [
+      "insertWebhookEvent",
+      "insertReplayProcessingAttempt",
+      "processMerchantWebhookEvent",
+      "processWebhookPaymentEvent",
+      "record_webhook_duplicate_delivery",
+      ".insert(",
+      ".update(",
+      ".delete(",
+      ".upsert(",
+      ".rpc(",
+    ]) {
+      expect(serviceFunctional).not.toContain(forbidden);
+    }
+  });
+
+  it("persists exactly the two frozen fault_state keys and no verdict", () => {
+    expect(serviceFunctional).toMatch(/checks:/);
+    expect(serviceFunctional).toMatch(/mutationEvidence:/);
+    expect(serviceFunctional).not.toMatch(/["']PASS["']/);
+    expect(serviceFunctional).not.toMatch(/["']FAIL["']/);
+  });
+
+  it("keeps both frozen verification cases and the fixed internal verifier target", () => {
+    expect(serviceFunctional).toMatch(/WRONG_SIGNATURE/);
+    expect(serviceFunctional).toMatch(/MISSING_SIGNATURE/);
+    expect(serviceFunctional).toMatch(/verifyWebhookSignature\(/);
+  });
+});

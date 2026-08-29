@@ -2611,6 +2611,32 @@ If actual testing proves this unsafe or unreliable, revisiting it requires an ar
 
 ---
 
+## ADR-A17 — Later-Phase Evidence Compatibility Corrections Are Narrow and Additive
+
+**Context.** Phase 3F (Money Invariant Engine) discovered that the frozen Phase 3D/3E evidence surface could not supply three inputs the approved invariant contracts require:
+
+1. C03 produced no before/after merchant state, so INV-005 — the core safety invariant of the only executable invalid-signature scenario — could only ever evaluate `UNKNOWN`. C03 is verification-only by design and correctly creates no `event_processing_attempts` row, so it has no `state_before`/`state_after` pair.
+2. Chaos-run evidence did not project `webhook_events.amount_subunits`/`currency`, so INV-008 §8's trusted-webhook money clause was unevaluable.
+3. Evidence carried only the run's SOURCE webhook, so no authoritative captured-payment basis existed for INV-003, INV-004 or INV-010 — a C11 run is sourced from `payment.failed`, and C01/C07 may be sourced from `order.paid`.
+
+**Decision.** A narrow, additive compatibility correction to the frozen phases is permitted when a later phase genuinely requires evidence the frozen implementation does not provide. Such a correction must:
+
+- touch the minimum number of frozen production files;
+- add no database migration where the existing schema already suffices;
+- change no scenario mechanism, fault primitive, provenance model or lifecycle;
+- preserve every existing safety guarantee and static guard;
+- never backfill or rewrite historical evidence.
+
+**Consequences.** Three frozen production files were modified and two read-only modules added. No migration was required: `chaos_runs.fault_state` is already unconstrained `jsonb`, and `webhook_events.amount_subunits`/`currency` already existed. Historical runs keep their original dispositions permanently.
+
+**Rejected alternative — accept permanent `UNKNOWN`.** A P0 invariant whose core safety property can never be proven would materially weaken the product.
+
+**Rejected alternative — solve C03 with a fabricated processing attempt, a fabricated order, or later reconstruction from present-day state.** All three would invent evidence, and reconstruction would be a false claim about the past (`docs/MONEY_INVARIANTS.md` §43).
+
+**Rejected alternative — treat a false payment finding as a "safe" failure direction.** It is not. Concluding "no capture exists" from a search that could not have seen one produces false INV-003/INV-004/INV-010 findings. The capture search therefore refuses to report a negative result unless it was capable of finding a positive one (`SEARCH_INCOMPLETE`), and provider-authenticated capture evidence with incomplete internal correlation stays visible rather than being discarded.
+
+---
+
 ## ADR-A16 — No Multi-Tenant Merchant Platform in P0
 
 **Decision:** P0 is a controlled single Demo Merchant / buildathon workspace.

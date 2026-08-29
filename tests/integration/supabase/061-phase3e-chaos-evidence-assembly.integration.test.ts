@@ -601,6 +601,13 @@ describe("Phase 3E-B — C03 processor-independent synthetic evidence envelope (
     expect(bundle!.originalProcessingAttempts).toEqual([]);
     expect(bundle!.chaosProcessingAttempts).toEqual([]);
 
+    // This fixture deliberately carries the LEGACY `{checks}` fault_state —
+    // the exact shape the already-approved historical C03 run has. The Phase
+    // 3F evidence-compatibility correction must report that truthfully:
+    // `mutationEvidence: null` plus a MISSING_C03_MUTATION_EVIDENCE gap, and
+    // never a snapshot reconstructed from today's merchant state. The
+    // CORRECTED `{checks, mutationEvidence}` shape is covered by
+    // 062-phase3f-evidence-compatibility.integration.test.ts.
     expect(bundle!.scenarioEvidence).toEqual({
       scenarioId: "C03",
       verificationChecks: [
@@ -612,9 +619,12 @@ describe("Phase 3E-B — C03 processor-independent synthetic evidence envelope (
       paymentAttemptLinked: false,
       paymentLinked: false,
       chaosLinkedProcessingAttemptCount: 0,
+      mutationEvidence: null,
     });
 
-    expect(bundle!.gaps).toEqual([]);
+    expect(bundle!.gaps).toEqual([
+      { code: "MISSING_C03_MUTATION_EVIDENCE", subjectId: null },
+    ]);
     expect(bundle!.evidenceRefs).toEqual([
       { kind: "CHAOS_RUN", id: chaosRunId },
     ]);

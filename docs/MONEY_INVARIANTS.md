@@ -214,6 +214,49 @@ A verified Checkout success signature proves the Checkout response is authentic.
 
 It does **not by itself** authorize permanent fulfilment.
 
+## 5.1 `payments.captured_at` Is Supporting Evidence, Not Provider Authority
+
+`payments.captured_at` is a trusted, durable merchant fact and may be used as SUPPORTING evidence. It is **not** an authoritative captured-payment basis for INV-003, INV-004 or INV-010.
+
+The reason is circularity, not doubt about the column: `captured_at` is written by `process_webhook_payment_event`'s own `payment.captured` branch (`captured_at = coalesce(captured_at, v_now)`) — the merchant-processing transaction those invariants exist to audit. Accepting it as proof would let the code under test certify itself. Section 4's hierarchy also ranks verified provider evidence strictly above durable PayChaos state.
+
+## 5.2 The Authoritative Capture Search (Phase 3F evidence-compatibility correction)
+
+A chaos run's `sourceWebhook` is only that run's SOURCE event: a C11 run is sourced from `payment.failed` by definition, and C01/C07 may legitimately be sourced from `order.paid`. The captured-payment basis is therefore established by a separate, shared search over canonical `webhook_events`:
+
+```text
+event_type         = payment.captured
+source_kind        = REAL_RAZORPAY_WEBHOOK
+signature_verified = true
+correlated to the exact trusted payment identity
+```
+
+**Exact identity only.** The subject is derived solely from trusted persisted rows — never browser input and never a caller-supplied Razorpay id. Matching is exact equality on the trusted `razorpay_payment_id`, unioned with exact equality on the internal `payment_id`. Never a substring, prefix, `like`/`ilike`, fuzzy match, timestamp preference or "latest wins".
+
+**`processing_status` is deliberately not filtered.** A signature-verified provider capture delivery is authentic capture evidence whether or not PayChaos finished processing it. The actual status is reported truthfully for the evaluator to weigh.
+
+**One shared mechanism** serves INV-003 (the "capture-event search result"), INV-004 §8 condition 3, and INV-010's "authoritative successful payment evidence". There are deliberately not two overlapping mechanisms.
+
+### Outcomes, and the rule against a false negative
+
+```text
+NO_SUBJECT                        no trustworthy payment identity (normal for C03)
+AMBIGUOUS_SUBJECT                 trusted rows disagree about which payment
+SEARCH_INCOMPLETE                 subject exists, but no trusted provider identity was available to search by
+NONE_OBSERVED                     COMPLETE negative: exact provider identity established, query succeeded, zero rows
+EXACTLY_ONE                       one verified capture, internally correlated to the subject
+INCOMPLETE_INTERNAL_CORRELATION   one verified capture matched by provider identity, internal correlation absent/mismatched
+AMBIGUOUS                         more than one candidate, or a conflicting provider identity
+```
+
+Binding rules:
+
+- `NO_SUBJECT`, `AMBIGUOUS_SUBJECT` and `SEARCH_INCOMPLETE` are **never** interpreted as proof that no capture exists. They must produce `UNKNOWN`, never a `FAIL`.
+- `NONE_OBSERVED` is a valid, required factual result — it *is* INV-003 §12's "capture-event search result" — and is therefore **not** an evidence gap.
+- `INCOMPLETE_INTERNAL_CORRELATION` is real provider capture evidence and **must remain visible**. It is never collapsed into `NONE_OBSERVED`. It may be insufficient for a relational INV-004/INV-010 `PASS`, but it must prevent an evaluator from claiming "failure-only evidence" for a payment that demonstrably was captured (see INV-003 §16 "Failure followed later by capture").
+- A false payment finding is not a safe outcome. Concluding "no capture exists" from a search that could not have seen one is forbidden.
+- `PAYCHAOS_REPLAY` can never become provider capture evidence: `webhook_events.source_kind` is CHECK-constrained to `REAL_RAZORPAY_WEBHOOK`, and the search filters on it regardless.
+
 `order.paid` is useful corroborating provider evidence but P0 fulfilment authority should rely on verified payment-capture evidence.
 
 ---
@@ -930,7 +973,7 @@ orders.payment_status = PAID
 
 - verified failure webhook;
 - Razorpay payment ID;
-- capture-event search result;
+- capture-event search result (see §5.2 — a `payment.failed` source is never assumed to be permanent terminal truth, and a `NO_SUBJECT`/`SEARCH_INCOMPLETE`/`INCOMPLETE_INTERNAL_CORRELATION` result must never be read as "no capture exists");
 - order payment status;
 - payment-attempt status;
 - relevant timestamps.
@@ -1194,7 +1237,31 @@ Any invalid-signature request causes:
 - paid-state transition;
 - payment-state mutation;
 - fulfilment;
-- protected merchant-side effect.
+- protected merchant-side effect;
+- **or the intentionally invalid signature is ACCEPTED by the verification boundary** (`classification = UNEXPECTED_ACCEPTANCE`), regardless of whether any state actually changed.
+
+### UNEXPECTED_ACCEPTANCE is a FAIL (ARCH-3F-013)
+
+An intentionally invalid signature being accepted is itself a breach of the trusted authentication boundary this invariant protects. A zero merchant-state delta must **NOT** convert a fail-open verifier into `PASS`.
+
+This matters specifically because C03's mechanism is verification-only: it invokes nothing downstream, so an acceptance *cannot* produce a mutation. Reading the three deltas alone would therefore report "unchanged" for a merchant whose webhook authentication is broken.
+
+The chaos and evidence layers record `UNEXPECTED_ACCEPTANCE` as a **fact only** and assign no verdict. The Phase 3F Money Invariant Engine applies this rule.
+
+### Where INV-005's before/after evidence comes from
+
+C03 creates no `event_processing_attempts` row, so it has no `state_before`/`state_after` pair. Its before/after snapshots are captured at execution time and persisted on `chaos_runs.fault_state.mutationEvidence` — see `docs/DATABASE.md` → `chaos_runs` → "C03 `fault_state` shape".
+
+Evaluation semantics (Phase 3F):
+
+```text
+complete before + complete after + unchanged state + both cases REJECTED  -> eligible to PASS
+complete evidence + factual mutation                                       -> FAIL
+UNEXPECTED_ACCEPTANCE (either case)                                        -> FAIL, regardless of zero delta
+missing / invalid / truncated / incomplete required mutation evidence      -> UNKNOWN
+```
+
+`UNKNOWN` is never converted to `PASS`. The historical C03 run carries no mutation evidence and therefore stays `UNKNOWN` permanently; it is never backfilled.
 
 ## 11. Severity
 
@@ -1584,6 +1651,8 @@ payments.currency
 ```
 
 If trusted normalized webhook evidence contains amount/currency, it must match the canonical payment values as well.
+
+The trusted `webhook_events.amount_subunits` and `webhook_events.currency` columns are projected into chaos-run evidence for exactly this clause (Phase 3F evidence-compatibility correction). They are integer smallest-currency subunits and a currency code, copied verbatim from the persisted columns. `NULL` is preserved as `NULL` and is never defaulted to `0` or `"INR"` — per §16 "Missing amount evidence", an unestablished required value is `UNKNOWN`, not `PASS`. The raw payload and the `normalized_event` blob are never copied into evidence.
 
 ## 9. Pass Condition
 

@@ -239,8 +239,15 @@ describe("061-phase3e-chaos-evidence-assembly.integration.test.ts — provenance
     expect(
       integrationFiles.filter((name) => name.startsWith("061-")),
     ).toHaveLength(1);
+    // 062 is the Phase 3F evidence-compatibility correction, added after this
+    // file. It is pinned by exact name — the rule this guard enforces is that
+    // each integration number stays unique and that 061 itself introduces no
+    // migration, not that 061 is permanently the highest number.
+    expect(integrationFiles.filter((name) => name.startsWith("062-"))).toEqual([
+      "062-phase3f-evidence-compatibility.integration.test.ts",
+    ]);
     expect(
-      integrationFiles.filter((name) => name.startsWith("062-")),
+      integrationFiles.filter((name) => name.startsWith("063-")),
     ).toHaveLength(0);
     expect(functionalSource).not.toMatch(/create\s+table/i);
     expect(functionalSource).not.toMatch(/alter\s+table/i);

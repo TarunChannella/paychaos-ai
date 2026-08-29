@@ -694,3 +694,322 @@ describe("Phase 3E-B does not modify frozen Phase 3A-3E-A mechanics", () => {
     expect(types).not.toMatch(/^\s*fault_action[?]?:/m);
   });
 });
+
+/**
+ * ============================================================================
+ * Phase 3F evidence-compatibility correction — static guards over the two NEW
+ * C03 mutation-snapshot modules and the widened evidence projections.
+ *
+ * Same technique as every guard above: assertions run against COMMENT-STRIPPED
+ * functional source, so a reassuring comment alone can never satisfy them.
+ * ============================================================================
+ */
+describe("Phase 3F evidence compatibility — C03 mutation snapshot modules", () => {
+  const snapshotPath = path.join(
+    repoRoot,
+    "lib",
+    "chaos",
+    "c03-mutation-snapshot.ts",
+  );
+  const snapshotRepoPath = path.join(
+    repoRoot,
+    "lib",
+    "chaos",
+    "c03-mutation-snapshot-repository.ts",
+  );
+
+  const snapshotSource = fs.readFileSync(snapshotPath, "utf-8");
+  const snapshotRepoSource = fs.readFileSync(snapshotRepoPath, "utf-8");
+  const functionalSnapshot = stripComments(snapshotSource);
+  const functionalSnapshotRepo = stripComments(snapshotRepoSource);
+  const bothFunctional = [functionalSnapshot, functionalSnapshotRepo];
+
+  it("F1: both modules are server-only", () => {
+    for (const source of [snapshotSource, snapshotRepoSource]) {
+      expect(source).toMatch(/^import\s+["']server-only["'];/m);
+    }
+  });
+
+  it("F2: the pure module is genuinely pure — no Supabase client, no clock, no randomness, no network", () => {
+    expect(functionalSnapshot).not.toMatch(/getSupabaseServerClient/);
+    expect(functionalSnapshot).not.toMatch(/\.from\(/);
+    expect(functionalSnapshot).not.toMatch(/new Date\(/);
+    expect(functionalSnapshot).not.toMatch(/Date\.now\(/);
+    expect(functionalSnapshot).not.toMatch(/Math\.random/);
+    expect(functionalSnapshot).not.toMatch(/randomUUID/);
+    expect(functionalSnapshot).not.toMatch(/fetch\(/);
+  });
+
+  it("F3: the pure module imports the frozen merchant-state field vocabulary as TYPES ONLY, so it takes on no runtime dependency", () => {
+    expect(functionalSnapshot).toMatch(
+      /import type \{[\s\S]*?\} from "@\/lib\/evidence\/merchant-state-snapshot";/,
+    );
+    // No VALUE import from the evidence surface anywhere.
+    expect(functionalSnapshot).not.toMatch(
+      /^import \{[^}]*\} from "@\/lib\/evidence\//m,
+    );
+  });
+
+  it("F4: the repository contains NO mutating call and NO rpc — read-only is structural", () => {
+    expect(functionalSnapshotRepo).not.toMatch(/\.insert\(/);
+    expect(functionalSnapshotRepo).not.toMatch(/\.update\(/);
+    expect(functionalSnapshotRepo).not.toMatch(/\.delete\(/);
+    expect(functionalSnapshotRepo).not.toMatch(/\.upsert\(/);
+    expect(functionalSnapshotRepo).not.toMatch(/\.rpc\(/);
+  });
+
+  it("F5: the repository reads exactly the five INV-005 tables and never chaos_runs or event_processing_attempts", () => {
+    const fromTargets = [
+      ...functionalSnapshotRepo.matchAll(/\.from\(\s*([^)]+)\)/g),
+    ].map((m) => m[1]!.trim());
+    expect(fromTargets.length).toBeGreaterThan(0);
+    // Table names arrive either as literals or through the narrow union
+    // parameter of `readBoundedCollection`.
+    const literalTables = [
+      ...functionalSnapshotRepo.matchAll(/\.from\(\s*["']([^"']+)["']\s*\)/g),
+    ].map((m) => m[1]!);
+    expect(literalTables).toContain("webhook_events");
+    expect(functionalSnapshotRepo).not.toMatch(/["']chaos_runs["']/);
+    expect(functionalSnapshotRepo).not.toMatch(
+      /["']event_processing_attempts["']/,
+    );
+    for (const table of [
+      "orders",
+      "payment_attempts",
+      "payments",
+      "fulfilments",
+    ]) {
+      expect(functionalSnapshotRepo).toContain(`"${table}"`);
+    }
+  });
+
+  it("F6: the repository never issues a `select *`", () => {
+    const selectArgs = [
+      ...functionalSnapshotRepo.matchAll(/\.select\(([^)]*)\)/g),
+    ].map((m) => m[1]!);
+    expect(selectArgs.length).toBeGreaterThan(0);
+    for (const arg of selectArgs) {
+      expect(arg).not.toContain("*");
+    }
+  });
+
+  it("F7: the capture entry point takes NO parameters — no caller-controlled entity selector exists", () => {
+    const match = functionalSnapshotRepo.match(
+      /export async function captureC03MutationSnapshot\(([^)]*)\)/,
+    );
+    expect(match).not.toBeNull();
+    expect(match![1]!.trim()).toBe("");
+  });
+
+  it("F8: neither module performs network I/O, touches Razorpay, or reaches an LLM", () => {
+    for (const source of bothFunctional) {
+      expect(source).not.toMatch(/fetch\(/);
+      expect(source).not.toMatch(/axios/i);
+      expect(source).not.toMatch(/https?\.request\(/);
+      expect(source).not.toMatch(/new\s+Razorpay\s*\(/);
+      expect(source).not.toMatch(/from\s+["']@\/lib\/razorpay\//);
+      expect(source).not.toMatch(/openai|anthropic|ollama|langchain|gemini/i);
+    }
+  });
+
+  it("F9: neither module accepts an arbitrary target URL/host/endpoint", () => {
+    for (const source of bothFunctional) {
+      for (const forbidden of [
+        "targetUrl",
+        "targetHost",
+        "target_endpoint",
+        "webhook_url",
+        "callback_url",
+        "hostname",
+        "url:",
+        "host:",
+      ]) {
+        expect(source).not.toContain(forbidden);
+      }
+    }
+  });
+
+  it("F10: neither module assigns a money verdict, creates a finding, or names invariant_results", () => {
+    for (const source of bothFunctional) {
+      expect(source).not.toMatch(/invariant_results/);
+      expect(source).not.toMatch(/createFinding/);
+      expect(source).not.toMatch(/evaluateInvariant/);
+      expect(source).not.toMatch(/["']PASS["']/);
+      expect(source).not.toMatch(/["']FAIL["']/);
+      expect(source).not.toMatch(/["']NOT_APPLICABLE["']/);
+    }
+  });
+
+  it("F11: neither module reads the webhook payload, signature or secret surface", () => {
+    for (const source of bothFunctional) {
+      expect(source).not.toMatch(/raw_payload_redacted/);
+      expect(source).not.toMatch(/raw_body_sha256/);
+      expect(source).not.toMatch(/normalized_event/);
+      expect(source).not.toMatch(/RAZORPAY_KEY_SECRET/);
+      expect(source).not.toMatch(/RAZORPAY_WEBHOOK_SECRET/);
+      expect(source).not.toMatch(/idempotency_key/);
+    }
+  });
+
+  it("F12: ordering is by internal id, never by a timestamp used as identity", () => {
+    expect(functionalSnapshotRepo).toMatch(
+      /\.order\(\s*["']id["']\s*,\s*\{\s*ascending:\s*true\s*\}\s*\)/,
+    );
+    for (const forbidden of [
+      /\.order\(\s*["']created_at["']/,
+      /\.order\(\s*["']applied_at["']/,
+      /\.order\(\s*["']received_at["']/,
+      /\.order\(\s*["']updated_at["']/,
+    ]) {
+      expect(functionalSnapshotRepo).not.toMatch(forbidden);
+    }
+  });
+
+  it("F13: no backfill/reconstruct/repair helper exists in either module", () => {
+    for (const source of bothFunctional) {
+      expect(source).not.toMatch(/backfill/i);
+      expect(source).not.toMatch(/reconstruct/i);
+      expect(source).not.toMatch(/repairSnapshot/i);
+      expect(source).not.toMatch(/synthesiz/i);
+    }
+  });
+});
+
+describe("Phase 3F evidence compatibility — version lockstep and capture-search safety", () => {
+  const snapshotSource = fs.readFileSync(
+    path.join(repoRoot, "lib", "chaos", "c03-mutation-snapshot.ts"),
+    "utf-8",
+  );
+
+  it("G1: the write-side and read-side C03 snapshot versions are kept in lockstep", () => {
+    const writeSide = stripComments(snapshotSource).match(
+      /C03_MUTATION_SNAPSHOT_VERSION\s*=\s*(\d+)\s+as const/,
+    );
+    const readSide = functionalDomainSource.match(
+      /C03_MUTATION_SNAPSHOT_EVIDENCE_VERSION\s*=\s*(\d+)/,
+    );
+    expect(writeSide).not.toBeNull();
+    expect(readSide).not.toBeNull();
+    expect(readSide![1]).toBe(writeSide![1]);
+  });
+
+  it("G2: the read-only assembler still never imports a chaos execution module, including the new ones", () => {
+    for (const source of allFunctionalSources) {
+      expect(source).not.toMatch(
+        /from\s+["']@\/lib\/chaos\/c03-mutation-snapshot-repository["']/,
+      );
+      expect(source).not.toMatch(
+        /from\s+["']@\/lib\/chaos\/c03-mutation-snapshot["']/,
+      );
+    }
+  });
+
+  it("G3: the capture resolver exists and distinguishes every required outcome", () => {
+    expect(functionalDomainSource).toMatch(
+      /export function resolveAuthoritativeCaptureEvidence/,
+    );
+    for (const kind of [
+      "NO_SUBJECT",
+      "AMBIGUOUS_SUBJECT",
+      "SEARCH_INCOMPLETE",
+      "NONE_OBSERVED",
+      "EXACTLY_ONE",
+      "INCOMPLETE_INTERNAL_CORRELATION",
+      "AMBIGUOUS",
+    ]) {
+      expect(functionalDomainSource).toContain(`"${kind}"`);
+    }
+  });
+
+  it("G4: the capture resolver never uses timestamps, sorting-as-authority, or latest-wins", () => {
+    const body = extractFunctionBody(
+      functionalDomainSource,
+      "resolveAuthoritativeCaptureEvidence",
+    );
+    expect(body).not.toBeNull();
+    for (const forbidden of [
+      /receivedAt/,
+      /startedAt/,
+      /finishedAt/,
+      /createdAt/,
+      /Math\.max/,
+      /Math\.min/,
+      /\.at\(\s*-1\s*\)/,
+      /\.reverse\(/,
+      /\.pop\(/,
+      /\.shift\(/,
+    ]) {
+      expect(body!).not.toMatch(forbidden);
+    }
+  });
+
+  it("G5: the capture resolver refuses a negative conclusion without a provider search — the false-no-capture guard is structural", () => {
+    const body = extractFunctionBody(
+      functionalDomainSource,
+      "resolveAuthoritativeCaptureEvidence",
+    );
+    expect(body).not.toBeNull();
+    // The completeness gate must be evaluated BEFORE any NONE_OBSERVED return.
+    const gateIndex = body!.indexOf("SEARCH_INCOMPLETE");
+    const noneIndex = body!.indexOf("NONE_OBSERVED");
+    expect(gateIndex).toBeGreaterThan(-1);
+    expect(noneIndex).toBeGreaterThan(-1);
+    expect(gateIndex).toBeLessThan(noneIndex);
+    expect(body!).toMatch(/providerSearchPerformed/);
+    expect(body!).toMatch(/subjectRazorpayPaymentId/);
+  });
+
+  it("G6: the capture search uses exact equality only — never like/ilike/substring matching", () => {
+    for (const source of allFunctionalSources) {
+      expect(source).not.toMatch(/\.like\(/);
+      expect(source).not.toMatch(/\.ilike\(/);
+      expect(source).not.toMatch(/\.textSearch\(/);
+      expect(source).not.toMatch(/\.filter\(\s*["']/);
+      expect(source).not.toMatch(/\.or\(/);
+    }
+    expect(functionalRepositorySource).toMatch(
+      /\.eq\(\s*["']razorpay_payment_id["']\s*,\s*captureSubjectRazorpayPaymentId\s*\)/,
+    );
+    expect(functionalRepositorySource).toMatch(
+      /\.eq\(\s*["']event_type["']\s*,\s*CAPTURE_EVENT_TYPE\s*\)/,
+    );
+    expect(functionalRepositorySource).toMatch(
+      /\.eq\(\s*["']signature_verified["']\s*,\s*true\s*\)/,
+    );
+  });
+
+  it("G7: the capture search never filters on processing_status, so authentic capture evidence is never discarded", () => {
+    expect(functionalRepositorySource).not.toMatch(
+      /\.eq\(\s*["']processing_status["']/,
+    );
+  });
+
+  it("G8: the webhook allowlist exposes the money and provider-identity columns but NOT razorpay_order_id or any payload column", () => {
+    const match = functionalRepositorySource.match(
+      /const WEBHOOK_EVENT_COLUMNS =\s*\n?\s*"([^"]+)"/,
+    );
+    expect(match).not.toBeNull();
+    const columns = match![1]!.split(",").map((c) => c.trim());
+    expect(columns).toContain("amount_subunits");
+    expect(columns).toContain("currency");
+    expect(columns).toContain("razorpay_payment_id");
+    expect(columns).not.toContain("razorpay_order_id");
+    expect(columns).not.toContain("raw_payload_redacted");
+    expect(columns).not.toContain("raw_body_sha256");
+    expect(columns).not.toContain("normalized_event");
+  });
+
+  it("G9: the C03 fault_state parser accepts exactly two key sets and is not a generic pass-through", () => {
+    expect(functionalDomainSource).toMatch(
+      /function isExactC03FaultStateKeySet/,
+    );
+    expect(functionalDomainSource).toMatch(
+      /export function parseC03MutationEvidence/,
+    );
+    expect(functionalDomainSource).toMatch(/["']ABSENT["']/);
+    expect(functionalDomainSource).toMatch(/["']INVALID["']/);
+    expect(functionalDomainSource).toMatch(/MISSING_C03_MUTATION_EVIDENCE/);
+    expect(functionalDomainSource).toMatch(/INVALID_C03_MUTATION_EVIDENCE/);
+    expect(functionalDomainSource).toMatch(/INCOMPLETE_C03_MUTATION_EVIDENCE/);
+  });
+});

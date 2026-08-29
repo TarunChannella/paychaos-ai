@@ -53,6 +53,30 @@ vi.mock("@/lib/security/logger", () => ({
   logEvent: logEventMock,
 }));
 
+/**
+ * The C03 mutation-snapshot capture is mocked here so this file keeps testing
+ * the SERVICE's orchestration only, with no Supabase involvement. The real
+ * read-only capture is proven by
+ * tests/unit/chaos/c03-mutation-snapshot.test.ts and
+ * tests/integration/supabase/062-phase3f-evidence-compatibility.integration.test.ts.
+ */
+const captureC03MutationSnapshotMock = vi.fn();
+vi.mock("@/lib/chaos/c03-mutation-snapshot-repository", () => ({
+  captureC03MutationSnapshot: captureC03MutationSnapshotMock,
+}));
+
+/** One complete, valid snapshot — the shape `buildC03MutationSnapshot` returns. */
+function makeCapturedSnapshot() {
+  return {
+    version: 1 as const,
+    orders: { count: 0, rows: [], complete: true },
+    paymentAttempts: { count: 0, rows: [], complete: true },
+    payments: { count: 0, rows: [], complete: true },
+    fulfilments: { count: 0, rows: [], complete: true },
+    trustedWebhookEvents: { count: 0, ids: [], complete: true },
+  };
+}
+
 const RUN_ID = "11111111-1111-1111-1111-111111111111";
 
 function makeEligibleRun(overrides: Record<string, unknown> = {}) {
@@ -101,6 +125,8 @@ beforeEach(() => {
   getRazorpayWebhookSecretMock.mockReset();
   verifyWebhookSignatureMock.mockReset();
   logEventMock.mockReset();
+  captureC03MutationSnapshotMock.mockReset();
+  captureC03MutationSnapshotMock.mockResolvedValue(makeCapturedSnapshot());
 });
 
 async function importService() {
@@ -463,11 +489,172 @@ describe("executeC03InvalidSignatureTest", () => {
     const serialized = JSON.stringify(faultState);
     expect(serialized).not.toContain("super-secret-value-must-never-appear");
     expect(serialized).not.toContain("paychaos_synthetic_c03_");
-    expect(Object.keys(faultState)).toEqual(["checks"]);
+    // The corrected shape is EXACTLY these two keys — never a generic
+    // pass-through blob, and never an extra key smuggled in alongside.
+    expect(Object.keys(faultState).sort()).toEqual([
+      "checks",
+      "mutationEvidence",
+    ]);
+    expect(Object.keys(faultState.mutationEvidence).sort()).toEqual([
+      "after",
+      "before",
+      "version",
+    ]);
     for (const check of faultState.checks) {
       expect(Object.keys(check).sort()).toEqual(
         ["case", "classification"].sort(),
       );
+    }
+    // Phase 3E persists FACTS only — never a money verdict.
+    expect(serialized).not.toContain("PASS");
+    expect(serialized).not.toContain("FAIL");
+  });
+});
+
+describe("Phase 3F evidence-compatibility correction — C03 mutation evidence capture", () => {
+  function arrangeCompletableRun() {
+    getChaosRunByIdMock.mockResolvedValue(makeEligibleRun());
+    getRazorpayWebhookSecretMock.mockReturnValue("a-secret");
+    startPendingC03RunAtomicallyMock.mockResolvedValue(
+      makeEligibleRun({ status: "RUNNING" }),
+    );
+    verifyWebhookSignatureMock.mockReturnValue(false);
+    completeRunningChaosRunUnknownMock.mockResolvedValue(makeEligibleRun());
+  }
+
+  it("C1: captures the snapshot exactly twice — once BEFORE and once AFTER the two verification checks", async () => {
+    arrangeCompletableRun();
+    const callOrder: string[] = [];
+    captureC03MutationSnapshotMock.mockImplementation(async () => {
+      callOrder.push("capture");
+      return makeCapturedSnapshot();
+    });
+    verifyWebhookSignatureMock.mockImplementation(() => {
+      callOrder.push("verify");
+      return false;
+    });
+
+    const { executeC03InvalidSignatureTest } = await importService();
+    await executeC03InvalidSignatureTest(RUN_ID);
+
+    // The frozen order: before -> WRONG_SIGNATURE -> MISSING_SIGNATURE -> after.
+    expect(callOrder).toEqual(["capture", "verify", "verify", "capture"]);
+    expect(captureC03MutationSnapshotMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("C2: the capture takes no arguments — there is no caller-controlled entity selector", async () => {
+    arrangeCompletableRun();
+    const { executeC03InvalidSignatureTest } = await importService();
+    await executeC03InvalidSignatureTest(RUN_ID);
+    for (const call of captureC03MutationSnapshotMock.mock.calls) {
+      expect(call).toEqual([]);
+    }
+  });
+
+  it("C3: persists both snapshot sides under mutationEvidence with the frozen version", async () => {
+    arrangeCompletableRun();
+    const { executeC03InvalidSignatureTest } = await importService();
+    await executeC03InvalidSignatureTest(RUN_ID);
+
+    const faultState = completeRunningChaosRunUnknownMock.mock.calls[0]?.[1];
+    expect(faultState.mutationEvidence.version).toBe(1);
+    expect(faultState.mutationEvidence.before).not.toBeNull();
+    expect(faultState.mutationEvidence.after).not.toBeNull();
+    expect(faultState.mutationEvidence.before.orders).toEqual({
+      count: 0,
+      complete: true,
+      rows: [],
+    });
+  });
+
+  it("C4: a BEFORE capture failure still runs both signature checks and completes the run with truthful null evidence", async () => {
+    arrangeCompletableRun();
+    captureC03MutationSnapshotMock
+      .mockRejectedValueOnce(new Error("capture exploded"))
+      .mockResolvedValueOnce(makeCapturedSnapshot());
+
+    const { executeC03InvalidSignatureTest } = await importService();
+    const result = await executeC03InvalidSignatureTest(RUN_ID);
+
+    // The scenario itself still executed — evidence capture never gates it.
+    expect(verifyWebhookSignatureMock).toHaveBeenCalledTimes(2);
+    expect(result.kind).toBe("COMPLETED");
+
+    const faultState = completeRunningChaosRunUnknownMock.mock.calls[0]?.[1];
+    // Truthfully null — never a fabricated empty snapshot.
+    expect(faultState.mutationEvidence.before).toBeNull();
+    expect(faultState.mutationEvidence.after).not.toBeNull();
+    expect(faultState.checks).toHaveLength(2);
+  });
+
+  it("C5: an AFTER capture failure is recorded as null and never invents a post-state", async () => {
+    arrangeCompletableRun();
+    captureC03MutationSnapshotMock
+      .mockResolvedValueOnce(makeCapturedSnapshot())
+      .mockRejectedValueOnce(new Error("capture exploded"));
+
+    const { executeC03InvalidSignatureTest } = await importService();
+    const result = await executeC03InvalidSignatureTest(RUN_ID);
+
+    expect(result.kind).toBe("COMPLETED");
+    const faultState = completeRunningChaosRunUnknownMock.mock.calls[0]?.[1];
+    expect(faultState.mutationEvidence.after).toBeNull();
+    expect(faultState.mutationEvidence.before).not.toBeNull();
+  });
+
+  it("C6: a capture failure logs a safe category only, never a raw error message", async () => {
+    arrangeCompletableRun();
+    captureC03MutationSnapshotMock.mockRejectedValue(
+      new Error("RAW-ERROR-MUST-NOT-LEAK"),
+    );
+
+    const { executeC03InvalidSignatureTest } = await importService();
+    await executeC03InvalidSignatureTest(RUN_ID);
+
+    const logged = JSON.stringify(logEventMock.mock.calls);
+    expect(logged).not.toContain("RAW-ERROR-MUST-NOT-LEAK");
+    expect(logged).toContain("chaos_c03_mutation_snapshot_capture_failed");
+
+    const faultState = completeRunningChaosRunUnknownMock.mock.calls[0]?.[1];
+    expect(JSON.stringify(faultState)).not.toContain("RAW-ERROR-MUST-NOT-LEAK");
+  });
+
+  it("C7: no capture is attempted when the run is blocked before execution begins", async () => {
+    getChaosRunByIdMock.mockResolvedValue(makeEligibleRun());
+    getRazorpayWebhookSecretMock.mockImplementation(() => {
+      throw new FakeEnvValidationError("RAZORPAY_WEBHOOK_SECRET");
+    });
+    blockPendingC03RunForPreSec007Mock.mockResolvedValue(
+      makeEligibleRun({
+        status: "COMPLETED",
+        outcome: "BLOCKED",
+        failed_precheck_id: null,
+        execution_block_code: "PRE-SEC-007",
+        started_at: null,
+        completed_at: "2026-08-01T00:00:00.000Z",
+      }),
+    );
+
+    const { executeC03InvalidSignatureTest } = await importService();
+    const result = await executeC03InvalidSignatureTest(RUN_ID);
+
+    expect(result.kind).toBe("BLOCKED_PRE_SEC_007");
+    // A BLOCKED run never executed a mechanism, so there is no state to
+    // observe and nothing may be persisted as if there were.
+    expect(captureC03MutationSnapshotMock).not.toHaveBeenCalled();
+    expect(completeRunningChaosRunUnknownMock).not.toHaveBeenCalled();
+  });
+
+  it("C8: the persisted mutation evidence carries no verdict of any kind", async () => {
+    arrangeCompletableRun();
+    const { executeC03InvalidSignatureTest } = await importService();
+    await executeC03InvalidSignatureTest(RUN_ID);
+
+    const serialized = JSON.stringify(
+      completeRunningChaosRunUnknownMock.mock.calls[0]?.[1],
+    );
+    for (const verdict of ["PASS", "FAIL", "NOT_APPLICABLE", "UNKNOWN"]) {
+      expect(serialized).not.toContain(verdict);
     }
   });
 });

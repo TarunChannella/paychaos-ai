@@ -1094,6 +1094,31 @@ Unverified payload creates trusted state/effect.
 
 Normally none because correct behavior creates no payment mutation.
 
+The mutation snapshot performs **read-only** `SELECT`s and creates, updates and deletes nothing, so it adds no cleanup obligation of its own.
+
+## 22a. Execution-Time Mutation Evidence (Phase 3F evidence-compatibility correction)
+
+C03 remains **verification-only**. It still calls the fixed internal `verifyWebhookSignature` primitive directly, still creates **zero** `webhook_events` rows, **zero** `event_processing_attempts` rows and **zero** merchant mutation, still carries all four `chaos_runs` foreign keys as `NULL`, and still performs no Razorpay network call and no arbitrary-target request.
+
+What changed: the before/after merchant state this scenario's §7 ("Capture merchant/payment state before test") and §13 ("state before/after; trusted webhook row count before/after") already required is now actually captured, during the same C03 execution, and persisted on the existing `chaos_runs.fault_state` column as `mutationEvidence`. See `docs/DATABASE.md` → `chaos_runs` → "C03 `fault_state` shape" for the exact structure.
+
+Frozen execution order:
+
+```text
+capture BEFORE
+  → WRONG_SIGNATURE check
+  → MISSING_SIGNATURE check
+→ capture AFTER
+→ persist { checks, mutationEvidence }
+→ complete the run through the existing lifecycle
+```
+
+Capture is instrumentation. It never gates the two signature checks, never becomes merchant-state authority, and never fails the run: a capture failure is recorded truthfully as `null` rather than replaced with a fabricated snapshot.
+
+**Mandatory test precondition (ARCH-3F-014).** Run C03 in the controlled Demo Merchant sandbox with **no concurrent payment flow in progress**. A legitimate concurrent payment landing between the two captures would change the snapshot, and the evidence cannot distinguish that from a mutation C03 caused. This is an operator rule, not a lock.
+
+**Historical runs are not backfilled.** The already-approved historical C03 run predates this evidence and keeps INV-004 `NOT_APPLICABLE` / INV-005 `UNKNOWN` permanently. Only a **new** C03 run executed after this correction can produce an INV-005 `PASS`/`FAIL`.
+
 ## 23. Implemented In
 
 **Phase 3 scenario wrapper**  

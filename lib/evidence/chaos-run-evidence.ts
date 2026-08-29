@@ -216,6 +216,43 @@ export type EvidenceGapCode =
   | "UNEXPECTED_DATA_CLASSIFICATION"
   /** C03's persisted `fault_state` does not carry exactly the two frozen verification checks. */
   | "MISSING_C03_VERIFICATION_CHECKS"
+  /**
+   * C03's persisted `fault_state` carries no `mutationEvidence` key at all —
+   * the legacy shape written before this correction existed. Authoritative
+   * "never captured", never backfilled: a snapshot taken today would be a
+   * false claim about a run that executed in the past.
+   */
+  | "MISSING_C03_MUTATION_EVIDENCE"
+  /** C03's `mutationEvidence` is present but is not the exact frozen validated shape. */
+  | "INVALID_C03_MUTATION_EVIDENCE"
+  /**
+   * C03's mutation evidence exists but is not complete enough to support a
+   * delta comparison: a side is `null`, a required collection is `null`, or a
+   * collection was truncated (`complete: false`). Two truncated prefixes must
+   * never be compared and called "unchanged".
+   */
+  | "INCOMPLETE_C03_MUTATION_EVIDENCE"
+  /** No trustworthy subject identity could be established for the authoritative capture search. */
+  | "MISSING_CAPTURE_SEARCH_SUBJECT"
+  /** Trusted persisted rows disagree about which payment the capture search is about. Fails closed — never picks one. */
+  | "AMBIGUOUS_CAPTURE_SEARCH_SUBJECT"
+  /**
+   * A capture subject exists, but the search could not be established as
+   * covering the canonical webhook evidence for that exact payment identity
+   * (no trusted provider identity was available to search by). A negative
+   * result under these conditions is NOT proof that no capture exists.
+   */
+  | "INCOMPLETE_CAPTURE_SEARCH"
+  /** More than one verified provider capture candidate matched. Fails closed — never "pick the latest". */
+  | "AMBIGUOUS_AUTHORITATIVE_CAPTURE_WEBHOOK"
+  /**
+   * Exactly one verified provider `payment.captured` event matched the trusted
+   * provider identity, but its internal `payment_id` correlation is absent or
+   * disagrees with the run's internal subject. The capture evidence is REAL
+   * and stays visible; only the relational link INV-004/INV-010 need is
+   * missing.
+   */
+  | "INCOMPLETE_CAPTURE_INTERNAL_CORRELATION"
   /** A C03 run carries a merchant/provider FK it must never have. */
   | "UNEXPECTED_C03_PROVIDER_LINK"
   /** C07's persisted `fault_state` is not exactly `{armed: true, consumed: <boolean>}`. */
@@ -288,6 +325,39 @@ export interface SafeWebhookEvidence {
   readonly receivedAt: string;
   readonly paymentAttemptId: string | null;
   readonly paymentId: string | null;
+  /**
+   * The trusted, normalized Razorpay Payment identifier this canonical event
+   * refers to, or `null` when normalization established none.
+   *
+   * A persisted provider identifier, not customer data. Exposed because the
+   * authoritative-capture search genuinely needs it: correlating capture
+   * evidence by internal `payment_id` ALONE could report "no capture exists"
+   * for a genuine capture whose internal correlation is missing, which would
+   * produce a false INV-003/INV-004/INV-010 failure. A false payment finding
+   * is not a safe outcome, so the exact provider identity is a required input
+   * rather than a convenience.
+   *
+   * `razorpay_order_id` is deliberately NOT exposed: the capture-correlation
+   * contract does not use it, and a field is never surfaced merely because the
+   * column exists.
+   */
+  readonly razorpayPaymentId: string | null;
+  /**
+   * Trusted normalized money terms carried by this canonical event, or `null`
+   * when normalization established none.
+   *
+   * Required by docs/MONEY_INVARIANTS.md INV-008 §8: "If trusted normalized
+   * webhook evidence contains amount/currency, it must match the canonical
+   * payment values as well." Without these the clause was unevaluable.
+   *
+   * Integer smallest-currency subunits, straight from the persisted
+   * `bigint` column — never a float, never rounded. `null` is preserved
+   * exactly and is NEVER defaulted to `0`; INV-008 §16 requires UNKNOWN, not
+   * PASS, when a required money value cannot be established.
+   */
+  readonly amountSubunits: number | null;
+  /** Trusted normalized currency, or `null`. Never defaulted to `"INR"` — see `amountSubunits`. */
+  readonly currency: string | null;
 }
 
 /**
@@ -360,6 +430,61 @@ export interface C03VerificationCheckEvidence {
 }
 
 /**
+ * One bounded collection inside a persisted C03 mutation snapshot.
+ *
+ * `count` is the exact table cardinality the snapshot was taken from;
+ * `complete` says whether `rows` holds all of them. A collection with
+ * `complete: false` is a TRUNCATED PREFIX and must never be compared against
+ * another prefix and called "unchanged".
+ */
+export interface C03MutationCollectionEvidence<TRow> {
+  readonly count: number;
+  readonly rows: readonly TRow[];
+  readonly complete: boolean;
+}
+
+/** The trusted canonical `webhook_events` row set: internal UUIDs and an exact count only. */
+export interface C03TrustedWebhookEventSetEvidence {
+  readonly count: number;
+  readonly ids: readonly string[];
+  readonly complete: boolean;
+}
+
+/**
+ * One validated C03 mutation snapshot.
+ *
+ * The four business collections carry FULL ROW-STATE projections, not counts,
+ * because an order can move `UNPAID -> PAID` and a payment can gain a
+ * `captured_at` while the row count stays identical. A `null` collection means
+ * "that table could not be read" and is never conflated with an empty one.
+ *
+ * The row projections deliberately reuse the frozen `MerchantStateSnapshot*V1`
+ * field vocabulary and are validated by the very same row parsers this module
+ * already uses for `state_before`/`state_after`, so the two evidence surfaces
+ * can never drift apart.
+ */
+export interface C03MutationSnapshotEvidence {
+  readonly orders: C03MutationCollectionEvidence<MerchantStateSnapshotOrderV1> | null;
+  readonly paymentAttempts: C03MutationCollectionEvidence<MerchantStateSnapshotPaymentAttemptV1> | null;
+  readonly payments: C03MutationCollectionEvidence<MerchantStateSnapshotPaymentV1> | null;
+  readonly fulfilments: C03MutationCollectionEvidence<MerchantStateSnapshotFulfilmentV1> | null;
+  readonly trustedWebhookEvents: C03TrustedWebhookEventSetEvidence | null;
+}
+
+/**
+ * C03's validated before/after mutation evidence envelope.
+ *
+ * Either side may be `null`: a capture failure during execution is recorded
+ * truthfully rather than replaced with a fabricated snapshot. This module
+ * NEVER compares the two sides — that comparison is INV-005's decision and
+ * belongs to Phase 3F.
+ */
+export interface C03MutationEvidence {
+  readonly before: C03MutationSnapshotEvidence | null;
+  readonly after: C03MutationSnapshotEvidence | null;
+}
+
+/**
  * C03's processor-independent evidence envelope.
  *
  * C03 is architecturally different from every other P0 scenario and Phase
@@ -380,6 +505,18 @@ export interface C03Evidence {
   readonly paymentAttemptLinked: boolean;
   readonly paymentLinked: boolean;
   readonly chaosLinkedProcessingAttemptCount: number;
+  /**
+   * The before/after Demo Merchant state captured during this run's own
+   * execution, or `null` for a run recorded before this evidence existed (see
+   * `MISSING_C03_MUTATION_EVIDENCE`) or whose persisted value failed
+   * validation (`INVALID_C03_MUTATION_EVIDENCE`).
+   *
+   * These are the inputs docs/MONEY_INVARIANTS.md INV-005 §6 requires. They
+   * are FACTS ONLY: this module never compares `before` against `after`, and
+   * assigns no verdict. That comparison is INV-005's decision and belongs to
+   * Phase 3F.
+   */
+  readonly mutationEvidence: C03MutationEvidence | null;
 }
 
 export interface C07Evidence {
@@ -447,6 +584,32 @@ export interface ChaosRunEvidenceBundleV1 {
   readonly chaosProcessingAttempts: readonly ProcessingAttemptEvidence[];
   /** Canonical `webhook_events` row count for the source Razorpay event id; `null` when no source webhook was resolved. */
   readonly canonicalSourceEventCount: number | null;
+
+  /**
+   * The authoritative captured-payment basis for this run, as a FACT about a
+   * search — never a verdict.
+   *
+   * Deliberately a bundle-level field rather than a per-scenario one: exactly
+   * ONE shared mechanism serves INV-003's capture-event search, INV-004 §8
+   * condition 3 and INV-010 §8's "authoritative successful payment evidence".
+   * Two overlapping mechanisms would be two things to keep correct.
+   *
+   * This NEVER replaces or relabels `sourceWebhook`. A C11 run sourced from
+   * `payment.failed` still reports `sourceWebhook.eventType ===
+   * "payment.failed"`; the capture evidence is separate, independent evidence
+   * carrying its own provenance. When the source event IS itself the verified
+   * capture, the same trusted row legitimately appears in both roles with the
+   * same `id` — one row, two roles, nothing manufactured.
+   */
+  readonly authoritativeCapture: AuthoritativeCaptureResolution;
+  /**
+   * The single resolved capture webhook when one was resolved at all —
+   * populated for BOTH `EXACTLY_ONE` and `INCOMPLETE_INTERNAL_CORRELATION`,
+   * because provider-authenticated capture evidence stays visible even when
+   * its internal correlation is incomplete. `null` for every other resolution.
+   */
+  readonly authoritativeCaptureWebhook: SafeWebhookEvidence | null;
+
   readonly scenarioEvidence: ScenarioEvidence;
   readonly evidenceRefs: readonly EvidenceRef[];
   readonly gaps: readonly EvidenceGap[];
@@ -493,6 +656,9 @@ export interface RawWebhookEvidenceRow {
   readonly received_at: string;
   readonly payment_attempt_id: string | null;
   readonly payment_id: string | null;
+  readonly razorpay_payment_id: string | null;
+  readonly amount_subunits: number | null;
+  readonly currency: string | null;
 }
 
 export interface RawProcessingAttemptEvidenceRow {
@@ -519,6 +685,33 @@ export interface ChaosRunEvidenceSource {
   /** Every attempt whose `chaos_run_id` is exactly this run's id, whatever its `source_kind`. */
   readonly chaosProcessingAttempts: readonly RawProcessingAttemptEvidenceRow[];
   readonly canonicalSourceEventCount: number | null;
+
+  // --- authoritative capture search inputs --------------------------------
+
+  /**
+   * The trusted Razorpay Payment identifier the capture search was run
+   * against, taken from the canonical source webhook's own normalized column.
+   * `null` when none could be established from a trusted persisted row.
+   */
+  readonly captureSubjectRazorpayPaymentId: string | null;
+  /**
+   * Internal `payments.id` values asserted by trusted persisted rows (the
+   * chaos run's own FK and the canonical source webhook's own FK). May contain
+   * duplicates; deduplication and conflict detection happen in the pure
+   * resolver.
+   */
+  readonly captureSubjectInternalPaymentIds: readonly string[];
+  /**
+   * Whether the PROVIDER-identity dimension was actually searched.
+   *
+   * This is the completeness fact that stops a false negative. An
+   * internal-`payment_id`-only search cannot see a genuine verified capture
+   * whose internal correlation is absent, so without a provider search the
+   * resolver must never report a complete "no capture exists" result.
+   */
+  readonly captureProviderSearchPerformed: boolean;
+  /** Union of both exact-identity searches; may contain duplicate rows. */
+  readonly captureCandidates: readonly RawWebhookEvidenceRow[];
 }
 
 // ============================================================================
@@ -774,6 +967,290 @@ function isC03Classification(
 }
 
 /**
+ * The C03 mutation snapshot envelope version this reader accepts.
+ *
+ * Restated here rather than imported from
+ * `lib/chaos/c03-mutation-snapshot.ts`, for exactly the reason
+ * `parseC07FaultStateEvidence` and `C01_EXPECTED_REPLAY_ATTEMPT_COUNT` are
+ * already restated in this module: a strictly read-only assembler must not
+ * depend on the chaos EXECUTION surface, even transitively, and a persisted
+ * JSONB value must be runtime-validated rather than trusted regardless. The
+ * two constants are kept in lockstep by
+ * `tests/unit/evidence/phase3e-b-static-guard.test.ts`, which reads both files
+ * as text and fails if they diverge.
+ */
+const C03_MUTATION_SNAPSHOT_EVIDENCE_VERSION = 1;
+
+/**
+ * The ONLY two `fault_state` key sets a C03 run may carry.
+ *
+ * `{checks}` is the LEGACY shape written before the mutation-evidence
+ * correction existed; the already-approved historical C03 run has exactly this
+ * shape and must keep parsing truthfully. `{checks, mutationEvidence}` is the
+ * corrected shape. Anything else — a PENDING run's `{}`, an extra key, a
+ * renamed key — is rejected. This is deliberately NOT relaxed into a generic
+ * pass-through: an arbitrary JSON blob on `fault_state` is exactly what the
+ * safe-projection rule exists to prevent.
+ */
+function isExactC03FaultStateKeySet(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> {
+  const keys = Object.keys(value).sort();
+  if (keys.length === 1) return keys[0] === "checks";
+  if (keys.length === 2) {
+    return keys[0] === "checks" && keys[1] === "mutationEvidence";
+  }
+  return false;
+}
+
+/** Validates one bounded collection envelope: exactly `{count, complete, rows}` with a whole-number count. */
+function parseC03Collection<TRow>(
+  value: unknown,
+  parseRows: (rows: readonly unknown[]) => readonly TRow[] | undefined,
+): C03MutationCollectionEvidence<TRow> | null | undefined {
+  if (value === null) return null;
+  if (!isPlainObject(value)) return undefined;
+  const keys = Object.keys(value).sort();
+  if (
+    keys.length !== 3 ||
+    keys[0] !== "complete" ||
+    keys[1] !== "count" ||
+    keys[2] !== "rows"
+  ) {
+    return undefined;
+  }
+  if (!Number.isInteger(value.count) || (value.count as number) < 0) {
+    return undefined;
+  }
+  if (typeof value.complete !== "boolean") return undefined;
+  if (!Array.isArray(value.rows)) return undefined;
+
+  const rows = parseRows(value.rows);
+  if (rows === undefined) return undefined;
+
+  return {
+    count: value.count as number,
+    rows,
+    complete: value.complete,
+  };
+}
+
+/**
+ * Maps an array through one of the frozen row parsers this module already uses
+ * for `state_before`/`state_after`.
+ *
+ * A row that is JSON `null` or fails validation invalidates the whole
+ * collection — a collection row is never legitimately null, and a partially
+ * parsed collection would be a silently weakened claim about merchant state.
+ */
+function parseC03Rows<TRow extends { readonly id: string }>(
+  rows: readonly unknown[],
+  parseRow: (value: unknown) => TRow | null | undefined,
+): readonly TRow[] | undefined {
+  const parsed: TRow[] = [];
+  for (const entry of rows) {
+    const row = parseRow(entry);
+    if (row === null || row === undefined) return undefined;
+    parsed.push(row);
+  }
+  // Re-applied here rather than trusted from the persisted array, exactly as
+  // `parseSnapshotFulfilments` does: the same set must always come back in the
+  // same sequence.
+  return parsed.sort(compareByIdField);
+}
+
+function compareByIdField(
+  a: { readonly id: string },
+  b: { readonly id: string },
+): number {
+  return compareStrings(a.id, b.id);
+}
+
+/** Validates the trusted canonical webhook row set: exactly `{count, complete, ids}`. */
+function parseC03TrustedWebhookEvents(
+  value: unknown,
+): C03TrustedWebhookEventSetEvidence | null | undefined {
+  if (value === null) return null;
+  if (!isPlainObject(value)) return undefined;
+  const keys = Object.keys(value).sort();
+  if (
+    keys.length !== 3 ||
+    keys[0] !== "complete" ||
+    keys[1] !== "count" ||
+    keys[2] !== "ids"
+  ) {
+    return undefined;
+  }
+  if (!Number.isInteger(value.count) || (value.count as number) < 0) {
+    return undefined;
+  }
+  if (typeof value.complete !== "boolean") return undefined;
+  if (!Array.isArray(value.ids)) return undefined;
+  const ids: string[] = [];
+  for (const id of value.ids) {
+    if (typeof id !== "string") return undefined;
+    ids.push(id);
+  }
+  return {
+    count: value.count as number,
+    ids: ids.sort(compareStrings),
+    complete: value.complete,
+  };
+}
+
+/** Validates one persisted C03 mutation snapshot side. `undefined` means present-but-invalid. */
+function parseC03MutationSnapshot(
+  value: unknown,
+): C03MutationSnapshotEvidence | null | undefined {
+  if (value === null) return null;
+  if (!isPlainObject(value)) return undefined;
+  if (value.version !== C03_MUTATION_SNAPSHOT_EVIDENCE_VERSION) {
+    return undefined;
+  }
+  const keys = Object.keys(value).sort();
+  const expected = [
+    "fulfilments",
+    "orders",
+    "paymentAttempts",
+    "payments",
+    "trustedWebhookEvents",
+    "version",
+  ];
+  if (keys.length !== expected.length) return undefined;
+  for (let i = 0; i < expected.length; i++) {
+    if (keys[i] !== expected[i]) return undefined;
+  }
+
+  const orders = parseC03Collection(value.orders, (rows) =>
+    parseC03Rows(rows, parseSnapshotOrder),
+  );
+  if (orders === undefined) return undefined;
+
+  const paymentAttempts = parseC03Collection(value.paymentAttempts, (rows) =>
+    parseC03Rows(rows, parseSnapshotPaymentAttempt),
+  );
+  if (paymentAttempts === undefined) return undefined;
+
+  const payments = parseC03Collection(value.payments, (rows) =>
+    parseC03Rows(rows, parseSnapshotPayment),
+  );
+  if (payments === undefined) return undefined;
+
+  // `parseSnapshotFulfilments` is reused verbatim — the same validator this
+  // module already applies to `state_before`/`state_after` fulfilment arrays,
+  // so the two evidence surfaces cannot drift. Its `null` return means "the
+  // JSON value was null", which `parseC03Collection` has already excluded by
+  // the time this callback runs, so it is normalized to `undefined`
+  // (present-but-invalid) rather than silently accepted.
+  const fulfilments = parseC03Collection<MerchantStateSnapshotFulfilmentV1>(
+    value.fulfilments,
+    (rows) => parseSnapshotFulfilments(rows) ?? undefined,
+  );
+  if (fulfilments === undefined) return undefined;
+
+  const trustedWebhookEvents = parseC03TrustedWebhookEvents(
+    value.trustedWebhookEvents,
+  );
+  if (trustedWebhookEvents === undefined) return undefined;
+
+  return {
+    orders,
+    paymentAttempts,
+    payments,
+    fulfilments,
+    trustedWebhookEvents,
+  };
+}
+
+/**
+ * The result of validating a C03 run's persisted `mutationEvidence`.
+ *
+ * `ABSENT` is the authoritative legacy "never captured" — the already-approved
+ * historical C03 run, which is NEVER backfilled. `INVALID` means a value IS
+ * present but does not match the frozen contract; it is never silently
+ * accepted and never repaired.
+ */
+export type ParsedC03MutationEvidence =
+  | { readonly kind: "ABSENT" }
+  | { readonly kind: "INVALID" }
+  | { readonly kind: "PRESENT"; readonly evidence: C03MutationEvidence };
+
+/**
+ * Validates a C03 run's persisted `fault_state.mutationEvidence` against the
+ * exact frozen shape `lib/chaos/c03-mutation-snapshot.ts` writes. NEVER a
+ * blind cast, and never throws.
+ *
+ * Accepts ONLY `{version, before, after}` with a matching version. Either side
+ * may be `null` (a truthful capture failure). Every returned field is copied
+ * by explicit name, so an unknown field present in the persisted JSON can
+ * never leak into the bundle.
+ */
+export function parseC03MutationEvidence(
+  faultState: unknown,
+): ParsedC03MutationEvidence {
+  if (!isPlainObject(faultState)) return { kind: "ABSENT" };
+  if (!("mutationEvidence" in faultState)) return { kind: "ABSENT" };
+
+  const value = faultState.mutationEvidence;
+  if (!isPlainObject(value)) return { kind: "INVALID" };
+  if (value.version !== C03_MUTATION_SNAPSHOT_EVIDENCE_VERSION) {
+    return { kind: "INVALID" };
+  }
+  const keys = Object.keys(value).sort();
+  if (
+    keys.length !== 3 ||
+    keys[0] !== "after" ||
+    keys[1] !== "before" ||
+    keys[2] !== "version"
+  ) {
+    return { kind: "INVALID" };
+  }
+
+  const before = parseC03MutationSnapshot(value.before);
+  if (before === undefined) return { kind: "INVALID" };
+  const after = parseC03MutationSnapshot(value.after);
+  if (after === undefined) return { kind: "INVALID" };
+
+  return { kind: "PRESENT", evidence: { before, after } };
+}
+
+/**
+ * Is this validated mutation evidence complete enough for a later delta
+ * comparison to be meaningful?
+ *
+ * Requires BOTH sides present, every collection present, and every collection
+ * `complete`. This is a COMPLETENESS fact, not a verdict: it says whether the
+ * evidence can support a comparison, never what the comparison would show.
+ * Phase 3F turns incompleteness into UNKNOWN.
+ */
+export function isC03MutationEvidenceComplete(
+  evidence: C03MutationEvidence,
+): boolean {
+  return (
+    isC03MutationSnapshotComplete(evidence.before) &&
+    isC03MutationSnapshotComplete(evidence.after)
+  );
+}
+
+function isC03MutationSnapshotComplete(
+  snapshot: C03MutationSnapshotEvidence | null,
+): boolean {
+  if (snapshot === null) return false;
+  return (
+    snapshot.orders !== null &&
+    snapshot.orders.complete &&
+    snapshot.paymentAttempts !== null &&
+    snapshot.paymentAttempts.complete &&
+    snapshot.payments !== null &&
+    snapshot.payments.complete &&
+    snapshot.fulfilments !== null &&
+    snapshot.fulfilments.complete &&
+    snapshot.trustedWebhookEvents !== null &&
+    snapshot.trustedWebhookEvents.complete
+  );
+}
+
+/**
  * Validates C03's persisted `fault_state` against the EXACT frozen shape
  * `lib/chaos/c03-execution-service.ts` writes: `{ checks: [WRONG_SIGNATURE,
  * MISSING_SIGNATURE] }`, in that order, each entry carrying only `case` and
@@ -788,8 +1265,7 @@ export function parseC03VerificationChecks(
   value: unknown,
 ): readonly C03VerificationCheckEvidence[] | null {
   if (!isPlainObject(value)) return null;
-  const keys = Object.keys(value);
-  if (keys.length !== 1 || keys[0] !== "checks") return null;
+  if (!isExactC03FaultStateKeySet(value)) return null;
   const checks = value.checks;
   if (!Array.isArray(checks)) return null;
   if (checks.length !== C03_FROZEN_CASE_ORDER.length) return null;
@@ -911,6 +1387,143 @@ function compareProcessingAttempts(
  * The deterministic outcome of resolving THE authoritative original provider
  * processing attempt for a source webhook.
  */
+/**
+ * The outcome of the authoritative capture search.
+ *
+ * Every member is a FACT about the search, never a money verdict.
+ *
+ * - `NO_SUBJECT` — no trustworthy payment identity could be established from
+ *   any trusted persisted row. This is the normal, correct state for C03,
+ *   which has no merchant/provider correlation at all by design. It is NEVER
+ *   evidence that no capture exists.
+ * - `AMBIGUOUS_SUBJECT` — trusted persisted rows disagree about WHICH payment
+ *   the search is about. Fails closed; no row is chosen. Never evidence that
+ *   no capture exists.
+ * - `SEARCH_INCOMPLETE` — a subject exists, but the search could not be
+ *   established as covering the canonical evidence for that exact payment
+ *   identity (no trusted provider identity was available to search by). A
+ *   negative result here would be unsafe, so no negative result is reported.
+ *   Phase 3F must treat this as UNKNOWN, never as a failure.
+ * - `NONE_OBSERVED` — the COMPLETE negative search fact: an exact trusted
+ *   provider identity was established, the query succeeded, and zero verified
+ *   `REAL_RAZORPAY_WEBHOOK` `payment.captured` rows exist for it. This is a
+ *   positive, required input to INV-003's "capture-event search result", not
+ *   an evidence gap.
+ * - `EXACTLY_ONE` — exactly one verified provider capture event, AND its
+ *   internal `payment_id` matches the run's internal subject. This is the only
+ *   member that supplies INV-004 §8 condition 3 plus the relational link
+ *   INV-010 §8 requires.
+ * - `INCOMPLETE_INTERNAL_CORRELATION` — exactly one verified provider capture
+ *   event matched the trusted provider identity, but its internal correlation
+ *   is absent or disagrees. The capture evidence is REAL and stays visible on
+ *   the bundle; it is simply not sufficient for a relational INV-004/INV-010
+ *   PASS. Critically, this is NEVER collapsed into `NONE_OBSERVED` — doing so
+ *   would let an evaluator claim "failure-only evidence" for a payment that
+ *   demonstrably was captured, which is exactly the false-finding failure mode
+ *   this contract exists to prevent (INV-003 §16 "Failure followed later by
+ *   capture").
+ * - `AMBIGUOUS` — more than one candidate, or a candidate whose provider
+ *   identity conflicts with the subject. Fails closed; never "pick the
+ *   latest".
+ */
+export type AuthoritativeCaptureResolution =
+  | { readonly kind: "NO_SUBJECT" }
+  | { readonly kind: "AMBIGUOUS_SUBJECT" }
+  | { readonly kind: "SEARCH_INCOMPLETE" }
+  | { readonly kind: "NONE_OBSERVED" }
+  | {
+      readonly kind: "EXACTLY_ONE";
+      readonly webhook: SafeWebhookEvidence;
+    }
+  | {
+      readonly kind: "INCOMPLETE_INTERNAL_CORRELATION";
+      readonly webhook: SafeWebhookEvidence;
+    }
+  | {
+      readonly kind: "AMBIGUOUS";
+      readonly candidates: readonly SafeWebhookEvidence[];
+    };
+
+/**
+ * Resolves the authoritative captured-payment basis for one chaos run.
+ *
+ * PURE: no I/O, no clock, no randomness. Uses ONLY exact identity equality —
+ * never a substring, prefix, `like`/`ilike`, fuzzy match, timestamp preference
+ * or array position. There is deliberately no sorting-then-taking-first
+ * anywhere in the decision path: "latest wins" is not authority.
+ *
+ * The single most important rule here: a NEGATIVE result is only ever reported
+ * when the search was genuinely capable of finding a positive one. Concluding
+ * "no capture exists" from a search that could not have seen it would produce
+ * false INV-003/INV-004/INV-010 findings, and a false payment finding is not a
+ * safe outcome.
+ */
+export function resolveAuthoritativeCaptureEvidence(input: {
+  readonly subjectRazorpayPaymentId: string | null;
+  readonly subjectInternalPaymentIds: readonly string[];
+  readonly providerSearchPerformed: boolean;
+  readonly candidates: readonly SafeWebhookEvidence[];
+}): AuthoritativeCaptureResolution {
+  const internalIds = [...new Set(input.subjectInternalPaymentIds)].sort(
+    compareStrings,
+  );
+
+  if (internalIds.length === 0 && input.subjectRazorpayPaymentId === null) {
+    return { kind: "NO_SUBJECT" };
+  }
+  // Two trusted persisted rows naming DIFFERENT payments is a genuine
+  // contradiction about what is being asked, not something to arbitrate.
+  if (internalIds.length > 1) {
+    return { kind: "AMBIGUOUS_SUBJECT" };
+  }
+  const internalSubject = internalIds[0] ?? null;
+
+  // Completeness gate. Without an exact trusted PROVIDER identity, a genuine
+  // capture whose internal `payment_id` correlation is missing would be
+  // invisible to the search — so no negative conclusion may be drawn.
+  if (
+    input.subjectRazorpayPaymentId === null ||
+    !input.providerSearchPerformed
+  ) {
+    return { kind: "SEARCH_INCOMPLETE" };
+  }
+
+  const byId = new Map<string, SafeWebhookEvidence>();
+  for (const candidate of input.candidates) {
+    byId.set(candidate.id, candidate);
+  }
+  const candidates = [...byId.values()].sort((a, b) =>
+    compareStrings(a.id, b.id),
+  );
+
+  // A candidate reached via the internal-FK search whose own provider identity
+  // names a DIFFERENT payment is an identity conflict. Fail closed rather than
+  // silently keeping or silently dropping it.
+  for (const candidate of candidates) {
+    if (
+      candidate.razorpayPaymentId !== null &&
+      candidate.razorpayPaymentId !== input.subjectRazorpayPaymentId
+    ) {
+      return { kind: "AMBIGUOUS", candidates };
+    }
+  }
+
+  if (candidates.length === 0) {
+    return { kind: "NONE_OBSERVED" };
+  }
+  if (candidates.length > 1) {
+    return { kind: "AMBIGUOUS", candidates };
+  }
+
+  const webhook = candidates[0]!;
+  if (internalSubject !== null && webhook.paymentId === internalSubject) {
+    return { kind: "EXACTLY_ONE", webhook };
+  }
+  // Real provider capture evidence with a missing/mismatched internal link.
+  // Stays visible — never discarded into NONE_OBSERVED.
+  return { kind: "INCOMPLETE_INTERNAL_CORRELATION", webhook };
+}
+
 export type AuthoritativeOriginalResolution =
   | { readonly kind: "NONE"; readonly candidateCount: 0 }
   | {
@@ -1017,6 +1630,9 @@ function projectWebhook(row: RawWebhookEvidenceRow): SafeWebhookEvidence {
     receivedAt: row.received_at,
     paymentAttemptId: row.payment_attempt_id,
     paymentId: row.payment_id,
+    razorpayPaymentId: row.razorpay_payment_id,
+    amountSubunits: row.amount_subunits,
+    currency: row.currency,
   };
 }
 
@@ -1194,6 +1810,53 @@ function collectChaosProvenanceGaps(
   }
 }
 
+/**
+ * Emits the factual gaps describing why an authoritative capture search could
+ * not produce a usable result.
+ *
+ * Called ONLY by the scenarios that genuinely expect a payment correlation
+ * (C01/C07/C11), mirroring how `collectMerchantCorrelationGaps` is already
+ * scoped. C03 deliberately does not call it: C03 has no payment by design, so
+ * a "missing capture subject" gap on every C03 run would be noise rather than
+ * a finding-worthy fact.
+ *
+ * `NONE_OBSERVED` deliberately emits NO gap. A complete search that truthfully
+ * found zero capture events is a VALID FACTUAL RESULT — it is precisely the
+ * "capture-event search result" INV-003 §12 lists as required evidence.
+ * Recording it as a gap would make INV-003 permanently UNKNOWN, which is the
+ * exact defect this correction exists to remove.
+ */
+function collectCaptureEvidenceGaps(
+  into: EvidenceGap[],
+  resolution: AuthoritativeCaptureResolution,
+): void {
+  switch (resolution.kind) {
+    case "NO_SUBJECT":
+      pushGap(into, "MISSING_CAPTURE_SEARCH_SUBJECT");
+      return;
+    case "AMBIGUOUS_SUBJECT":
+      pushGap(into, "AMBIGUOUS_CAPTURE_SEARCH_SUBJECT");
+      return;
+    case "SEARCH_INCOMPLETE":
+      pushGap(into, "INCOMPLETE_CAPTURE_SEARCH");
+      return;
+    case "AMBIGUOUS":
+      pushGap(into, "AMBIGUOUS_AUTHORITATIVE_CAPTURE_WEBHOOK");
+      return;
+    case "INCOMPLETE_INTERNAL_CORRELATION":
+      pushGap(
+        into,
+        "INCOMPLETE_CAPTURE_INTERNAL_CORRELATION",
+        resolution.webhook.id,
+      );
+      return;
+    case "NONE_OBSERVED":
+    case "EXACTLY_ONE":
+      // Both are complete, usable factual results. No gap.
+      return;
+  }
+}
+
 /** Emits the merchant/provider correlation gaps for a scenario that genuinely requires all three FKs. */
 function collectMerchantCorrelationGaps(
   into: EvidenceGap[],
@@ -1284,9 +1947,44 @@ export function buildChaosRunEvidenceBundle(
     collectSnapshotGaps(gaps, attempt);
   }
 
+  // Resolved BEFORE scenario evidence so a scenario builder can emit its own
+  // capture gaps, and so the resolution is available to every scenario without
+  // being duplicated per scenario.
+  const authoritativeCapture = resolveAuthoritativeCaptureEvidence({
+    subjectRazorpayPaymentId: source.captureSubjectRazorpayPaymentId,
+    subjectInternalPaymentIds: source.captureSubjectInternalPaymentIds,
+    providerSearchPerformed: source.captureProviderSearchPerformed,
+    candidates: source.captureCandidates.map(projectWebhook),
+  });
+  const authoritativeCaptureWebhook =
+    authoritativeCapture.kind === "EXACTLY_ONE" ||
+    authoritativeCapture.kind === "INCOMPLETE_INTERNAL_CORRELATION"
+      ? authoritativeCapture.webhook
+      : null;
+
+  // Every capture webhook actually used as evidence becomes a structured
+  // reference, including each AMBIGUOUS candidate — an ambiguous result must
+  // stay traceable to the exact rows that made it ambiguous. Deduplication and
+  // ordering are handled by the existing `dedupeAndSortEvidenceRefs` contract.
+  if (authoritativeCaptureWebhook !== null) {
+    pushRef(refs, "WEBHOOK_EVENT", authoritativeCaptureWebhook.id);
+    pushRef(refs, "PAYMENT", authoritativeCaptureWebhook.paymentId);
+    pushRef(
+      refs,
+      "PAYMENT_ATTEMPT",
+      authoritativeCaptureWebhook.paymentAttemptId,
+    );
+  }
+  if (authoritativeCapture.kind === "AMBIGUOUS") {
+    for (const candidate of authoritativeCapture.candidates) {
+      pushRef(refs, "WEBHOOK_EVENT", candidate.id);
+    }
+  }
+
   const scenarioEvidence = buildScenarioEvidence({
     run,
     rawFaultState: source.run.fault_state,
+    authoritativeCapture,
     sourceWebhook,
     originalProcessingAttempts,
     chaosProcessingAttempts,
@@ -1304,6 +2002,8 @@ export function buildChaosRunEvidenceBundle(
     originalProcessingAttempts,
     chaosProcessingAttempts,
     canonicalSourceEventCount: source.canonicalSourceEventCount,
+    authoritativeCapture,
+    authoritativeCaptureWebhook,
     scenarioEvidence,
     evidenceRefs: dedupeAndSortEvidenceRefs(refs),
     gaps: dedupeAndSortEvidenceGaps(gaps),
@@ -1313,6 +2013,7 @@ export function buildChaosRunEvidenceBundle(
 interface ScenarioEvidenceInput {
   readonly run: SafeChaosRunEvidence;
   readonly rawFaultState: unknown;
+  readonly authoritativeCapture: AuthoritativeCaptureResolution;
   readonly sourceWebhook: SafeWebhookEvidence | null;
   readonly originalProcessingAttempts: readonly ProcessingAttemptEvidence[];
   readonly chaosProcessingAttempts: readonly ProcessingAttemptEvidence[];
@@ -1360,6 +2061,7 @@ function buildC01Evidence(input: ScenarioEvidenceInput): C01Evidence {
     collectAuthoritativeOriginalGaps(gaps, input.originalProcessingAttempts);
   collectChaosProvenanceGaps(gaps, input.chaosProcessingAttempts);
   collectMerchantCorrelationGaps(gaps, run);
+  collectCaptureEvidenceGaps(gaps, input.authoritativeCapture);
 
   if (run.faultType !== "REPLAY_EVENT") {
     pushGap(gaps, "UNEXPECTED_FAULT_TYPE");
@@ -1431,6 +2133,31 @@ function buildC03Evidence(input: ScenarioEvidenceInput): C03Evidence {
     pushGap(gaps, "UNEXPECTED_CHAOS_PROCESSING_ATTEMPT_COUNT");
   }
 
+  // The before/after merchant state INV-005 §6 requires, captured during this
+  // run's own execution. Reported exactly as persisted — never reconstructed
+  // from today's mutable merchant state, and never compared here.
+  //
+  // The already-approved historical C03 run carries the legacy `{checks}`
+  // shape with no `mutationEvidence` key. It parses as `ABSENT`, which is the
+  // authoritative "never captured": it stays INV-005 UNKNOWN forever and is
+  // NOT backfilled, because a snapshot taken today would be a false claim
+  // about a run that executed in the past.
+  const parsedMutationEvidence = parseC03MutationEvidence(input.rawFaultState);
+  let mutationEvidence: C03MutationEvidence | null = null;
+  if (parsedMutationEvidence.kind === "ABSENT") {
+    pushGap(gaps, "MISSING_C03_MUTATION_EVIDENCE");
+  } else if (parsedMutationEvidence.kind === "INVALID") {
+    pushGap(gaps, "INVALID_C03_MUTATION_EVIDENCE");
+  } else {
+    mutationEvidence = parsedMutationEvidence.evidence;
+    // A truncated or partially-read snapshot cannot support a delta
+    // comparison. Reported as an incompleteness FACT, never as a verdict and
+    // never silently compared as a prefix.
+    if (!isC03MutationEvidenceComplete(mutationEvidence)) {
+      pushGap(gaps, "INCOMPLETE_C03_MUTATION_EVIDENCE");
+    }
+  }
+
   return {
     scenarioId: "C03",
     verificationChecks,
@@ -1439,6 +2166,7 @@ function buildC03Evidence(input: ScenarioEvidenceInput): C03Evidence {
     paymentAttemptLinked,
     paymentLinked,
     chaosLinkedProcessingAttemptCount: input.chaosProcessingAttempts.length,
+    mutationEvidence,
   };
 }
 
@@ -1467,6 +2195,7 @@ function buildC07Evidence(input: ScenarioEvidenceInput): C07Evidence {
   const authoritativeOriginalProcessingAttemptId =
     collectAuthoritativeOriginalGaps(gaps, input.originalProcessingAttempts);
   collectMerchantCorrelationGaps(gaps, run);
+  collectCaptureEvidenceGaps(gaps, input.authoritativeCapture);
 
   if (run.faultType !== "DROP_CLIENT_CONFIRMATION") {
     pushGap(gaps, "UNEXPECTED_FAULT_TYPE");
@@ -1554,6 +2283,7 @@ function buildC11Evidence(input: ScenarioEvidenceInput): C11Evidence {
     collectAuthoritativeOriginalGaps(gaps, input.originalProcessingAttempts);
   collectChaosProvenanceGaps(gaps, input.chaosProcessingAttempts);
   collectMerchantCorrelationGaps(gaps, run);
+  collectCaptureEvidenceGaps(gaps, input.authoritativeCapture);
 
   // C11 has no fault primitive of its own (`lib/chaos/registry.ts` —
   // `allowedFaultTypes: []`), so a non-NULL fault_type is itself an anomaly.

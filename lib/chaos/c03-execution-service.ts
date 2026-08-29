@@ -98,6 +98,13 @@ import "server-only";
 
 import { getRazorpayWebhookSecret } from "@/lib/config/razorpay-webhook-env";
 import { verifyWebhookSignature } from "@/lib/razorpay/webhook-verification";
+import { captureC03MutationSnapshot } from "@/lib/chaos/c03-mutation-snapshot-repository";
+import {
+  C03_MUTATION_SNAPSHOT_VERSION,
+  serializeC03MutationEvidence,
+  type C03MutationEvidenceV1,
+  type C03MutationSnapshotV1,
+} from "@/lib/chaos/c03-mutation-snapshot";
 import {
   blockPendingC03RunForPreSec007,
   completeRunningChaosRunUnknown,
@@ -152,6 +159,26 @@ export interface C03CheckResult {
 
 export interface C03FaultState {
   readonly checks: readonly C03CheckResult[];
+  /**
+   * Phase 3F evidence-compatibility correction — the before/after merchant
+   * state observed around the two controlled verification checks, captured
+   * during THIS run.
+   *
+   * docs/MONEY_INVARIANTS.md INV-005 states its rule as three deltas
+   * (`trusted canonical webhook rows created = 0`, `payment/business state
+   * delta = 0`, `fulfilment delta = 0`) and §6 requires before/after snapshots
+   * of `orders`, `payment_attempts`, `payments`, `fulfilments` and
+   * `webhook_events`. C03 correctly creates no `event_processing_attempts`
+   * row, so it has no `state_before`/`state_after` pair and had nowhere to put
+   * this evidence until now. It lives here, on the existing `fault_state`
+   * JSONB column — no new table, no fabricated processing attempt, no
+   * fabricated webhook event.
+   *
+   * This is FACTUAL EVIDENCE, never a verdict. Nothing in this module compares
+   * `before` against `after`; that comparison IS INV-005's decision and
+   * belongs to the Phase 3F Money Invariant Engine.
+   */
+  readonly mutationEvidence: C03MutationEvidenceV1;
 }
 
 /**
@@ -173,6 +200,33 @@ function runVerificationCase(
     case: caseName,
     classification: verified ? "UNEXPECTED_ACCEPTANCE" : "REJECTED",
   };
+}
+
+/**
+ * Captures one side of the C03 mutation evidence without ever being able to
+ * fail the run.
+ *
+ * `captureC03MutationSnapshot` is already written not to throw, so this is
+ * belt-and-braces: a capture problem must NEVER prevent the two signature
+ * checks from executing (they are the scenario), and must NEVER be papered
+ * over with a fabricated snapshot. A `null` here is a truthful "this evidence
+ * was not captured", which a later evaluator turns into UNKNOWN — not into a
+ * PASS, and not into a FAIL.
+ */
+async function captureC03MutationSnapshotSafely(
+  chaosRunId: string,
+  side: "before" | "after",
+): Promise<C03MutationSnapshotV1 | null> {
+  try {
+    return await captureC03MutationSnapshot();
+  } catch (err) {
+    logEvent("chaos_c03_mutation_snapshot_capture_failed", {
+      chaos_run_id: chaosRunId,
+      side,
+      error_name: err instanceof Error ? err.name : "UnknownError",
+    });
+    return null;
+  }
 }
 
 function isEligibleC03PendingRun(run: ChaosRunRow): boolean {
@@ -314,6 +368,19 @@ export async function executeC03InvalidSignatureTest(
   }
 
   try {
+    // FROZEN EXECUTION ORDER: capture BEFORE -> WRONG_SIGNATURE ->
+    // MISSING_SIGNATURE -> capture AFTER. The two captures bracket the two
+    // controlled verification checks and nothing else, so the observation
+    // window contains only synchronous, in-process HMAC comparisons — no
+    // network call, no HTTP request, no merchant processing and no write.
+    //
+    // Capture is INSTRUMENTATION. It never becomes merchant-state authority,
+    // never gates the checks, and never decides an invariant.
+    const stateBefore = await captureC03MutationSnapshotSafely(
+      chaosRunId,
+      "before",
+    );
+
     const wrongSignatureCheck = runVerificationCase(
       "WRONG_SIGNATURE",
       WRONG_SIGNATURE_VALUE,
@@ -325,16 +392,33 @@ export async function executeC03InvalidSignatureTest(
       buildSyntheticC03RawBody(chaosRunId, "missing"),
     );
 
+    const stateAfter = await captureC03MutationSnapshotSafely(
+      chaosRunId,
+      "after",
+    );
+
     const faultState: C03FaultState = {
       checks: [wrongSignatureCheck, missingSignatureCheck],
+      mutationEvidence: {
+        version: C03_MUTATION_SNAPSHOT_VERSION,
+        before: stateBefore,
+        after: stateAfter,
+      },
     };
 
     let completed: ChaosRunRow | null;
     try {
-      completed = await completeRunningChaosRunUnknown(
-        chaosRunId,
-        faultState as unknown as Record<string, unknown>,
-      );
+      completed = await completeRunningChaosRunUnknown(chaosRunId, {
+        // Serialized explicitly, field by field, rather than cast — the
+        // persisted JSON is exactly the declared contract and nothing else.
+        checks: faultState.checks.map((check) => ({
+          case: check.case,
+          classification: check.classification,
+        })),
+        mutationEvidence: serializeC03MutationEvidence(
+          faultState.mutationEvidence,
+        ),
+      });
     } catch (err) {
       logEvent("chaos_c03_completion_persistence_failed", {
         chaos_run_id: chaosRunId,

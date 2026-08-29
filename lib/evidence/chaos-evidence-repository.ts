@@ -93,7 +93,41 @@ const CHAOS_RUN_COLUMNS =
   "id, scenario_id, status, outcome, fault_type, data_classification, order_id, payment_attempt_id, payment_id, source_webhook_event_id, failed_precheck_id, execution_block_code, fault_state, started_at, completed_at";
 
 const WEBHOOK_EVENT_COLUMNS =
-  "id, razorpay_event_id, event_type, source_kind, signature_verified, processing_status, duplicate_delivery_count, received_at, payment_attempt_id, payment_id";
+  "id, razorpay_event_id, event_type, source_kind, signature_verified, processing_status, duplicate_delivery_count, received_at, payment_attempt_id, payment_id, razorpay_payment_id, amount_subunits, currency";
+
+/**
+ * The frozen filters that define an AUTHORITATIVE captured-payment basis
+ * (docs/MONEY_INVARIANTS.md §5 "Authoritative Successful Payment Evidence":
+ * "verified REAL_RAZORPAY_WEBHOOK / event_type = payment.captured / correlated
+ * to the Razorpay Payment and internal payment attempt").
+ *
+ * `source_kind` and `signature_verified` are already CHECK-constrained on
+ * `webhook_events` (`webhook_events_source_kind_valid`,
+ * `webhook_events_signature_verified_true`), so these two filters are
+ * belt-and-braces. They are written out explicitly anyway so the query STATES
+ * its own authenticity conditions rather than relying on a constraint a
+ * reviewer has to go and look up — and so that a future schema change can
+ * never silently widen what counts as provider capture evidence.
+ *
+ * `processing_status` is deliberately NOT filtered: a signature-verified
+ * provider `payment.captured` delivery is authentic provider evidence of
+ * capture whether or not PayChaos finished processing it. Filtering on
+ * `PROCESSED` would silently discard real capture evidence and could produce
+ * exactly the false "no capture exists" conclusion this search exists to
+ * prevent. The actual status is projected truthfully instead, for Phase 3F to
+ * weigh.
+ */
+const CAPTURE_EVENT_TYPE = "payment.captured";
+const CAPTURE_SOURCE_KIND = "REAL_RAZORPAY_WEBHOOK";
+
+/**
+ * Upper bound on capture candidates read. Four is more than enough to
+ * distinguish the only three outcomes that matter (zero / exactly one / more
+ * than one) while never silently hiding a third or fourth conflicting row
+ * behind a `limit(1)`. There is deliberately NO `limit(1)`: taking the "first"
+ * row would be latest-wins authority by another name.
+ */
+const CAPTURE_CANDIDATE_READ_LIMIT = 4;
 
 const PROCESSING_ATTEMPT_COLUMNS =
   "id, webhook_event_id, chaos_run_id, source_kind, status, is_duplicate_delivery, payment_attempt_id, payment_id, error_code, started_at, finished_at, state_before, state_after";
@@ -213,6 +247,114 @@ export async function loadChaosRunEvidenceSource(
     );
   }
 
+  // ==========================================================================
+  // AUTHORITATIVE CAPTURE SEARCH
+  // ==========================================================================
+  //
+  // WHY THIS EXISTS. `sourceWebhook` is only the chaos run's SOURCE event. A
+  // C11 run is sourced from `payment.failed` by definition, and C01/C07 may
+  // legitimately be sourced from `order.paid` (see `requiredSourceEventTypes`
+  // in lib/chaos/registry.ts) — which docs/MONEY_INVARIANTS.md §5 explicitly
+  // downgrades to "corroborating" evidence. So the frozen bundle carried NO
+  // way to establish a verified captured-payment basis, which INV-004 §8
+  // condition 3 and INV-010 §8 both require, and which INV-003 §12 needs as
+  // its "capture-event search result".
+  //
+  // `payments.captured_at` cannot substitute for it. That column is written by
+  // `process_webhook_payment_event`'s own `payment.captured` branch
+  // (`captured_at = coalesce(captured_at, v_now)`) — i.e. by the very merchant
+  // processing transaction these invariants exist to audit. Trusting it as
+  // proof of an authoritative capture basis would be circular, and
+  // docs/MONEY_INVARIANTS.md §4 ranks verified provider evidence strictly
+  // above durable PayChaos state. It remains SUPPORTING evidence only, and it
+  // already reaches the bundle inside the merchant-state snapshots.
+  //
+  // SUBJECT RESOLUTION. Both identity dimensions come ONLY from trusted
+  // persisted rows — the chaos run's own FK column and the canonical source
+  // webhook's own normalized columns. Never a browser value, never a
+  // caller-supplied Razorpay id, never a value parsed out of a payload here.
+  //
+  // TWO SEPARATE EXACT QUERIES, NOT ONE `.or(...)`. PostgREST's `.or()` takes
+  // a filter string, which would mean interpolating identifiers into a filter
+  // DSL. Two independent parameterized `.eq()` reads avoid constructing any
+  // filter expression from data at all, and the union is computed in the pure
+  // builder. Every filter here is exact equality — never `like`, `ilike`, a
+  // substring, a prefix, a fuzzy match, a timestamp preference or an ordering
+  // that could act as "latest wins".
+  //
+  // A FAILED SEARCH IS NEVER SILENCE. If either read fails this throws, so an
+  // infrastructure failure can never be mistaken for "no capture evidence
+  // exists". `captureProviderSearchPerformed` records whether the PROVIDER
+  // identity dimension was actually searched — the pure builder refuses to
+  // report a complete negative result without it, because an internal-FK-only
+  // search could miss a genuine capture whose `payment_id` correlation is
+  // absent.
+  const captureSubjectRazorpayPaymentId =
+    sourceWebhook?.razorpay_payment_id ?? null;
+  const captureSubjectInternalPaymentIds: string[] = [];
+  if (run.payment_id) {
+    captureSubjectInternalPaymentIds.push(run.payment_id);
+  }
+  if (sourceWebhook?.payment_id) {
+    captureSubjectInternalPaymentIds.push(sourceWebhook.payment_id);
+  }
+
+  const captureCandidates: RawWebhookEvidenceRow[] = [];
+  let captureProviderSearchPerformed = false;
+
+  // The ENTIRE search is gated on having an exact trusted PROVIDER identity.
+  //
+  // This is not an optimization, it is the completeness rule expressed as
+  // control flow. Without a provider identity the pure resolver returns
+  // `SEARCH_INCOMPLETE` no matter what any other query found, because an
+  // internal-`payment_id`-only search cannot see a genuine capture whose
+  // internal correlation is missing — and reporting "no capture exists" from
+  // such a search would produce a false INV-003/INV-004/INV-010 finding.
+  // Issuing reads whose results can never change the outcome would only
+  // create the illusion that a negative result had been established.
+  if (captureSubjectRazorpayPaymentId) {
+    const { data: providerMatches, error: providerMatchError } = await client
+      .from("webhook_events")
+      .select(WEBHOOK_EVENT_COLUMNS)
+      .eq("razorpay_payment_id", captureSubjectRazorpayPaymentId)
+      .eq("event_type", CAPTURE_EVENT_TYPE)
+      .eq("source_kind", CAPTURE_SOURCE_KIND)
+      .eq("signature_verified", true)
+      .limit(CAPTURE_CANDIDATE_READ_LIMIT);
+
+    if (providerMatchError) {
+      throw new ChaosEvidenceRepositoryError(
+        "CHAOS_EVIDENCE_CAPTURE_PROVIDER_LOOKUP_FAILED",
+        "Failed to search for authoritative capture evidence by provider payment identity.",
+      );
+    }
+    captureProviderSearchPerformed = true;
+    captureCandidates.push(...(providerMatches ?? []));
+
+    // The internal dimension is searched independently and unioned in, so a
+    // capture row that IS relationally correlated but carries no normalized
+    // `razorpay_payment_id` still surfaces rather than being invisible.
+    // Deduplication by `id` happens in the pure builder.
+    for (const internalPaymentId of captureSubjectInternalPaymentIds) {
+      const { data: internalMatches, error: internalMatchError } = await client
+        .from("webhook_events")
+        .select(WEBHOOK_EVENT_COLUMNS)
+        .eq("payment_id", internalPaymentId)
+        .eq("event_type", CAPTURE_EVENT_TYPE)
+        .eq("source_kind", CAPTURE_SOURCE_KIND)
+        .eq("signature_verified", true)
+        .limit(CAPTURE_CANDIDATE_READ_LIMIT);
+
+      if (internalMatchError) {
+        throw new ChaosEvidenceRepositoryError(
+          "CHAOS_EVIDENCE_CAPTURE_INTERNAL_LOOKUP_FAILED",
+          "Failed to search for authoritative capture evidence by internal payment identity.",
+        );
+      }
+      captureCandidates.push(...(internalMatches ?? []));
+    }
+  }
+
   return {
     // Deterministic ordering is applied by the pure builder, never relied
     // upon from the database's own return order.
@@ -221,5 +363,9 @@ export async function loadChaosRunEvidenceSource(
     originalProcessingAttempts,
     chaosProcessingAttempts: chaosAttempts ?? [],
     canonicalSourceEventCount,
+    captureSubjectRazorpayPaymentId,
+    captureSubjectInternalPaymentIds,
+    captureProviderSearchPerformed,
+    captureCandidates,
   };
 }

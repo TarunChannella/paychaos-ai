@@ -1549,13 +1549,57 @@ There is no separate `chaos_scenarios` database table.
 | `failed_precheck_id` | `text` | **Yes** | `NULL` | CHECK approved values | Which PRECHECK-01..10 blocked this run at CREATION time |
 | `execution_block_code` | `text` | **Yes** | `NULL` | `chaos_runs_execution_block_code_valid` (`NULL` or `'PRE-SEC-007'`) | Which EXECUTION-TIME PRE-SEC-xxx check blocked this already-persisted PENDING run immediately before mechanism execution began — **added in Phase 3D-0** (see Phase Ownership below) |
 | `fault_config` | `jsonb` | No | `{}` | object | Immutable requested fault configuration |
-| `fault_state` | `jsonb` | No | `{}` | object | Runtime hold/release/transient state |
+| `fault_state` | `jsonb` | No | `{}` | object | Runtime hold/release/transient state, plus C03's `mutationEvidence` (see "C03 `fault_state` shape" below) |
 | `data_classification` | `text` | No | **none** | CHECK | Real/synthetic classification — must be supplied explicitly |
 | `error_message_redacted` | `text` | Yes | `NULL` | — | Run failure detail |
 | `started_at` | `timestamptz` | Yes | `NULL` | — | Actual run start — remains `NULL` for a BLOCKED run (execution never began) |
 | `completed_at` | `timestamptz` | Yes | `NULL` | — | Actual run end, or BLOCKED finalization time |
 | `created_at` | `timestamptz` | No | `now()` | — | Creation |
 | `updated_at` | `timestamptz` | No | `now()` | — | Last status update |
+
+### C03 `fault_state` shape (Phase 3F evidence-compatibility correction)
+
+`chaos_runs.fault_state` carries **exactly one of two key sets** for a C03 run, and nothing else. A third key, a renamed key, or a generic pass-through blob is rejected by the reader.
+
+```text
+LEGACY   { checks }
+CURRENT  { checks, mutationEvidence }
+```
+
+`mutationEvidence` is the before/after Demo Merchant state that `docs/MONEY_INVARIANTS.md` INV-005 §6 requires:
+
+```text
+mutationEvidence = {
+  version: 1,
+  before:  <C03MutationSnapshotV1> | null,
+  after:   <C03MutationSnapshotV1> | null
+}
+
+C03MutationSnapshotV1 = {
+  version: 1,
+  orders:               { count, rows, complete } | null,
+  paymentAttempts:      { count, rows, complete } | null,
+  payments:             { count, rows, complete } | null,
+  fulfilments:          { count, rows, complete } | null,
+  trustedWebhookEvents: { count, ids,  complete } | null
+}
+```
+
+**Why it exists.** C03 is verification-only by design: it calls the real signature-verification primitive directly and creates **no** `webhook_events` row and **no** `event_processing_attempts` row. That is correct, but it also means C03 has no `state_before`/`state_after` pair — those columns live on a processing attempt, and C03 correctly never creates one. Without this evidence INV-005 could only ever have evaluated `UNKNOWN`, which would leave the only executable invalid-signature scenario permanently unable to prove its own core safety property.
+
+**No migration was required.** `fault_state` is already `jsonb NOT NULL DEFAULT '{}'` with only a `jsonb_typeof(fault_state) = 'object'` CHECK.
+
+**Scope.** There is **no `merchant_id`/tenant column anywhere** in this schema, so the snapshot covers the whole controlled Demo Merchant dataset across the five tables INV-005 §6 names. One is never invented to manufacture a narrower scope.
+
+**State, not just counts.** The four business collections carry full row-state projections, reusing the frozen `MerchantStateSnapshot*V1` field vocabulary. An order can move `UNPAID → PAID` and a payment can gain a `captured_at` while the row count stays identical, so a count-only snapshot would miss real money mutation. `trustedWebhookEvents` is the deliberate exception and carries internal UUIDs plus an exact count, because INV-005's webhook clause is an insertion test.
+
+**Truthful incompleteness.** A `null` collection means the read FAILED and is never conflated with `{count: 0, rows: [], complete: true}` (read successfully, genuinely empty). `complete: false` means the bounded read (cap: 200 rows) was truncated; two truncated prefixes must never be compared and called "unchanged". Both are factual incompleteness that Phase 3F turns into `UNKNOWN` — never into a fabricated `PASS`, and never into a `FAIL`.
+
+**Historical rows are never backfilled.** The already-approved historical C03 run carries the LEGACY `{checks}` shape. It stays that way permanently: INV-004 `NOT_APPLICABLE`, INV-005 `UNKNOWN`. A snapshot taken today would be a false claim about a run that executed in the past.
+
+**Test precondition (ARCH-3F-014).** C03 must be run in the controlled Demo Merchant sandbox with **no concurrent payment flow in progress**. An unrelated concurrent payment landing between the two captures would change the snapshot, and this evidence cannot distinguish that from a mutation C03 caused. The control is an operator rule, not a lock — no advisory lock, queue, worker, extra table or extra precheck is introduced.
+
+**This is evidence, not a verdict.** Nothing in the chaos or evidence layer compares `before` against `after`. That comparison is INV-005's decision and belongs to the Phase 3F Money Invariant Engine.
 
 **Nullable links (architect-approved correction — Phase 3B):** `order_id`/`payment_attempt_id`/`payment_id`/`source_webhook_event_id` are all nullable because not every P0 scenario has an entity/evidence target at chaos-run creation time. C03 (Mechanism C) targets PayChaos's own fixed internal webhook-verification path and has no merchant order at all. C07 and C11 Mechanism A begin from a fresh order, but the frozen Phase 3A precheck contract never guarantees that order already has a `payment_attempts` row — Checkout, which creates the attempt, happens after a chaos run is requested. These links are never fabricated merely to populate the column; a `NULL` link is preferred over a false one.
 

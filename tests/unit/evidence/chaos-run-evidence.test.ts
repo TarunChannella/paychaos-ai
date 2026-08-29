@@ -24,9 +24,12 @@ import {
   compareEvidenceRefs,
   dedupeAndSortEvidenceGaps,
   dedupeAndSortEvidenceRefs,
+  isC03MutationEvidenceComplete,
+  parseC03MutationEvidence,
   parseC03VerificationChecks,
   parseC07FaultStateEvidence,
   parseMerchantStateSnapshotV1,
+  resolveAuthoritativeCaptureEvidence,
   resolveAuthoritativeOriginalProcessingAttempt,
   type ChaosRunEvidenceBundleV1,
   type ChaosRunEvidenceSource,
@@ -120,6 +123,9 @@ function runRow(
   };
 }
 
+/** Matches the `razorpayPaymentId` inside `validSnapshot()`, so the trusted provider identity is self-consistent across the fixture. */
+const RAZORPAY_PAYMENT_ID = "pay_synthetic";
+
 function webhookRow(
   overrides: Partial<RawWebhookEvidenceRow> = {},
 ): RawWebhookEvidenceRow {
@@ -134,7 +140,43 @@ function webhookRow(
     received_at: "2026-07-31T23:59:00.000Z",
     payment_attempt_id: PAYMENT_ATTEMPT_ID,
     payment_id: PAYMENT_ID,
+    razorpay_payment_id: RAZORPAY_PAYMENT_ID,
+    amount_subunits: 75_000,
+    currency: "INR",
     ...overrides,
+  };
+}
+
+type CaptureSearchInputs = Pick<
+  ChaosRunEvidenceSource,
+  | "captureSubjectRazorpayPaymentId"
+  | "captureSubjectInternalPaymentIds"
+  | "captureProviderSearchPerformed"
+  | "captureCandidates"
+>;
+
+/**
+ * The default capture-search inputs for a run that HAS a payment: an exact
+ * trusted provider identity, the provider dimension actually searched, and
+ * zero candidates. That resolves to `NONE_OBSERVED` — a complete, valid
+ * negative search fact that emits no gap.
+ */
+function captureSearchDefaults(): CaptureSearchInputs {
+  return {
+    captureSubjectRazorpayPaymentId: RAZORPAY_PAYMENT_ID,
+    captureSubjectInternalPaymentIds: [PAYMENT_ID],
+    captureProviderSearchPerformed: true,
+    captureCandidates: [],
+  };
+}
+
+/** A run with no payment correlation at all (C03 by design; a BLOCKED run that never executed). */
+function noCaptureSubject(): CaptureSearchInputs {
+  return {
+    captureSubjectRazorpayPaymentId: null,
+    captureSubjectInternalPaymentIds: [],
+    captureProviderSearchPerformed: false,
+    captureCandidates: [],
   };
 }
 
@@ -185,6 +227,7 @@ function healthyC01Source(
       replayRow(REPLAY_ATTEMPT_B_ID),
     ],
     canonicalSourceEventCount: 1,
+    ...captureSearchDefaults(),
     ...overrides,
   };
 }
@@ -984,6 +1027,78 @@ describe("C01 evidence assembly", () => {
 // 6. C03 — Invalid Webhook Signature (the special case)
 // ===========================================================================
 
+/** One complete, valid C03 mutation snapshot side, as persisted by `lib/chaos/c03-mutation-snapshot.ts`. */
+function c03SnapshotJson(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    version: 1,
+    orders: {
+      count: 1,
+      complete: true,
+      rows: [
+        {
+          id: ORDER_ID,
+          paymentStatus: "UNPAID",
+          businessStatus: "OPEN",
+          amountSubunits: 75_000,
+          currency: "INR",
+        },
+      ],
+    },
+    paymentAttempts: { count: 0, complete: true, rows: [] },
+    payments: { count: 0, complete: true, rows: [] },
+    fulfilments: { count: 0, complete: true, rows: [] },
+    trustedWebhookEvents: { count: 0, complete: true, ids: [] },
+    ...overrides,
+  };
+}
+
+/** The corrected `fault_state.mutationEvidence` envelope. */
+function c03MutationEvidenceJson(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    version: 1,
+    before: c03SnapshotJson(),
+    after: c03SnapshotJson(),
+    ...overrides,
+  };
+}
+
+/** The VALIDATED shape `c03SnapshotJson()` parses into (no `version` field — the envelope version is validated, not re-exposed). */
+function expectedParsedC03Snapshot() {
+  return {
+    orders: {
+      count: 1,
+      complete: true,
+      rows: [
+        {
+          id: ORDER_ID,
+          paymentStatus: "UNPAID",
+          businessStatus: "OPEN",
+          amountSubunits: 75_000,
+          currency: "INR",
+        },
+      ],
+    },
+    paymentAttempts: { count: 0, complete: true, rows: [] },
+    payments: { count: 0, complete: true, rows: [] },
+    fulfilments: { count: 0, complete: true, rows: [] },
+    trustedWebhookEvents: { count: 0, complete: true, ids: [] },
+  };
+}
+
+/** The LEGACY `fault_state` shape — exactly what the already-approved historical C03 run carries. */
+function c03LegacyFaultState(): Record<string, unknown> {
+  return {
+    checks: [
+      { case: "WRONG_SIGNATURE", classification: "REJECTED" },
+      { case: "MISSING_SIGNATURE", classification: "REJECTED" },
+    ],
+  };
+}
+
 function c03Source(
   overrides: Partial<ChaosRunEvidenceSource> = {},
 ): ChaosRunEvidenceSource {
@@ -997,16 +1112,15 @@ function c03Source(
       payment_id: null,
       source_webhook_event_id: null,
       fault_state: {
-        checks: [
-          { case: "WRONG_SIGNATURE", classification: "REJECTED" },
-          { case: "MISSING_SIGNATURE", classification: "REJECTED" },
-        ],
+        ...c03LegacyFaultState(),
+        mutationEvidence: c03MutationEvidenceJson(),
       },
     }),
     sourceWebhook: null,
     originalProcessingAttempts: [],
     chaosProcessingAttempts: [],
     canonicalSourceEventCount: null,
+    ...noCaptureSubject(),
     ...overrides,
   };
 }
@@ -1027,6 +1141,10 @@ describe("C03 evidence assembly", () => {
       paymentAttemptLinked: false,
       paymentLinked: false,
       chaosLinkedProcessingAttemptCount: 0,
+      mutationEvidence: {
+        before: expectedParsedC03Snapshot(),
+        after: expectedParsedC03Snapshot(),
+      },
     });
     expect(bundle.gaps).toEqual([]);
     expect(bundle.requiredInvariantIds).toEqual(["INV-004", "INV-005"]);
@@ -1084,6 +1202,7 @@ describe("C03 evidence assembly", () => {
               },
               { case: "MISSING_SIGNATURE", classification: "REJECTED" },
             ],
+            mutationEvidence: c03MutationEvidenceJson(),
           },
         }),
       }),
@@ -1151,6 +1270,7 @@ function c07Source(
     originalProcessingAttempts: [attemptRow()],
     chaosProcessingAttempts: [],
     canonicalSourceEventCount: 1,
+    ...captureSearchDefaults(),
     ...overrides,
   };
 }
@@ -1297,6 +1417,7 @@ function c11Source(
     originalProcessingAttempts: [attemptRow()],
     chaosProcessingAttempts: [],
     canonicalSourceEventCount: 1,
+    ...captureSearchDefaults(),
     ...overrides,
   };
 }
@@ -1406,6 +1527,7 @@ describe("C11 evidence assembly", () => {
       originalProcessingAttempts: [],
       chaosProcessingAttempts: [],
       canonicalSourceEventCount: null,
+      ...noCaptureSubject(),
     });
 
     expect(bundle.sourceWebhook).toBeNull();
@@ -1795,5 +1917,594 @@ describe("C03 data classification", () => {
     expect(bundle.evidenceRefs).toEqual([{ kind: "CHAOS_RUN", id: RUN_ID }]);
     // And it is a gap, never a verdict.
     expect(JSON.stringify(bundle)).not.toContain("FAIL");
+  });
+});
+
+// ===========================================================================
+// Phase 3F evidence-compatibility correction
+// ===========================================================================
+
+describe("W-AA: trusted webhook money and provider-identity projection (INV-008)", () => {
+  it("W: amount_subunits is projected exactly as a whole-subunit integer", () => {
+    const bundle = buildChaosRunEvidenceBundle(
+      healthyC01Source({
+        sourceWebhook: webhookRow({ amount_subunits: 75_000 }),
+      }),
+    );
+    expect(bundle.sourceWebhook!.amountSubunits).toBe(75_000);
+    expect(Number.isInteger(bundle.sourceWebhook!.amountSubunits)).toBe(true);
+  });
+
+  it("X: currency is projected exactly, unmodified", () => {
+    const bundle = buildChaosRunEvidenceBundle(
+      healthyC01Source({ sourceWebhook: webhookRow({ currency: "USD" }) }),
+    );
+    expect(bundle.sourceWebhook!.currency).toBe("USD");
+  });
+
+  it("Y: NULL money values are preserved and never defaulted to 0 or INR", () => {
+    const bundle = buildChaosRunEvidenceBundle(
+      healthyC01Source({
+        sourceWebhook: webhookRow({ amount_subunits: null, currency: null }),
+      }),
+    );
+    expect(bundle.sourceWebhook!.amountSubunits).toBeNull();
+    expect(bundle.sourceWebhook!.currency).toBeNull();
+    expect(bundle.sourceWebhook!.amountSubunits).not.toBe(0);
+    expect(bundle.sourceWebhook!.currency).not.toBe("INR");
+  });
+
+  it("Z: the trusted provider payment identity is projected, but razorpay_order_id is NOT (unused by the correlation contract)", () => {
+    const bundle = buildChaosRunEvidenceBundle(healthyC01Source());
+    expect(bundle.sourceWebhook!.razorpayPaymentId).toBe(RAZORPAY_PAYMENT_ID);
+    expect(Object.keys(bundle.sourceWebhook!).sort()).toEqual([
+      "amountSubunits",
+      "currency",
+      "duplicateDeliveryCount",
+      "eventType",
+      "id",
+      "paymentAttemptId",
+      "paymentId",
+      "processingStatus",
+      "razorpayEventId",
+      "razorpayPaymentId",
+      "receivedAt",
+      "signatureVerified",
+      "sourceKind",
+    ]);
+  });
+
+  it("AA: no normalized_event or raw payload can reach the bundle", () => {
+    const bundle = buildChaosRunEvidenceBundle(healthyC01Source());
+    const json = JSON.stringify(bundle);
+    expect(json).not.toContain("normalizedEvent");
+    expect(json).not.toContain("normalized_event");
+    expect(json).not.toContain("rawPayload");
+    expect(json).not.toContain("raw_payload_redacted");
+    expect(json).not.toContain("rawBodySha256");
+  });
+});
+
+describe("AB-AQ: authoritative capture evidence resolution", () => {
+  const CAPTURE_WEBHOOK_ID = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+
+  function captureWebhook(overrides: Partial<RawWebhookEvidenceRow> = {}) {
+    return webhookRow({
+      id: CAPTURE_WEBHOOK_ID,
+      razorpay_event_id: "evt_capture",
+      event_type: "payment.captured",
+      ...overrides,
+    });
+  }
+
+  it("AB: exactly one verified provider capture correlated to the internal payment resolves EXACTLY_ONE", () => {
+    const bundle = buildChaosRunEvidenceBundle(
+      healthyC01Source({ captureCandidates: [captureWebhook()] }),
+    );
+    expect(bundle.authoritativeCapture.kind).toBe("EXACTLY_ONE");
+    expect(bundle.authoritativeCaptureWebhook!.eventType).toBe(
+      "payment.captured",
+    );
+    expect(bundle.authoritativeCaptureWebhook!.sourceKind).toBe(
+      "REAL_RAZORPAY_WEBHOOK",
+    );
+    expect(bundle.authoritativeCaptureWebhook!.signatureVerified).toBe(true);
+    expect(gapCodes(bundle)).not.toContain(
+      "INCOMPLETE_CAPTURE_INTERNAL_CORRELATION",
+    );
+  });
+
+  it("AC: a complete search finding zero candidates is NONE_OBSERVED and emits NO gap (INV-003 valid negative search result)", () => {
+    const bundle = buildChaosRunEvidenceBundle(
+      c11Source({ captureCandidates: [] }),
+    );
+    expect(bundle.authoritativeCapture.kind).toBe("NONE_OBSERVED");
+    expect(bundle.authoritativeCaptureWebhook).toBeNull();
+    expect(gapCodes(bundle)).not.toContain("MISSING_CAPTURE_SEARCH_SUBJECT");
+    expect(gapCodes(bundle)).not.toContain("INCOMPLETE_CAPTURE_SEARCH");
+    expect(gapCodes(bundle)).not.toContain(
+      "AMBIGUOUS_AUTHORITATIVE_CAPTURE_WEBHOOK",
+    );
+  });
+
+  it("AD: a provider-identity match whose INTERNAL correlation is missing stays VISIBLE and is never collapsed into NONE_OBSERVED", () => {
+    const bundle = buildChaosRunEvidenceBundle(
+      c11Source({
+        captureCandidates: [captureWebhook({ payment_id: null })],
+      }),
+    );
+    expect(bundle.authoritativeCapture.kind).toBe(
+      "INCOMPLETE_INTERNAL_CORRELATION",
+    );
+    expect(bundle.authoritativeCaptureWebhook).not.toBeNull();
+    expect(bundle.authoritativeCaptureWebhook!.razorpayPaymentId).toBe(
+      RAZORPAY_PAYMENT_ID,
+    );
+    expect(gapCodes(bundle)).toContain(
+      "INCOMPLETE_CAPTURE_INTERNAL_CORRELATION",
+    );
+    expect(bundle.authoritativeCapture.kind).not.toBe("NONE_OBSERVED");
+  });
+
+  it("AD2: a provider match whose internal correlation names a DIFFERENT payment also stays visible, never NONE_OBSERVED", () => {
+    const bundle = buildChaosRunEvidenceBundle(
+      c11Source({
+        captureCandidates: [
+          captureWebhook({
+            payment_id: "99999999-9999-9999-9999-999999999999",
+          }),
+        ],
+      }),
+    );
+    expect(bundle.authoritativeCapture.kind).toBe(
+      "INCOMPLETE_INTERNAL_CORRELATION",
+    );
+    expect(bundle.authoritativeCaptureWebhook).not.toBeNull();
+  });
+
+  it("AE: more than one candidate is AMBIGUOUS, never latest-wins, and every candidate stays traceable", () => {
+    const secondId = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+    const second = captureWebhook({
+      id: secondId,
+      razorpay_event_id: "evt_capture_2",
+      received_at: "2030-01-01T00:00:00.000Z",
+    });
+    const bundle = buildChaosRunEvidenceBundle(
+      c11Source({ captureCandidates: [captureWebhook(), second] }),
+    );
+    expect(bundle.authoritativeCapture.kind).toBe("AMBIGUOUS");
+    expect(bundle.authoritativeCaptureWebhook).toBeNull();
+    expect(gapCodes(bundle)).toContain(
+      "AMBIGUOUS_AUTHORITATIVE_CAPTURE_WEBHOOK",
+    );
+    const refIds = bundle.evidenceRefs
+      .filter((r) => r.kind === "WEBHOOK_EVENT")
+      .map((r) => r.id);
+    expect(refIds).toContain(CAPTURE_WEBHOOK_ID);
+    expect(refIds).toContain(secondId);
+  });
+
+  it("AF: NO trustworthy subject resolves NO_SUBJECT, never NONE_OBSERVED", () => {
+    const bundle = buildChaosRunEvidenceBundle(
+      c11Source({
+        sourceWebhook: null,
+        canonicalSourceEventCount: null,
+        captureSubjectRazorpayPaymentId: null,
+        captureSubjectInternalPaymentIds: [],
+        captureProviderSearchPerformed: false,
+        captureCandidates: [],
+      }),
+    );
+    expect(bundle.authoritativeCapture.kind).toBe("NO_SUBJECT");
+    expect(bundle.authoritativeCapture.kind).not.toBe("NONE_OBSERVED");
+    expect(gapCodes(bundle)).toContain("MISSING_CAPTURE_SEARCH_SUBJECT");
+  });
+
+  it("AG: a subject with NO trusted provider identity is SEARCH_INCOMPLETE, so no negative conclusion is drawn from an internal-only search", () => {
+    const bundle = buildChaosRunEvidenceBundle(
+      c11Source({
+        captureSubjectRazorpayPaymentId: null,
+        captureProviderSearchPerformed: false,
+      }),
+    );
+    expect(bundle.authoritativeCapture.kind).toBe("SEARCH_INCOMPLETE");
+    expect(bundle.authoritativeCapture.kind).not.toBe("NONE_OBSERVED");
+    expect(gapCodes(bundle)).toContain("INCOMPLETE_CAPTURE_SEARCH");
+  });
+
+  it("AH: conflicting trusted internal subjects resolve AMBIGUOUS_SUBJECT with no arbitration", () => {
+    const bundle = buildChaosRunEvidenceBundle(
+      c11Source({
+        captureSubjectInternalPaymentIds: [
+          PAYMENT_ID,
+          "88888888-8888-8888-8888-888888888888",
+        ],
+      }),
+    );
+    expect(bundle.authoritativeCapture.kind).toBe("AMBIGUOUS_SUBJECT");
+    expect(bundle.authoritativeCaptureWebhook).toBeNull();
+    expect(gapCodes(bundle)).toContain("AMBIGUOUS_CAPTURE_SEARCH_SUBJECT");
+  });
+
+  it("AI: a candidate whose provider identity conflicts with the subject is AMBIGUOUS, never silently accepted", () => {
+    const bundle = buildChaosRunEvidenceBundle(
+      c11Source({
+        captureCandidates: [
+          captureWebhook({ razorpay_payment_id: "pay_some_other_payment" }),
+        ],
+      }),
+    );
+    expect(bundle.authoritativeCapture.kind).toBe("AMBIGUOUS");
+    expect(bundle.authoritativeCaptureWebhook).toBeNull();
+  });
+
+  it("AJ: a payment.failed source stays the sourceWebhook and is never replaced by capture evidence", () => {
+    const bundle = buildChaosRunEvidenceBundle(
+      c11Source({ captureCandidates: [captureWebhook()] }),
+    );
+    expect(bundle.sourceWebhook!.eventType).toBe("payment.failed");
+    expect(bundle.sourceWebhook!.id).toBe(WEBHOOK_ID);
+    expect(bundle.authoritativeCaptureWebhook!.id).not.toBe(
+      bundle.sourceWebhook!.id,
+    );
+    expect(bundle.authoritativeCaptureWebhook!.eventType).toBe(
+      "payment.captured",
+    );
+  });
+
+  it("AK: capture evidence retains its OWN provenance and processing status, never inherited and never filtered away", () => {
+    const bundle = buildChaosRunEvidenceBundle(
+      c11Source({
+        captureCandidates: [captureWebhook({ processing_status: "FAILED" })],
+      }),
+    );
+    expect(bundle.authoritativeCaptureWebhook!.processingStatus).toBe("FAILED");
+    expect(bundle.authoritativeCaptureWebhook!.sourceKind).toBe(
+      "REAL_RAZORPAY_WEBHOOK",
+    );
+  });
+
+  it("AL: a PAYCHAOS_REPLAY row is never relabelled as provider capture evidence", () => {
+    const bundle = buildChaosRunEvidenceBundle(
+      c11Source({
+        captureCandidates: [captureWebhook({ source_kind: "PAYCHAOS_REPLAY" })],
+      }),
+    );
+    expect(bundle.authoritativeCaptureWebhook?.sourceKind).not.toBe(
+      "REAL_RAZORPAY_WEBHOOK",
+    );
+    for (const attempt of bundle.chaosProcessingAttempts) {
+      if (attempt.sourceKind === "PAYCHAOS_REPLAY") {
+        expect(attempt.sourceKind).toBe("PAYCHAOS_REPLAY");
+      }
+    }
+  });
+
+  it("AM: the resolver is deterministic and collapses duplicate subject ids rather than calling them ambiguous", () => {
+    const input = {
+      subjectRazorpayPaymentId: RAZORPAY_PAYMENT_ID,
+      subjectInternalPaymentIds: [PAYMENT_ID, PAYMENT_ID],
+      providerSearchPerformed: true,
+      candidates: [],
+    };
+    expect(resolveAuthoritativeCaptureEvidence(input)).toEqual(
+      resolveAuthoritativeCaptureEvidence(input),
+    );
+    expect(resolveAuthoritativeCaptureEvidence(input).kind).toBe(
+      "NONE_OBSERVED",
+    );
+  });
+
+  it("AN: C03 never emits a capture gap because it has no payment by design", () => {
+    const bundle = buildChaosRunEvidenceBundle(c03Source());
+    expect(bundle.authoritativeCapture.kind).toBe("NO_SUBJECT");
+    expect(gapCodes(bundle)).not.toContain("MISSING_CAPTURE_SEARCH_SUBJECT");
+    expect(bundle.gaps).toEqual([]);
+  });
+
+  it("AO: the resolution never carries a money verdict", () => {
+    const bundle = buildChaosRunEvidenceBundle(
+      c11Source({ captureCandidates: [captureWebhook()] }),
+    );
+    const json = JSON.stringify(bundle.authoritativeCapture);
+    for (const verdict of ["PASS", "FAIL", "NOT_APPLICABLE"]) {
+      expect(json).not.toContain(verdict);
+    }
+  });
+});
+
+describe("A-V: C03 mutation evidence (INV-005 inputs)", () => {
+  it("I: the LEGACY checks-only fault_state parses truthfully, mutationEvidence is null and reported as a gap, never reconstructed", () => {
+    const bundle = buildChaosRunEvidenceBundle(
+      c03Source({
+        run: runRow({
+          ...c03Source().run,
+          fault_state: c03LegacyFaultState(),
+        }),
+      }),
+    );
+    expect(gapCodes(bundle)).toContain("MISSING_C03_MUTATION_EVIDENCE");
+    expect(bundle.scenarioEvidence).toMatchObject({
+      scenarioId: "C03",
+      mutationEvidence: null,
+      verificationChecks: [
+        { case: "WRONG_SIGNATURE", classification: "REJECTED" },
+        { case: "MISSING_SIGNATURE", classification: "REJECTED" },
+      ],
+    });
+    expect(JSON.stringify(bundle)).not.toContain("backfill");
+  });
+
+  it("I2: parseC03MutationEvidence reports ABSENT for the legacy shape and PRESENT for the corrected one", () => {
+    expect(parseC03MutationEvidence(c03LegacyFaultState()).kind).toBe("ABSENT");
+    expect(
+      parseC03MutationEvidence({
+        ...c03LegacyFaultState(),
+        mutationEvidence: c03MutationEvidenceJson(),
+      }).kind,
+    ).toBe("PRESENT");
+  });
+
+  it("I3: an invalid or wrong-version mutationEvidence is INVALID, never silently accepted or repaired", () => {
+    const badValues: Record<string, unknown>[] = [
+      { mutationEvidence: { version: 2, before: null, after: null } },
+      { mutationEvidence: { version: 1, before: null } },
+      { mutationEvidence: { version: 1, before: null, after: null, x: 1 } },
+      { mutationEvidence: "not-an-object" },
+      { mutationEvidence: { version: 1, before: { version: 9 }, after: null } },
+    ];
+    for (const bad of badValues) {
+      expect(
+        parseC03MutationEvidence({ ...c03LegacyFaultState(), ...bad }).kind,
+      ).toBe("INVALID");
+    }
+  });
+
+  it("I4: an arbitrary extra fault_state key is rejected outright, never a generic pass-through", () => {
+    expect(
+      parseC03VerificationChecks({
+        ...c03LegacyFaultState(),
+        mutationEvidence: c03MutationEvidenceJson(),
+        somethingElse: true,
+      }),
+    ).toBeNull();
+    expect(parseC03VerificationChecks(c03LegacyFaultState())).not.toBeNull();
+    expect(
+      parseC03VerificationChecks({
+        ...c03LegacyFaultState(),
+        mutationEvidence: c03MutationEvidenceJson(),
+      }),
+    ).not.toBeNull();
+  });
+
+  it("D-H: a state change between before and after is preserved verbatim so a later evaluator can detect it", () => {
+    const mutated = c03SnapshotJson({
+      orders: {
+        count: 1,
+        complete: true,
+        rows: [
+          {
+            id: ORDER_ID,
+            paymentStatus: "PAID",
+            businessStatus: "FULFILLED",
+            amountSubunits: 75_000,
+            currency: "INR",
+          },
+        ],
+      },
+    });
+    const bundle = buildChaosRunEvidenceBundle(
+      c03Source({
+        run: runRow({
+          ...c03Source().run,
+          fault_state: {
+            ...c03LegacyFaultState(),
+            mutationEvidence: c03MutationEvidenceJson({ after: mutated }),
+          },
+        }),
+      }),
+    );
+    const evidence = (
+      bundle.scenarioEvidence as unknown as {
+        mutationEvidence: {
+          before: {
+            orders: { rows: { paymentStatus: string }[]; count: number };
+          };
+          after: {
+            orders: { rows: { paymentStatus: string }[]; count: number };
+          };
+        };
+      }
+    ).mutationEvidence;
+    expect(evidence.before.orders.rows[0]!.paymentStatus).toBe("UNPAID");
+    expect(evidence.after.orders.rows[0]!.paymentStatus).toBe("PAID");
+    expect(evidence.before.orders.count).toBe(evidence.after.orders.count);
+    expect(JSON.stringify(bundle)).not.toContain("FAIL");
+  });
+
+  it("H2: a trusted canonical webhook insertion is detectable through the id set and the count", () => {
+    const withWebhook = c03SnapshotJson({
+      trustedWebhookEvents: { count: 1, complete: true, ids: ["w-new"] },
+    });
+    const bundle = buildChaosRunEvidenceBundle(
+      c03Source({
+        run: runRow({
+          ...c03Source().run,
+          fault_state: {
+            ...c03LegacyFaultState(),
+            mutationEvidence: c03MutationEvidenceJson({ after: withWebhook }),
+          },
+        }),
+      }),
+    );
+    const evidence = (
+      bundle.scenarioEvidence as unknown as {
+        mutationEvidence: {
+          before: { trustedWebhookEvents: { ids: string[]; count: number } };
+          after: { trustedWebhookEvents: { ids: string[]; count: number } };
+        };
+      }
+    ).mutationEvidence;
+    expect(evidence.before.trustedWebhookEvents.ids).toEqual([]);
+    expect(evidence.after.trustedWebhookEvents.ids).toEqual(["w-new"]);
+    expect(evidence.after.trustedWebhookEvents.count).toBe(1);
+  });
+
+  it("I5: a truncated snapshot is reported INCOMPLETE and never compared as a prefix", () => {
+    const truncated = c03SnapshotJson({
+      orders: {
+        count: 5_000,
+        complete: false,
+        rows: [
+          {
+            id: ORDER_ID,
+            paymentStatus: "UNPAID",
+            businessStatus: "OPEN",
+            amountSubunits: 75_000,
+            currency: "INR",
+          },
+        ],
+      },
+    });
+    const bundle = buildChaosRunEvidenceBundle(
+      c03Source({
+        run: runRow({
+          ...c03Source().run,
+          fault_state: {
+            ...c03LegacyFaultState(),
+            mutationEvidence: c03MutationEvidenceJson({ before: truncated }),
+          },
+        }),
+      }),
+    );
+    expect(gapCodes(bundle)).toContain("INCOMPLETE_C03_MUTATION_EVIDENCE");
+  });
+
+  it("I6: a null capture side is incomplete evidence, not an empty merchant state", () => {
+    const bundle = buildChaosRunEvidenceBundle(
+      c03Source({
+        run: runRow({
+          ...c03Source().run,
+          fault_state: {
+            ...c03LegacyFaultState(),
+            mutationEvidence: c03MutationEvidenceJson({ after: null }),
+          },
+        }),
+      }),
+    );
+    expect(gapCodes(bundle)).toContain("INCOMPLETE_C03_MUTATION_EVIDENCE");
+    const evidence = (
+      bundle.scenarioEvidence as unknown as {
+        mutationEvidence: { after: unknown };
+      }
+    ).mutationEvidence;
+    expect(evidence.after).toBeNull();
+  });
+
+  it("I7: isC03MutationEvidenceComplete requires both sides, every collection present, and every collection complete", () => {
+    const complete = parseC03MutationEvidence({
+      ...c03LegacyFaultState(),
+      mutationEvidence: c03MutationEvidenceJson(),
+    });
+    expect(complete.kind).toBe("PRESENT");
+    if (complete.kind === "PRESENT") {
+      expect(isC03MutationEvidenceComplete(complete.evidence)).toBe(true);
+    }
+
+    const nullCollection = parseC03MutationEvidence({
+      ...c03LegacyFaultState(),
+      mutationEvidence: c03MutationEvidenceJson({
+        before: c03SnapshotJson({ payments: null }),
+      }),
+    });
+    expect(nullCollection.kind).toBe("PRESENT");
+    if (nullCollection.kind === "PRESENT") {
+      expect(isC03MutationEvidenceComplete(nullCollection.evidence)).toBe(
+        false,
+      );
+    }
+  });
+
+  it("D: an UNEXPECTED_ACCEPTANCE remains a FACT in the evidence layer, with no FAIL verdict assigned here (ARCH-3F-013 is Phase 3F)", () => {
+    const bundle = buildChaosRunEvidenceBundle(
+      c03Source({
+        run: runRow({
+          ...c03Source().run,
+          fault_state: {
+            checks: [
+              {
+                case: "WRONG_SIGNATURE",
+                classification: "UNEXPECTED_ACCEPTANCE",
+              },
+              { case: "MISSING_SIGNATURE", classification: "REJECTED" },
+            ],
+            mutationEvidence: c03MutationEvidenceJson(),
+          },
+        }),
+      }),
+    );
+    expect(bundle.scenarioEvidence).toMatchObject({
+      verificationChecks: [
+        { case: "WRONG_SIGNATURE", classification: "UNEXPECTED_ACCEPTANCE" },
+        { case: "MISSING_SIGNATURE", classification: "REJECTED" },
+      ],
+    });
+    const json = JSON.stringify(bundle);
+    expect(json).not.toContain("FAIL");
+    expect(json).not.toContain("PASS");
+    expect(bundle.gaps).toEqual([]);
+  });
+
+  it("J: C03 evidence never carries a raw payload, signature VALUE, secret or PII", () => {
+    const bundle = buildChaosRunEvidenceBundle(c03Source());
+    const json = JSON.stringify(bundle).toLowerCase();
+
+    // Field names / payload carriers that must never appear at all.
+    for (const needle of [
+      "secret",
+      "rawbody",
+      "raw_body",
+      "raw_payload",
+      "rawpayload",
+      "normalized_event",
+      "normalizedevent",
+      "idempotencykey",
+      "idempotency_key",
+      "cvv",
+      "otp",
+      "@",
+      "authorization",
+      "x-razorpay",
+    ]) {
+      expect(json).not.toContain(needle);
+    }
+
+    // The literal string "signature" DOES legitimately appear, but only ever
+    // inside the frozen scenario/case identifiers — never as a signature
+    // value. Every occurrence must be one of these three known tokens.
+    const signatureTokens = json.match(/[a-z_]*signature[a-z_]*/g) ?? [];
+    expect(signatureTokens.length).toBeGreaterThan(0);
+    for (const token of signatureTokens) {
+      expect([
+        "invalid_signature_test",
+        "wrong_signature",
+        "missing_signature",
+      ]).toContain(token);
+    }
+
+    // And no 64-hex HMAC-shaped value anywhere.
+    expect(JSON.stringify(bundle)).not.toMatch(/[0-9a-f]{64}/i);
+  });
+
+  it("K-L: C03 still records zero webhook rows, zero processing attempts, no merchant or provider FK, and stays SYNTHETIC_DEMO", () => {
+    const bundle = buildChaosRunEvidenceBundle(c03Source());
+    expect(bundle.sourceWebhook).toBeNull();
+    expect(bundle.originalProcessingAttempts).toEqual([]);
+    expect(bundle.chaosProcessingAttempts).toEqual([]);
+    expect(bundle.run.orderId).toBeNull();
+    expect(bundle.run.paymentAttemptId).toBeNull();
+    expect(bundle.run.paymentId).toBeNull();
+    expect(bundle.run.sourceWebhookEventId).toBeNull();
+    expect(bundle.run.dataClassification).toBe("SYNTHETIC_DEMO");
   });
 });
