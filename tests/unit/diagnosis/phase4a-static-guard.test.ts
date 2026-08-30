@@ -52,11 +52,12 @@ describe("Phase 4A-R1 evidence pack — static guard", () => {
     expect(fs.existsSync(path.join(repoRoot, MODULE_PATH))).toBe(true);
   });
 
-  it("2: lib/diagnosis contains only the approved Phase 4A modules", () => {
-    // R1 asserted exactly one file here. R2 legitimately adds the server-only
-    // orchestration service, so the assertion is widened to the approved Phase
-    // 4A set rather than dropped: an unapproved production capability
-    // appearing in this directory must still fail.
+  it("2: lib/diagnosis contains only the approved diagnosis modules", () => {
+    // Phase 4A-R1 asserted exactly one file here; 4A-R2 added the server-only
+    // orchestration service, and 4B-R1 adds the pure signal extractor. The
+    // assertion is advanced to the approved set each time rather than dropped:
+    // an unapproved production capability appearing in this directory must
+    // still fail.
     //
     // The security guarantees over the pure builder itself are unchanged and
     // are asserted by every other test in this file.
@@ -66,7 +67,11 @@ describe("Phase 4A-R1 evidence pack — static guard", () => {
       .filter((entry) => entry.isFile())
       .map((entry) => entry.name)
       .sort();
-    expect(entries).toEqual(["evidence-pack-service.ts", "evidence-pack.ts"]);
+    expect(entries).toEqual([
+      "diagnostic-signals.ts",
+      "evidence-pack-service.ts",
+      "evidence-pack.ts",
+    ]);
   });
 
   it("3: the module performs no runtime import at all — every import is type-only", () => {

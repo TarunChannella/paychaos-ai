@@ -852,6 +852,25 @@ function parseSnapshotFulfilments(
     ) {
       return undefined;
     }
+    // HISTORICAL COMPATIBILITY. `idempotencyKey` was added to this projection
+    // after these snapshots were written, so a persisted row from before that
+    // change legitimately has no such property. Its absence must NOT make the
+    // snapshot INVALID — that would retroactively destroy historical evidence
+    // that was correct when it was captured. Absent (or an explicit null)
+    // becomes `null`, meaning NOT CAPTURED IN THIS SNAPSHOT. It is never
+    // reconstructed from `orderId`: the database column is `NOT NULL`, so a
+    // derived value would be a claim about something never observed. A present
+    // value of the wrong type is still INVALID.
+    if (
+      "idempotencyKey" in entry &&
+      entry.idempotencyKey !== null &&
+      typeof entry.idempotencyKey !== "string"
+    ) {
+      return undefined;
+    }
+    const idempotencyKey =
+      typeof entry.idempotencyKey === "string" ? entry.idempotencyKey : null;
+
     parsed.push({
       id: entry.id,
       orderId: entry.orderId,
@@ -859,6 +878,7 @@ function parseSnapshotFulfilments(
       triggerProcessingAttemptId: entry.triggerProcessingAttemptId,
       effectType: entry.effectType,
       appliedAt: entry.appliedAt,
+      idempotencyKey,
     });
   }
   // Re-applied here rather than trusted from the persisted array: the same

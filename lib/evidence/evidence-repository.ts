@@ -76,7 +76,7 @@ const ORDER_COLUMNS =
 const PAYMENT_COLUMNS =
   "id, payment_attempt_id, razorpay_payment_id, razorpay_payment_status, amount_subunits, currency, checkout_signature_verified, captured_at, failed_at";
 const FULFILMENT_COLUMNS =
-  "id, order_id, payment_id, trigger_processing_attempt_id, effect_type, applied_at";
+  "id, order_id, payment_id, trigger_processing_attempt_id, effect_type, applied_at, idempotency_key";
 
 /**
  * Captures the correlated merchant state for one trusted processing attempt.

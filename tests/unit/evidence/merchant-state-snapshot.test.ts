@@ -134,6 +134,9 @@ describe("buildMerchantStateSnapshot — complete captured-payment snapshot", ()
           triggerProcessingAttemptId: PROC_ATTEMPT_ID,
           effectType: "FULFIL_ORDER",
           appliedAt: "2026-01-01T10:00:01.000Z",
+          // This source row carries no idempotency column, so the snapshot
+          // records NOT CAPTURED rather than deriving one.
+          idempotencyKey: null,
         },
       ],
     });
@@ -579,6 +582,7 @@ describe("snapshot output carries no raw payload / signature / secret / PII", ()
       "appliedAt",
       "effectType",
       "id",
+      "idempotencyKey",
       "orderId",
       "paymentId",
       "triggerProcessingAttemptId",

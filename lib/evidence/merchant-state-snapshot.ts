@@ -84,11 +84,33 @@ export interface MerchantStateSnapshotPaymentV1 {
 }
 
 /**
- * Projection of one `fulfilments` row — never the whole row. Deliberately
- * excludes `idempotency_key`: it is a uniqueness token whose protection
- * belongs in the database's own UNIQUE constraint, and copying it into
- * evidence JSON adds nothing an invariant can act on that `orderId` +
- * `paymentId` + `effectType` do not already carry.
+ * Projection of one `fulfilments` row — never the whole row.
+ *
+ * `idempotencyKey` was deliberately excluded when this contract was first
+ * frozen: it is a uniqueness token whose protection belongs in the database's
+ * own UNIQUE constraint, and no Phase 3 invariant needed it. Phase 4B does
+ * need it — telling a merchant whose two fulfilments share one semantic key
+ * apart from one whose keys differ is the whole distinction between
+ * `RC-001` and `RC-002` (docs/AI_DESIGN.md Section 38), and
+ * docs/MONEY_INVARIANTS.md lists fulfilment idempotency keys under *Evidence
+ * to Capture* for INV-001, INV-002 and INV-007.
+ *
+ * THREE STATES, DELIBERATELY:
+ *
+ *   `string`    the real persisted key, read from the database at capture time;
+ *   `null`      explicitly recorded as NOT CAPTURED by this snapshot;
+ *   absent      the producer does not capture this field at all.
+ *
+ * The last two both mean "no usable key here" and neither may ever be
+ * reconstructed. The database column is `NOT NULL`, so a missing value in a
+ * parsed snapshot can only mean the snapshot predates this projection — it can
+ * never mean the stored key was NULL. Deriving `FULFIL_ORDER:<order_id>` for a
+ * historical row would manufacture evidence that was never observed.
+ *
+ * The field is optional rather than required so that adding it does not force
+ * a change on the separate C03 mutation-snapshot projection, which reads no
+ * idempotency column and whose scenario creates no fulfilments at all. The two
+ * producers in this module always set it explicitly.
  */
 export interface MerchantStateSnapshotFulfilmentV1 {
   readonly id: string;
@@ -97,6 +119,7 @@ export interface MerchantStateSnapshotFulfilmentV1 {
   readonly triggerProcessingAttemptId: string | null;
   readonly effectType: string;
   readonly appliedAt: string;
+  readonly idempotencyKey?: string | null;
 }
 
 /**
@@ -170,6 +193,12 @@ export interface MerchantStateSnapshotSourceFulfilmentRow {
   readonly trigger_processing_attempt_id: string | null;
   readonly effect_type: string;
   readonly applied_at: string;
+  /**
+   * Optional so a caller whose allowlist does not read this column stays
+   * valid. When absent the built snapshot records `null` — NOT CAPTURED —
+   * rather than inventing a value. The database column itself is `NOT NULL`.
+   */
+  readonly idempotency_key?: string;
 }
 
 export interface MerchantStateSnapshotSource {
@@ -260,6 +289,9 @@ export function buildMerchantStateSnapshot(
             triggerProcessingAttemptId: row.trigger_processing_attempt_id,
             effectType: row.effect_type,
             appliedAt: row.applied_at,
+            // `null` when the caller's allowlist did not read the column.
+            // Never derived from `order_id` — see the type's doc comment.
+            idempotencyKey: row.idempotency_key ?? null,
           }))
           .sort(compareFulfilmentsById)
       : null;
@@ -332,6 +364,7 @@ export function serializeMerchantStateSnapshot(
           orderId: fulfilment.orderId,
           paymentId: fulfilment.paymentId,
           triggerProcessingAttemptId: fulfilment.triggerProcessingAttemptId,
+          idempotencyKey: fulfilment.idempotencyKey ?? null,
           effectType: fulfilment.effectType,
           appliedAt: fulfilment.appliedAt,
         }))
