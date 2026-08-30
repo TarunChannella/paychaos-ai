@@ -47,9 +47,10 @@ describe("Phase 4B-R1 signal module — static guard", () => {
 
   it("2: lib/diagnosis contains only the approved Phase 4A/4B modules", () => {
     // Advanced by exact approved filename each time a module is approved:
-    // 4B-R2 adds the server-only signal orchestration service. The list is
-    // never loosened to "any .ts file" — an unapproved production capability
-    // appearing in this directory must still fail.
+    // 4B-R2 added the server-only signal orchestration service, and 4C-R1
+    // adds the pure root-cause classifier. The list is never loosened to
+    // "any .ts file" — an unapproved production capability appearing in this
+    // directory must still fail.
     const entries = fs
       .readdirSync(path.join(repoRoot, "lib", "diagnosis"), {
         withFileTypes: true,
@@ -62,6 +63,7 @@ describe("Phase 4B-R1 signal module — static guard", () => {
       "diagnostic-signals.ts",
       "evidence-pack-service.ts",
       "evidence-pack.ts",
+      "root-cause-classifier.ts",
     ]);
   });
 
