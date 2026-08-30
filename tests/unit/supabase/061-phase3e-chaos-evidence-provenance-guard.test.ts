@@ -266,9 +266,15 @@ describe("061-phase3e-chaos-evidence-assembly.integration.test.ts — provenance
     expect(integrationFiles.filter((name) => name.startsWith("066-"))).toEqual([
       "066-phase3h-read-models.integration.test.ts",
     ]);
+    // 067 is the Phase 4A evidence-pack suite, added after this file, and is
+    // pinned by exact name for the same reason as 062 through 066.
+    expect(integrationFiles.filter((name) => name.startsWith("067-"))).toEqual([
+      "067-phase4a-evidence-pack.integration.test.ts",
+    ]);
     expect(
-      integrationFiles.filter((name) => name.startsWith("067-")),
-    ).toHaveLength(0);
+      integrationFiles.filter((name) => name.startsWith("068-")),
+      "a 068- integration suite appeared without this guard being advanced",
+    ).toEqual([]);
     expect(functionalSource).not.toMatch(/create\s+table/i);
     expect(functionalSource).not.toMatch(/alter\s+table/i);
   });

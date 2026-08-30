@@ -52,14 +52,21 @@ describe("Phase 4A-R1 evidence pack — static guard", () => {
     expect(fs.existsSync(path.join(repoRoot, MODULE_PATH))).toBe(true);
   });
 
-  it("2: Phase 4A-R1 adds exactly one production module under lib/diagnosis", () => {
+  it("2: lib/diagnosis contains only the approved Phase 4A modules", () => {
+    // R1 asserted exactly one file here. R2 legitimately adds the server-only
+    // orchestration service, so the assertion is widened to the approved Phase
+    // 4A set rather than dropped: an unapproved production capability
+    // appearing in this directory must still fail.
+    //
+    // The security guarantees over the pure builder itself are unchanged and
+    // are asserted by every other test in this file.
     const dir = path.join(repoRoot, "lib", "diagnosis");
     const entries = fs
       .readdirSync(dir, { withFileTypes: true })
       .filter((entry) => entry.isFile())
       .map((entry) => entry.name)
       .sort();
-    expect(entries).toEqual(["evidence-pack.ts"]);
+    expect(entries).toEqual(["evidence-pack-service.ts", "evidence-pack.ts"]);
   });
 
   it("3: the module performs no runtime import at all — every import is type-only", () => {

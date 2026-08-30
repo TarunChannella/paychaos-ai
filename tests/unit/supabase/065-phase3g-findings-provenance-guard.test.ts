@@ -234,9 +234,14 @@ describe("065-phase3g-findings.integration.test.ts — provenance guard", () => 
     expect(integrationFiles.filter((name) => name.startsWith("066-"))).toEqual([
       "066-phase3h-read-models.integration.test.ts",
     ]);
+    // 067 is the Phase 4A evidence-pack suite, added after this file, and is
+    // pinned by exact name for the same reason 065 and 066 are.
+    expect(integrationFiles.filter((name) => name.startsWith("067-"))).toEqual([
+      "067-phase4a-evidence-pack.integration.test.ts",
+    ]);
     expect(
-      integrationFiles.filter((name) => name.startsWith("067-")),
-      "a 067- integration suite appeared without this guard being advanced",
+      integrationFiles.filter((name) => name.startsWith("068-")),
+      "a 068- integration suite appeared without this guard being advanced",
     ).toEqual([]);
   });
 });
