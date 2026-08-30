@@ -271,9 +271,14 @@ describe("061-phase3e-chaos-evidence-assembly.integration.test.ts — provenance
     expect(integrationFiles.filter((name) => name.startsWith("067-"))).toEqual([
       "067-phase4a-evidence-pack.integration.test.ts",
     ]);
+    // 068 is the Phase 4B-R2 diagnostic-signal suite, added after this file,
+    // and is pinned by exact name for the same reason as 062 through 067.
+    expect(integrationFiles.filter((name) => name.startsWith("068-"))).toEqual([
+      "068-phase4b-diagnostic-signals.integration.test.ts",
+    ]);
     expect(
-      integrationFiles.filter((name) => name.startsWith("068-")),
-      "a 068- integration suite appeared without this guard being advanced",
+      integrationFiles.filter((name) => name.startsWith("069-")),
+      "a 069- integration suite appeared without this guard being advanced",
     ).toEqual([]);
     expect(functionalSource).not.toMatch(/create\s+table/i);
     expect(functionalSource).not.toMatch(/alter\s+table/i);

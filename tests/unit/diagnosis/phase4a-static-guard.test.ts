@@ -54,9 +54,10 @@ describe("Phase 4A-R1 evidence pack — static guard", () => {
 
   it("2: lib/diagnosis contains only the approved diagnosis modules", () => {
     // Phase 4A-R1 asserted exactly one file here; 4A-R2 added the server-only
-    // orchestration service, and 4B-R1 adds the pure signal extractor. The
-    // assertion is advanced to the approved set each time rather than dropped:
-    // an unapproved production capability appearing in this directory must
+    // orchestration service, 4B-R1 added the pure signal extractor, and 4B-R2
+    // adds the server-only signal orchestration service. The assertion is
+    // advanced to the approved set each time rather than dropped: an
+    // unapproved production capability appearing in this directory must
     // still fail.
     //
     // The security guarantees over the pure builder itself are unchanged and
@@ -68,6 +69,7 @@ describe("Phase 4A-R1 evidence pack — static guard", () => {
       .map((entry) => entry.name)
       .sort();
     expect(entries).toEqual([
+      "diagnostic-signals-service.ts",
       "diagnostic-signals.ts",
       "evidence-pack-service.ts",
       "evidence-pack.ts",
