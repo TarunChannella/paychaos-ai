@@ -258,9 +258,12 @@ describe("065-phase3g-findings.integration.test.ts — provenance guard", () => 
     expect(integrationFiles.filter((name) => name.startsWith("072-"))).toEqual([
       "072-phase4e-regression-orchestration.integration.test.ts",
     ]);
+    expect(integrationFiles.filter((name) => name.startsWith("073-"))).toEqual([
+      "073-phase4e-regression-api.integration.test.ts",
+    ]);
     expect(
-      integrationFiles.filter((name) => name.startsWith("073-")),
-      "a 073- integration suite appeared without this guard being advanced",
+      integrationFiles.filter((name) => name.startsWith("074-")),
+      "a 074- integration suite appeared without this guard being advanced",
     ).toEqual([]);
   });
 });

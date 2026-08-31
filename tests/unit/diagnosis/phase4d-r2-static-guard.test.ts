@@ -442,12 +442,28 @@ describe("Phase 4D-R2 — schema and surface boundaries", () => {
         const full = path.join(dir, entry.name);
         return entry.isDirectory() ? walk(full) : [full];
       });
-    const surfaces = walk(path.join(repoRoot, "app")).filter((file) =>
-      /diagnos|signal|root-cause|recommend|evidence-pack|regression|reliabilit|readiness/i.test(
-        file,
-      ),
-    );
-    expect(surfaces).toEqual([]);
+    const surfaces = walk(path.join(repoRoot, "app"))
+      .map((file) =>
+        file.replace(repoRoot, "").split(String.fromCharCode(92)).join("/"),
+      )
+      .filter((file) =>
+        /diagnos|signal|root-cause|recommend|evidence-pack|regression|reliabilit|readiness/i.test(
+          file,
+        ),
+      )
+      .sort();
+
+    // ADVANCED, NOT LOOSENED (Phase 4E-R3-A). Phase 4E legitimately adds the
+    // minimum regression API required by P4-AC-06, so those two exact route
+    // files are now expected. Every other surface this guard protects —
+    // diagnosis, signals, root cause, recommendation, evidence pack,
+    // reliability and readiness — remains absolutely forbidden, and an
+    // unexpected THIRD regression surface would fail here rather than slip
+    // in. Phase 4D itself still contributes no route or UI of its own.
+    expect(surfaces).toEqual([
+      "/app/api/findings/[findingId]/regressions/route.ts",
+      "/app/api/regressions/[regressionRunId]/advance/route.ts",
+    ]);
   });
 
   it("26: the frozen Phase 4C production modules are unchanged in shape", () => {

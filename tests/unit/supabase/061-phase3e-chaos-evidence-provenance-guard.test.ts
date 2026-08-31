@@ -290,9 +290,12 @@ describe("061-phase3e-chaos-evidence-assembly.integration.test.ts — provenance
     expect(integrationFiles.filter((name) => name.startsWith("072-"))).toEqual([
       "072-phase4e-regression-orchestration.integration.test.ts",
     ]);
+    expect(integrationFiles.filter((name) => name.startsWith("073-"))).toEqual([
+      "073-phase4e-regression-api.integration.test.ts",
+    ]);
     expect(
-      integrationFiles.filter((name) => name.startsWith("073-")),
-      "a 073- integration suite appeared without this guard being advanced",
+      integrationFiles.filter((name) => name.startsWith("074-")),
+      "a 074- integration suite appeared without this guard being advanced",
     ).toEqual([]);
     expect(functionalSource).not.toMatch(/create\s+table/i);
     expect(functionalSource).not.toMatch(/alter\s+table/i);
