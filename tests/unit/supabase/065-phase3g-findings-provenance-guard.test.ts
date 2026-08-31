@@ -244,9 +244,14 @@ describe("065-phase3g-findings.integration.test.ts — provenance guard", () => 
     expect(integrationFiles.filter((name) => name.startsWith("068-"))).toEqual([
       "068-phase4b-diagnostic-signals.integration.test.ts",
     ]);
+    // 069 is the Phase 4C-R2 diagnosis-persistence suite, added after this
+    // file, and is pinned by exact name for the same reason 065 through 068 are.
+    expect(integrationFiles.filter((name) => name.startsWith("069-"))).toEqual([
+      "069-phase4c-root-cause-persistence.integration.test.ts",
+    ]);
     expect(
-      integrationFiles.filter((name) => name.startsWith("069-")),
-      "a 069- integration suite appeared without this guard being advanced",
+      integrationFiles.filter((name) => name.startsWith("070-")),
+      "a 070- integration suite appeared without this guard being advanced",
     ).toEqual([]);
   });
 });
