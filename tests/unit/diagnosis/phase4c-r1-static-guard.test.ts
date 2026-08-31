@@ -60,6 +60,7 @@ describe("Phase 4C-R1 root-cause classifier — static guard", () => {
       "diagnostic-signals.ts",
       "evidence-pack-service.ts",
       "evidence-pack.ts",
+      "recommendations.ts",
       "root-cause-classifier.ts",
       "root-cause-repository.ts",
       "root-cause-service.ts",
