@@ -49,9 +49,21 @@
  * `tests/unit/findings/phase3g-static-guard.test.ts` enforces at the source
  * level.
  *
- * Do NOT add Phase 4 tables here (`regression_runs`,
- * `reliability_score_snapshots`) — those are created and typed by the phases
- * that own them. `findings` is NOT one of them: docs/DATABASE.md Section 17
+ * Phase 4E adds the additive `regression_runs` table
+ * (supabase/migrations/20260904000000_phase4e_regression_runs.sql — NOT YET
+ * APPLIED to the remote project; this type describes it in advance so the
+ * Phase 4E repository can be written and unit-tested against a mocked client
+ * before the migration is manually reviewed and applied, exactly as was done
+ * for `chaos_runs`, `invariant_results` and `findings`). Like `findings` and
+ * unlike `invariant_results`, its `Update` member is a real type: the
+ * migration grants `service_role` UPDATE because a regression run is a
+ * lifecycle object (PENDING -> RUNNING -> RESOLVED/STILL_FAILING/ERROR). It
+ * has deliberately no `updated_at` column — docs/DATABASE.md Section 18
+ * defines seven columns and no such column.
+ *
+ * Do NOT add `reliability_score_snapshots` here — it is a P1-only table
+ * (docs/DATABASE.md Section 19) created and typed by the phase that owns it,
+ * if it is ever selected at all. `findings` is NOT one of them: docs/DATABASE.md Section 17
  * "Phase Ownership" and docs/PHASE_PLAN.md Section 3G both place its CREATE
  * in Phase 3, with Phase 4 only populating its diagnosis/recommendation
  * columns. `event_processing_attempts.source_kind` here is deliberately
@@ -203,6 +215,16 @@ export type InvariantResultInvariantId =
  * `status: "OPEN"` and leaves `diagnosis_strength` NULL.
  */
 export type FindingStatus = "OPEN" | "STILL_FAILING" | "RESOLVED";
+
+/**
+ * `regression_runs.status` (docs/DATABASE.md Section 18). `RESOLVED` and
+ * `STILL_FAILING` are the two conclusive verdicts; `ERROR` means the
+ * regression established neither proof — an inconclusive `UNKNOWN`
+ * evaluation, a `BLOCKED` run, or a technical execution failure. `ERROR` is
+ * never a claim that a payment failed.
+ */
+export type RegressionRunStatus =
+  "PENDING" | "RUNNING" | "RESOLVED" | "STILL_FAILING" | "ERROR";
 
 export type FindingDiagnosisStrength =
   "STRONG_EVIDENCE" | "PARTIAL_EVIDENCE" | "INSUFFICIENT_EVIDENCE";
@@ -830,6 +852,58 @@ export interface Database {
             columns: ["invariant_result_id"];
             isOneToOne: true;
             referencedRelation: "invariant_results";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      regression_runs: {
+        Row: {
+          id: string;
+          finding_id: string;
+          chaos_run_id: string;
+          status: RegressionRunStatus;
+          started_at: string | null;
+          completed_at: string | null;
+          created_at: string;
+        };
+        // Phase 4E supplies ONLY `finding_id` and `chaos_run_id`; `status`
+        // defaults to 'PENDING', `created_at` defaults to now(), and both
+        // lifecycle timestamps default to NULL. No caller ever supplies a
+        // creation timestamp.
+        Insert: {
+          id?: string;
+          finding_id: string;
+          chaos_run_id: string;
+          status?: RegressionRunStatus;
+          started_at?: string | null;
+          completed_at?: string | null;
+          created_at?: string;
+        };
+        // A real type, like `findings["Update"]` and unlike
+        // `invariant_results["Update"]` which is `never`: the migration
+        // grants `service_role` UPDATE because a regression run is a
+        // lifecycle object. `id`, `finding_id` and `chaos_run_id` are
+        // omitted deliberately — a regression is never re-pointed at a
+        // different finding or a different chaos run. There is no
+        // `updated_at` on this table.
+        Update: {
+          status?: RegressionRunStatus;
+          started_at?: string | null;
+          completed_at?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "regression_runs_finding_id_fkey";
+            columns: ["finding_id"];
+            isOneToOne: false;
+            referencedRelation: "findings";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "regression_runs_chaos_run_id_fkey";
+            columns: ["chaos_run_id"];
+            isOneToOne: true;
+            referencedRelation: "chaos_runs";
             referencedColumns: ["id"];
           },
         ];

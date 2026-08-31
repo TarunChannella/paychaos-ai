@@ -336,12 +336,19 @@ describe("Phase 3G surface — static safety guard", () => {
     }
   });
 
-  it("20: Phase 3G introduced exactly one migration, and it is the latest", () => {
+  it("20: Phase 3G introduced exactly one migration, and it sits one place before the latest", () => {
     const migrations = fs
       .readdirSync(path.join(repoRoot, "supabase", "migrations"))
       .sort();
-    expect(migrations).toHaveLength(12);
+    // Advanced, not loosened: Phase 4E adds the tenth and last P0 table
+    // (docs/DATABASE.md Section 18), so Phase 3G's migration is now second
+    // from last. Both positions stay exact-name assertions, and Phase 3G
+    // still owns exactly one migration — asserted below.
+    expect(migrations).toHaveLength(13);
     expect(migrations[migrations.length - 1]).toBe(
+      "20260904000000_phase4e_regression_runs.sql",
+    );
+    expect(migrations[migrations.length - 2]).toBe(
       "20260903000000_phase3g_findings.sql",
     );
     // Phase 3F still owns exactly one migration of its own — advanced, not

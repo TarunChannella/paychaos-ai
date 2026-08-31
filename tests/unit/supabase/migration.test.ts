@@ -79,6 +79,7 @@ describe("Migration set creates exactly the approved Phase 1 + Phase 2B + Phase 
       "orders",
       "payment_attempts",
       "payments",
+      "regression_runs",
       "webhook_events",
     ]);
   });
@@ -93,8 +94,11 @@ describe("Migration set creates exactly the approved Phase 1 + Phase 2B + Phase 
   // Phase 4 only populating its diagnosis/recommendation columns. Every
   // genuine Phase 4 table remains forbidden.
   it("does not create any other Phase 4+ table", () => {
+    // `regression_runs` left this list in Phase 4E: it is the tenth approved
+    // P0 table (docs/DATABASE.md Section 18; Section 50 places its CREATE in
+    // Phase 4) and is asserted positively above. Every genuinely unapproved
+    // table remains forbidden.
     const forbidden = [
-      "regression_runs",
       "reliability_score_snapshots",
       "merchants",
       "finding_evidence",
@@ -106,10 +110,11 @@ describe("Migration set creates exactly the approved Phase 1 + Phase 2B + Phase 
   });
 
   // The approved P0 schema is exactly ten tables (docs/DATABASE.md Section
-  // "Tables Requiring RLS"). Nine exist after Phase 3G; `regression_runs` is
-  // the only one still outstanding, and it belongs to Phase 4.
-  it("the cumulative table count is exactly nine after Phase 3G", () => {
-    expect(tableNames).toHaveLength(9);
+  // "Tables Requiring RLS"). Phase 4E adds `regression_runs`, the tenth and
+  // last of them, so the set is now COMPLETE. Advanced, not loosened: the
+  // count is still exact, and it cannot grow again without failing here.
+  it("the cumulative table count is exactly ten, completing the approved P0 schema", () => {
+    expect(tableNames).toHaveLength(10);
   });
 });
 
@@ -290,14 +295,14 @@ describe("Phase 1C-A no permissive anon/authenticated policy (#14)", () => {
     }
   });
 
-  it("every TABLE GRANT targets only the 9 approved tables", () => {
+  it("every TABLE GRANT targets only the 10 approved tables", () => {
     const tableGrantLines = combinedSql
       .split("\n")
       .filter((line) => /^\s*grant\s.*\bon\s+(?!function\b)/i.test(line));
     expect(tableGrantLines.length).toBeGreaterThan(0);
     for (const line of tableGrantLines) {
       expect(line).toMatch(
-        /public\.(orders|payment_attempts|payments|fulfilments|webhook_events|event_processing_attempts|chaos_runs|invariant_results|findings)\b/i,
+        /public\.(orders|payment_attempts|payments|fulfilments|webhook_events|event_processing_attempts|chaos_runs|invariant_results|findings|regression_runs)\b/i,
       );
     }
   });
@@ -346,13 +351,13 @@ describe("Phase 1C-A correction — no unnecessary pgcrypto extension", () => {
     expect(combinedSql).not.toMatch(/create extension[^;]*pgcrypto/i);
   });
 
-  it("gen_random_uuid() remains the UUID default for all nine tables", () => {
+  it("gen_random_uuid() remains the UUID default for all ten tables", () => {
     const occurrences = [
       ...combinedSql.matchAll(
         /id uuid primary key default gen_random_uuid\(\)/gi,
       ),
     ];
-    expect(occurrences.length).toBe(9);
+    expect(occurrences.length).toBe(10);
   });
 });
 
@@ -751,11 +756,11 @@ describe("Phase 1C-A correction — explicit browser-role revocation", () => {
   // repository convention. This assertion is split rather than relaxed: the
   // seven mutable tables must still each carry full CRUD, and
   // invariant_results must carry SELECT/INSERT/DELETE and never UPDATE.
-  it("service_role retains explicit CRUD grants on exactly the eight mutable tables, plus an append-only grant on invariant_results", () => {
+  it("service_role retains explicit CRUD grants on exactly the nine mutable tables, plus an append-only grant on invariant_results", () => {
     const tableGrantLines = combinedSql
       .split("\n")
       .filter((line) => /^\s*grant\s.*\bon\s+(?!function\b)/i.test(line));
-    expect(tableGrantLines.length).toBe(9);
+    expect(tableGrantLines.length).toBe(10);
 
     const invariantGrants = tableGrantLines.filter((line) =>
       /public\.invariant_results\b/i.test(line),
@@ -768,12 +773,12 @@ describe("Phase 1C-A correction — explicit browser-role revocation", () => {
     const mutableGrants = tableGrantLines.filter(
       (line) => !/public\.invariant_results\b/i.test(line),
     );
-    expect(mutableGrants.length).toBe(8);
+    expect(mutableGrants.length).toBe(9);
     for (const line of mutableGrants) {
       expect(line).toMatch(/select,\s*insert,\s*update,\s*delete/i);
       expect(line).toMatch(/to service_role/i);
       expect(line).toMatch(
-        /public\.(orders|payment_attempts|payments|fulfilments|webhook_events|event_processing_attempts|chaos_runs|findings)\b/i,
+        /public\.(orders|payment_attempts|payments|fulfilments|webhook_events|event_processing_attempts|chaos_runs|findings|regression_runs)\b/i,
       );
     }
 
@@ -789,6 +794,22 @@ describe("Phase 1C-A correction — explicit browser-role revocation", () => {
     expect(findingGrants.length).toBe(1);
     expect(findingGrants[0]!).toMatch(/select,\s*insert,\s*update,\s*delete/i);
     expect(findingGrants[0]!).toMatch(/to service_role/i);
+
+    // Phase 4E's `regression_runs` is the ninth mutable table, pinned by
+    // exact name rather than absorbed into a loosened count. Like `findings`
+    // and unlike `invariant_results` it carries UPDATE, because a regression
+    // run is a lifecycle object (docs/DATABASE.md Section 18). That is a
+    // DATABASE capability; Phase 4E-R1 writes only through explicit guarded
+    // transitions, which
+    // tests/unit/regression/phase4e-r1-static-guard.test.ts enforces.
+    const regressionGrants = tableGrantLines.filter((line) =>
+      /public\.regression_runs\b/i.test(line),
+    );
+    expect(regressionGrants.length).toBe(1);
+    expect(regressionGrants[0]!).toMatch(
+      /select,\s*insert,\s*update,\s*delete/i,
+    );
+    expect(regressionGrants[0]!).toMatch(/to service_role/i);
   });
 
   it("RLS remains enabled on all nine tables", () => {
@@ -1371,6 +1392,7 @@ describe("Phase 3C migration — controlled replay compatibility (architect-appr
       "orders",
       "payment_attempts",
       "payments",
+      "regression_runs",
       "webhook_events",
     ]);
   });
@@ -1521,6 +1543,7 @@ describe("Phase 3D-0 migration — execution-block audit + C07 concurrency schem
       "orders",
       "payment_attempts",
       "payments",
+      "regression_runs",
       "webhook_events",
     ]);
   });
@@ -1552,7 +1575,7 @@ describe("Phase 3E-A migration — event_processing_attempts evidence snapshots"
     expect(phase3eMigration).toBeDefined();
   });
 
-  it("2: it sorts AFTER every migration that precedes it and BEFORE the Phase 3F-A and Phase 3G migrations (chronological filename ordering is preserved, so nothing can be applied out of order)", () => {
+  it("2: it sorts AFTER every migration that precedes it and BEFORE the Phase 3F-A, Phase 3G and Phase 4E migrations (chronological filename ordering is preserved, so nothing can be applied out of order)", () => {
     const index = migrations.findIndex(
       (m) => m.name === phase3eMigration!.name,
     );
@@ -1563,6 +1586,7 @@ describe("Phase 3E-A migration — event_processing_attempts evidence snapshots"
     expect(migrations.slice(index + 1).map((m) => m.name)).toEqual([
       "20260902000000_phase3f_invariant_results.sql",
       "20260903000000_phase3g_findings.sql",
+      "20260904000000_phase4e_regression_runs.sql",
     ]);
     expect(phase3eMigration!.name).toMatch(
       /^\d{14}_phase3e_evidence_snapshots\.sql$/,
@@ -1675,14 +1699,12 @@ describe("Phase 3E-A migration — event_processing_attempts evidence snapshots"
         new RegExp(`create table\\s+public\\.${forbidden}`, "i"),
       );
     }
-    // Still absent from the cumulative migration set entirely — genuine
-    // Phase 4 tables only. `invariant_results` and `findings` are
-    // deliberately excluded from this second list because both are now
-    // approved tables, created by Phase 3F-A and Phase 3G respectively.
-    for (const forbidden of [
-      "regression_runs",
-      "reliability_score_snapshots",
-    ]) {
+    // Still absent from the cumulative migration set entirely. The list has
+    // shrunk as each table legitimately arrived: `invariant_results` in
+    // Phase 3F-A, `findings` in Phase 3G, `regression_runs` in Phase 4E. The
+    // per-migration assertion above is unchanged and remains the point of
+    // this test — THIS migration still creates none of them.
+    for (const forbidden of ["reliability_score_snapshots"]) {
       expect(extractCreateTableNames(combinedSql)).not.toContain(forbidden);
     }
     // No PASS/FAIL/UNKNOWN verdict vocabulary is introduced anywhere in the
@@ -1751,6 +1773,7 @@ describe("Phase 3E-A migration — event_processing_attempts evidence snapshots"
       "orders",
       "payment_attempts",
       "payments",
+      "regression_runs",
       "webhook_events",
     ]);
   });
@@ -1766,17 +1789,21 @@ describe("Phase 3F-A migration — invariant_results (the first Money Invariant 
       .join("\n");
   }
 
-  it("1: exists, is the expected filename and sorts immediately before the Phase 3G migration", () => {
+  it("1: exists, is the expected filename and sorts exactly two places before the last migration (Phase 3G, then Phase 4E, follow it)", () => {
     expect(phase3fMigration).toBeDefined();
     expect(phase3fMigration!.name).toBe(
       "20260902000000_phase3f_invariant_results.sql",
     );
-    // Advanced, not loosened: Phase 3G now sorts last, and Phase 3F-A must
-    // sit exactly one place ahead of it — still an exact-position assertion.
+    // Advanced, not loosened: Phase 4E now sorts last, Phase 3G one place
+    // ahead of it and Phase 3F-A one ahead of that — still exact-position
+    // assertions, shifted by exactly the one new migration.
     expect(migrations[migrations.length - 1]!.name).toBe(
-      "20260903000000_phase3g_findings.sql",
+      "20260904000000_phase4e_regression_runs.sql",
     );
     expect(migrations[migrations.length - 2]!.name).toBe(
+      "20260903000000_phase3g_findings.sql",
+    );
+    expect(migrations[migrations.length - 3]!.name).toBe(
       phase3fMigration!.name,
     );
   });
@@ -2053,13 +2080,9 @@ describe("Phase 3F-A migration — invariant_results (the first Money Invariant 
         ),
       );
     }
-    // Cumulatively, only the genuine Phase 4 tables remain absent —
-    // `findings` legitimately arrived in Phase 3G.
-    for (const forbidden of [
-      "regression_runs",
-      "reliability_score_snapshots",
-      "merchants",
-    ]) {
+    // Cumulatively, only the unapproved tables remain absent — `findings`
+    // legitimately arrived in Phase 3G and `regression_runs` in Phase 4E.
+    for (const forbidden of ["reliability_score_snapshots", "merchants"]) {
       expect(extractCreateTableNames(combinedSql)).not.toContain(forbidden);
     }
   });

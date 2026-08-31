@@ -294,9 +294,15 @@ describe("Phase 3F-C surface — static safety guard", () => {
       "20260902000000_phase3f_invariant_results.sql",
     ]);
     expect(migrations.filter((m) => m.includes("phase3f-c"))).toEqual([]);
+    // Advanced again for Phase 4E, which legitimately adds the thirteenth
+    // migration (`regression_runs`, the tenth and last P0 table). The
+    // exact-name property above is what this guard protects and is unchanged.
     expect(migrations[migrations.length - 1]).toBe(
+      "20260904000000_phase4e_regression_runs.sql",
+    );
+    expect(migrations[migrations.length - 2]).toBe(
       "20260903000000_phase3g_findings.sql",
     );
-    expect(migrations).toHaveLength(12);
+    expect(migrations).toHaveLength(13);
   });
 });

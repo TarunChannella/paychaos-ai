@@ -349,6 +349,7 @@ describe("Phase 4A-R1 evidence pack — static guard", () => {
       "20260901000000_phase3e_evidence_snapshots.sql",
       "20260902000000_phase3f_invariant_results.sql",
       "20260903000000_phase3g_findings.sql",
+      "20260904000000_phase4e_regression_runs.sql",
     ]);
   });
 

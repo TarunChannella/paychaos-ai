@@ -367,8 +367,15 @@ describe("Phase 4C-R2 — schema and surface boundaries", () => {
       .readdirSync(path.join(repoRoot, "supabase", "migrations"))
       .filter((name) => name.endsWith(".sql"))
       .sort();
-    expect(migrations).toHaveLength(12);
-    expect(migrations.at(-1)).toBe("20260903000000_phase3g_findings.sql");
+    // Advanced for Phase 4E, which legitimately adds the tenth and last P0
+    // table (docs/DATABASE.md Section 18). The protection is unchanged: this
+    // phase still contributes NO migration of its own, and the Phase 3G
+    // migration remains exactly where it was.
+    expect(migrations).toHaveLength(13);
+    expect(migrations.at(-1)).toBe(
+      "20260904000000_phase4e_regression_runs.sql",
+    );
+    expect(migrations.at(-2)).toBe("20260903000000_phase3g_findings.sql");
   });
 
   it("23: lib/diagnosis contains only the approved Phase 4A/4B/4C modules", () => {

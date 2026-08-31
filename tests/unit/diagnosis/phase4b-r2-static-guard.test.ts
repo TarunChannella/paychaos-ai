@@ -295,8 +295,15 @@ describe("Phase 4B-R2 signal service — static guard", () => {
       .readdirSync(path.join(repoRoot, "supabase", "migrations"))
       .filter((name) => name.endsWith(".sql"))
       .sort();
-    expect(migrations).toHaveLength(12);
-    expect(migrations.at(-1)).toBe("20260903000000_phase3g_findings.sql");
+    // Advanced for Phase 4E, which legitimately adds the tenth and last P0
+    // table (docs/DATABASE.md Section 18). The protection is unchanged: this
+    // phase still contributes NO migration of its own, and the Phase 3G
+    // migration remains exactly where it was.
+    expect(migrations).toHaveLength(13);
+    expect(migrations.at(-1)).toBe(
+      "20260904000000_phase4e_regression_runs.sql",
+    );
+    expect(migrations.at(-2)).toBe("20260903000000_phase3g_findings.sql");
   });
 
   it("18: PHASE 4B-R2 ADDS NO API ROUTE and NO UI SURFACE", () => {
