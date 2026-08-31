@@ -204,3 +204,201 @@ export interface RegressionFinalizationDecision {
   readonly findingAction: RegressionFindingAction;
   readonly reason: RegressionDecisionReason;
 }
+
+// ============================================================================
+// PHASE 4E-R2 — ORCHESTRATION
+// ============================================================================
+
+/**
+ * The complete input a caller may supply to start a regression.
+ *
+ * Deliberately two fields. There is no URL, host, endpoint, callback, IP,
+ * script, command, payload, event type, scenario id, invariant id, diagnosis
+ * or result anywhere in this shape — the scenario and its relevant invariant
+ * set are re-derived from the persisted original Finding every time, and a
+ * caller can never choose either. `freshOrderId` selects an EXISTING internal
+ * order row for the two provider-dependent scenarios; it is a database
+ * selection, never a network destination.
+ */
+export interface StartRegressionInput {
+  readonly findingId: string;
+  readonly freshOrderId?: string;
+}
+
+/**
+ * The external action a multi-step regression is waiting for.
+ *
+ * A closed vocabulary. Phase 4E never performs these itself and never
+ * pretends one happened: C07 needs a real Razorpay Test Mode Checkout in a
+ * browser, and C11-A needs a genuinely failed Test Mode payment.
+ */
+export const REGRESSION_CONTINUATIONS = Object.freeze([
+  "C07_TEST_MODE_CHECKOUT",
+  "C11_A_TEST_MODE_FAILED_PAYMENT",
+] as const);
+
+export type RegressionContinuation = (typeof REGRESSION_CONTINUATIONS)[number];
+
+/** Why a regression could not start, or could not reach a verdict. */
+export const REGRESSION_SERVICE_REASONS = Object.freeze([
+  /** The Finding cannot be re-tested right now. Carries the R1 code. */
+  "NOT_ELIGIBLE",
+  /** A provider-dependent scenario needs a fresh order and none was given. */
+  "FRESH_ORDER_REQUIRED",
+  /** The chosen fresh order is no longer a valid subject. */
+  "FRESH_ORDER_NOT_ELIGIBLE",
+  /** The original genuine source evidence is no longer eligible to replay. */
+  "SOURCE_NO_LONGER_ELIGIBLE",
+  /** The original run's persisted shape does not identify one C11 path. */
+  "ORIGINAL_PATH_UNRESOLVED",
+  /** The original chaos run could not be read. */
+  "ORIGINAL_RUN_UNREADABLE",
+  /** The safety gate refused, and no durable chaos run was created. */
+  "CHAOS_RUN_NOT_PERSISTED",
+  /** The safety gate refused and recorded a BLOCKED chaos run. */
+  "CHAOS_RUN_BLOCKED",
+  /** The scenario execution service refused to start the run. */
+  "EXECUTION_NOT_STARTABLE",
+  /** Execution began and failed technically. */
+  "EXECUTION_FAILED",
+  /** Invariant evaluation could not complete. */
+  "EVALUATION_FAILED",
+  /** The evaluation completed but proved nothing (see the R1 decision). */
+  "INCONCLUSIVE",
+  /** Another start won the active-regression race. */
+  "ACTIVE_RACE_LOST",
+  /**
+   * A newer regression attempt exists for this Finding, so this older
+   * completed attempt must not touch the Finding lifecycle. The Finding
+   * always reflects the NEWEST applicable attempt.
+   */
+  "NEWER_REGRESSION_EXISTS",
+  /**
+   * The supplied fresh order is the very order the original run consumed. A
+   * re-test must use a genuinely new subject.
+   */
+  "FRESH_ORDER_REUSE_FORBIDDEN",
+  /**
+   * A previous CONCLUSIVE regression had not yet applied its verdict to the
+   * Finding, and converging it failed. Starting a new attempt on top of known
+   * unconverged state would risk losing that earlier verdict entirely.
+   */
+  "PRIOR_CONVERGENCE_FAILED",
+] as const);
+
+export type RegressionServiceReason =
+  (typeof REGRESSION_SERVICE_REASONS)[number];
+
+/** The safe identifiers every in-flight or finished attempt carries. */
+export interface RegressionAttemptRef {
+  readonly findingId: string;
+  readonly regressionRunId: string;
+  readonly chaosRunId: string;
+  readonly scenarioId: string;
+}
+
+/**
+ * What one orchestration call did.
+ *
+ * `COMPLETED` is the only variant that carries a verdict, and even then the
+ * Finding may be unchanged — an `ERROR` regression never moves a Finding.
+ */
+export type RegressionOperationResult =
+  | {
+      readonly kind: "COMPLETED";
+      readonly attempt: RegressionAttemptRef;
+      readonly regressionStatus: Extract<
+        RegressionRunStatus,
+        "RESOLVED" | "STILL_FAILING" | "ERROR"
+      >;
+      readonly findingAction: RegressionFindingAction;
+      readonly decisionReason: RegressionDecisionReason;
+    }
+  | {
+      readonly kind: "AWAITING_EXTERNAL_ACTION";
+      readonly attempt: RegressionAttemptRef;
+      readonly continuation: RegressionContinuation;
+    }
+  | {
+      readonly kind: "IN_PROGRESS";
+      readonly attempt: RegressionAttemptRef;
+    }
+  | {
+      /**
+       * This attempt reached a verdict, but a NEWER attempt has since been
+       * recorded for the same Finding. The older verdict stands as history
+       * and the Finding is left exactly as the newer attempt left it.
+       *
+       * SERVICE-LEVEL ONLY. `regression_runs.status` has no `SUPERSEDED`
+       * value and never will — the row keeps its own terminal verdict.
+       */
+      readonly kind: "SUPERSEDED";
+      readonly attempt: RegressionAttemptRef;
+      readonly regressionStatus: Extract<
+        RegressionRunStatus,
+        "RESOLVED" | "STILL_FAILING" | "ERROR"
+      >;
+      readonly reason: Extract<
+        RegressionServiceReason,
+        "NEWER_REGRESSION_EXISTS"
+      >;
+    }
+  | {
+      readonly kind: "ERRORED";
+      readonly attempt: RegressionAttemptRef;
+      readonly reason: RegressionServiceReason;
+      /** Present only when the safety gate recorded a BLOCKED run. */
+      readonly failedPrecheckId: string | null;
+    };
+
+/**
+ * Starting can also fail before any attempt exists, or leave a safety-gated
+ * chaos run with no regression row when a concurrent start wins the race.
+ */
+export type StartRegressionResult =
+  | RegressionOperationResult
+  | {
+      readonly kind: "NOT_STARTED";
+      readonly findingId: string;
+      readonly reason: RegressionServiceReason;
+      /** The R1 ineligibility code, when eligibility was what refused. */
+      readonly ineligibility: RegressionIneligibilityCode | null;
+    }
+  | {
+      /**
+       * A durable chaos run was created, then the regression insert lost the
+       * active-regression race. The run is NEVER executed and NEVER deleted —
+       * it stays as audit evidence that a start was attempted.
+       */
+      readonly kind: "ORPHAN_START";
+      readonly findingId: string;
+      readonly chaosRunId: string;
+      readonly scenarioId: string;
+      readonly reason: RegressionServiceReason;
+    };
+
+// ============================================================================
+// FINDING LIFECYCLE
+// ============================================================================
+
+/** The outcome of one guarded Finding lifecycle write. */
+export type FindingLifecycleKind = "UPDATED" | "ALREADY" | "NO_CHANGE";
+
+export interface FindingLifecycleResult {
+  readonly kind: FindingLifecycleKind;
+  readonly findingId: string;
+  readonly status: FindingStatus;
+  readonly resolvedAt: string | null;
+  readonly updatedAt: string;
+}
+
+export const FINDING_LIFECYCLE_ERROR_CODES = Object.freeze([
+  "FINDING_LIFECYCLE_ID_INVALID",
+  "FINDING_LIFECYCLE_READ_FAILED",
+  "FINDING_LIFECYCLE_UPDATE_FAILED",
+  "FINDING_LIFECYCLE_NOT_FOUND",
+  "FINDING_LIFECYCLE_STATE_CONFLICT",
+] as const);
+
+export type FindingLifecycleErrorCode =
+  (typeof FINDING_LIFECYCLE_ERROR_CODES)[number];

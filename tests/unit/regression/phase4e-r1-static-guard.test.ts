@@ -16,9 +16,30 @@ import { describe, expect, it } from "vitest";
 
 const DIR = join(process.cwd(), "lib", "regression");
 
-const files = readdirSync(DIR)
+/**
+ * SCOPED TO R1, NOT WEAKENED (Phase 4E-R2).
+ *
+ * R2 legitimately adds `service.ts` and `finding-lifecycle-repository.ts`,
+ * which DO orchestrate chaos and DO write a Finding — the two things this
+ * file was written to forbid. Rather than deleting those assertions, the file
+ * now pins the four R1 modules by exact name and continues to prove every
+ * original R1 guarantee against them unchanged. The R2 modules get their own
+ * boundaries in `phase4e-r2-static-guard.test.ts`.
+ */
+const R1_FILES = [
+  "eligibility.ts",
+  "finalization.ts",
+  "repository.ts",
+  "types.ts",
+] as const;
+
+const allFiles = readdirSync(DIR)
   .filter((name) => name.endsWith(".ts"))
   .sort();
+
+const files = allFiles.filter((name) =>
+  (R1_FILES as readonly string[]).includes(name),
+);
 
 function read(name: string): string {
   return readFileSync(join(DIR, name), "utf8");
@@ -39,21 +60,32 @@ const codes = new Map(files.map((name) => [name, codeOf(read(name))]));
 const ALL_CODE = [...codes.values()].join("\n");
 
 describe("Phase 4E-R1 — directory contents", () => {
-  it("1: exactly the four approved R1 modules exist", () => {
-    expect(files).toEqual([
-      "eligibility.ts",
-      "finalization.ts",
-      "repository.ts",
-      "types.ts",
-    ]);
+  it("1: all four approved R1 modules are still present", () => {
+    expect(files).toEqual([...R1_FILES]);
   });
 
-  it("2: no orchestration service exists yet — that is R2's", () => {
-    expect(files).not.toContain("service.ts");
+  it("2: no R1 module orchestrates a regression — that stays R2's", () => {
+    // The R1 modules themselves must never gain orchestration. `service.ts`
+    // legitimately exists now and is governed by the R2 guard.
     for (const name of files) {
       expect(codes.get(name), name).not.toContain("startRegression");
+      expect(codes.get(name), name).not.toContain("advanceRegression");
+      expect(codes.get(name), name).not.toContain("completeRegression");
       expect(codes.get(name), name).not.toContain("executeRegression");
     }
+  });
+
+  it("3: the R2 additions are the only new modules in this directory", () => {
+    // An unreviewed fifth-plus module would fail here rather than slipping in
+    // under R1's scoping.
+    expect(allFiles).toEqual([
+      "eligibility.ts",
+      "finalization.ts",
+      "finding-lifecycle-repository.ts",
+      "repository.ts",
+      "service.ts",
+      "types.ts",
+    ]);
   });
 });
 
