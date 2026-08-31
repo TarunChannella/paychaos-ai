@@ -90,6 +90,16 @@ export const RECOMMENDATION_CATALOGUE_VERSION =
  */
 export const RECOMMENDATION_OUTPUT_SOURCE = "DETERMINISTIC_CATALOGUE" as const;
 
+/**
+ * The frozen P0 explanation-template set (`docs/AI_DESIGN.md` Sections 46–48).
+ *
+ * Exposed as provenance so a reader — or a later phase — can tell which fixed
+ * wording produced an explanation, without that wording having to be
+ * re-derived or guessed. It is application-level only: no schema column
+ * records it.
+ */
+export const RECOMMENDATION_TEMPLATE_VERSION = "TEMPLATE-V1" as const;
+
 // ============================================================================
 // FROZEN P0 RECOMMENDATION VOCABULARY (docs/AI_DESIGN.md Section 43)
 // ============================================================================
@@ -200,6 +210,7 @@ export interface RegressionRecommendationV1 {
 export interface RecommendationV1 {
   readonly version: typeof RECOMMENDATION_OUTPUT_VERSION;
   readonly catalogueVersion: typeof RECOMMENDATION_CATALOGUE_VERSION;
+  readonly templateVersion: typeof RECOMMENDATION_TEMPLATE_VERSION;
   readonly outputSource: typeof RECOMMENDATION_OUTPUT_SOURCE;
   readonly findingId: string;
   readonly invariantResultId: string;
@@ -853,6 +864,7 @@ export function buildRecommendation(
   return {
     version: RECOMMENDATION_OUTPUT_VERSION,
     catalogueVersion: RECOMMENDATION_CATALOGUE_VERSION,
+    templateVersion: RECOMMENDATION_TEMPLATE_VERSION,
     outputSource: RECOMMENDATION_OUTPUT_SOURCE,
     findingId: classification.findingId,
     invariantResultId: classification.invariantResultId,

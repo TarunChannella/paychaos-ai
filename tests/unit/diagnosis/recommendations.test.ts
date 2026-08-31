@@ -8,6 +8,7 @@ import {
   RECOMMENDATION_ERROR_CODES,
   RECOMMENDATION_OUTPUT_SOURCE,
   RECOMMENDATION_OUTPUT_VERSION,
+  RECOMMENDATION_TEMPLATE_VERSION,
   RecommendationError,
 } from "@/lib/diagnosis/recommendations";
 import {
@@ -182,6 +183,15 @@ describe("Phase 4D-R1 — catalogue and vocabulary", () => {
     );
     expect(recommend("INV-005", "C03").catalogueVersion).toBe(
       "RECOMMENDATION-CATALOGUE-V1",
+    );
+  });
+
+  it("2b: the template version is the frozen TEMPLATE-V1", () => {
+    expect(RECOMMENDATION_TEMPLATE_VERSION).toBe("TEMPLATE-V1");
+    // Provenance travels on every generated recommendation.
+    expect(recommend("INV-005", "C03").templateVersion).toBe("TEMPLATE-V1");
+    expect(recommend("INV-002", "C01", RC002_STRONG).templateVersion).toBe(
+      "TEMPLATE-V1",
     );
   });
 

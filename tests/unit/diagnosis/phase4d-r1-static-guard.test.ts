@@ -381,6 +381,8 @@ describe("Phase 4D-R1 — frozen vocabularies", () => {
     expect(source).toContain(
       'RECOMMENDATION_OUTPUT_SOURCE = "DETERMINISTIC_CATALOGUE"',
     );
+    // Approved 4D-R2 compatibility addition: template provenance only.
+    expect(source).toContain('RECOMMENDATION_TEMPLATE_VERSION = "TEMPLATE-V1"');
   });
 
   it("19: the recommendation-code vocabulary is exactly the approved fourteen", () => {
@@ -549,6 +551,8 @@ describe("Phase 4D-R1 — frozen upstream modules unchanged", () => {
       "diagnostic-signals.ts",
       "evidence-pack-service.ts",
       "evidence-pack.ts",
+      "recommendation-repository.ts",
+      "recommendation-service.ts",
       "recommendations.ts",
       "root-cause-classifier.ts",
       "root-cause-repository.ts",
