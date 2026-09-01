@@ -298,9 +298,16 @@ describe("061-phase3e-chaos-evidence-assembly.integration.test.ts — provenance
     expect(integrationFiles.filter((name) => name.startsWith("074-"))).toEqual([
       "074-phase4e-terminal-convergence.integration.test.ts",
     ]);
+    // 075 is the Phase 4F-R2 reliability read proof, added after this file.
+    // It is READ-ONLY: it creates, updates and deletes nothing, so it adds no
+    // provenance risk of its own. Pinned by exact name for the same reason as
+    // the rest.
+    expect(integrationFiles.filter((name) => name.startsWith("075-"))).toEqual([
+      "075-phase4f-reliability-read.integration.test.ts",
+    ]);
     expect(
-      integrationFiles.filter((name) => name.startsWith("075-")),
-      "a 075- integration suite appeared without this guard being advanced",
+      integrationFiles.filter((name) => name.startsWith("076-")),
+      "a 076- integration suite appeared without this guard being advanced",
     ).toEqual([]);
     expect(functionalSource).not.toMatch(/create\s+table/i);
     expect(functionalSource).not.toMatch(/alter\s+table/i);

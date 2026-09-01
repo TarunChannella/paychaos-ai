@@ -36,19 +36,25 @@ const scoreSource = readFileSync(SCORE, "utf8");
 const R1_CODE = `${codeOf(typesSource)}\n${codeOf(scoreSource)}`;
 
 describe("Phase 4F-R1 — the approved surface", () => {
-  it("1: exactly the two approved production files exist in lib/reliability", () => {
+  it("1: the two pure production files exist in lib/reliability", () => {
     expect(existsSync(TYPES)).toBe(true);
     expect(existsSync(SCORE)).toBe(true);
-    expect(readdirSync(DIR).sort()).toEqual(["score.ts", "types.ts"]);
   });
 
-  it("2: R1 introduces no repository and no service", () => {
-    // Both belong to R2 and must not appear early.
-    expect(existsSync(join(DIR, "repository.ts"))).toBe(false);
-    expect(existsSync(join(DIR, "service.ts"))).toBe(false);
+  it("2: the reliability directory holds only the approved 4F modules", () => {
+    // Advanced in R2: repository.ts and service.ts are now legitimate. The
+    // list stays pinned so a fifth module cannot appear unnoticed, and the
+    // purity assertions below still apply to types.ts and score.ts alone.
+    expect(readdirSync(DIR).sort()).toEqual([
+      "repository.ts",
+      "score.ts",
+      "service.ts",
+      "types.ts",
+    ]);
   });
 
-  it("3: R1 introduces no API route and no UI page", () => {
+  it("3: 4F introduces no API route and no UI page yet", () => {
+    // Both belong to R3.
     expect(existsSync(join(ROOT, "app", "api", "reliability"))).toBe(false);
     expect(existsSync(join(ROOT, "app", "reliability"))).toBe(false);
   });
@@ -63,11 +69,19 @@ describe("Phase 4F-R1 — the approved surface", () => {
     );
   });
 
-  it("5: R1 introduces no real-Supabase integration suite", () => {
+  it("5: the 4F integration suite is exactly the approved 075 read proof", () => {
+    // Advanced in R2: 075 now legitimately exists and is read-only. Pinned by
+    // exact name, and 076 stays forbidden until R3 advances it.
     const integration = readdirSync(
       join(ROOT, "tests", "integration", "supabase"),
-    ).filter((name) => name.startsWith("075-"));
-    expect(integration).toEqual([]);
+    );
+    expect(integration.filter((name) => name.startsWith("075-"))).toEqual([
+      "075-phase4f-reliability-read.integration.test.ts",
+    ]);
+    expect(
+      integration.filter((name) => name.startsWith("076-")),
+      "a 076- integration suite appeared without this guard being advanced",
+    ).toEqual([]);
   });
 });
 
