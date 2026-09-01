@@ -44,6 +44,59 @@ const APPROVED_PHASE_3F_RUN_IDS = [
 const FRESH_C03_RUN_ID = "c406dafd-d48f-4e1e-b092-030acbb5e32b";
 const HISTORICAL_C07_RUN_ID = "68878716-ed49-40ec-85de-f962a4f6b21c";
 
+/**
+ * Every `findings` column, so the baseline comparison below can prove that
+ * NOTHING about a finding moved — not its identity, not its lifecycle, not
+ * its advisory Phase 4 fields, not its timestamps.
+ */
+const FINDINGS_PROJECTION =
+  "id, invariant_result_id, status, title, diagnosis_code, diagnosis_strength, diagnosis_summary, recommendation_code, recommendation_text, diagnosed_at, resolved_at, created_at, updated_at";
+
+/** Deterministically ordered, so BEFORE and AFTER are directly comparable. */
+async function readFindingsSnapshot() {
+  const { data, error } = await client
+    .from("findings")
+    .select(FINDINGS_PROJECTION)
+    .order("id", { ascending: true });
+  if (error !== null) {
+    throw new Error("The findings baseline could not be read.");
+  }
+  return data ?? [];
+}
+
+/**
+ * The baseline, captured BEFORE any read model in this file runs.
+ *
+ * WHY THIS REPLACED A GLOBAL COUNT ASSERTION. Phase 3H's original test 24
+ * asserted `findings` was globally EMPTY, which was true when this file was
+ * written: no phase had yet created a Finding. Later phases legitimately
+ * persist real Findings — the Phase 4E manual C07 and C11-A regressions did
+ * exactly that, on genuine Razorpay Test Mode evidence, and those rows are
+ * deliberately preserved.
+ *
+ * The guarantee under test was never "the application can never contain a
+ * Finding". It was, and still is, "Phase 3H READ MODELS CREATE OR MUTATE
+ * NOTHING". Comparing a baseline snapshot against the state after every read
+ * proves precisely that, and keeps proving it however many Findings the
+ * database legitimately accumulates — so this is a strictly stronger
+ * assertion than the count it replaces, not a weaker one. A hard-coded count
+ * of any value (0, 2, or otherwise) would only be a new expiry date.
+ *
+ * NO SETUP HOOK, DELIBERATELY. This file's static provenance guard
+ * (`tests/unit/supabase/066-phase3h-read-models-provenance-guard.test.ts`
+ * test 5) bans `before`/`after` hooks outright, on the sound reasoning that a
+ * read-only suite growing a cleanup hook is a signal it has started writing.
+ * That guard is left exactly as it is. The baseline is instead captured by a
+ * module-scope read that starts at import time — before any test in this file
+ * runs, and therefore before any read model is exercised — and its rejection
+ * is folded into a value so a failed baseline read fails test 24 loudly
+ * instead of surfacing as an unhandled rejection.
+ */
+const findingsBaseline = readFindingsSnapshot().then(
+  (rows) => ({ ok: true as const, rows }),
+  () => ({ ok: false as const, rows: [] }),
+);
+
 describe("066 — scenario DTO against the real deployment", () => {
   it("1: the catalogue is exactly the four approved P0 scenarios", () => {
     expect(listScenarioDtos().map((s) => s.scenarioId)).toEqual([
@@ -444,10 +497,17 @@ describe("066 — nothing was written", () => {
     expect(runCount).toBe(5);
   });
 
-  it("24: the findings table is still empty — read models create nothing", async () => {
-    const { count } = await client
-      .from("findings")
-      .select("id", { count: "exact", head: true });
-    expect(count).toBe(0);
+  it("24: the findings table is byte-for-byte unchanged — read models create or mutate nothing", async () => {
+    const baseline = await findingsBaseline;
+    expect(baseline.ok, "the findings baseline was read at import time").toBe(
+      true,
+    );
+    const after = await readFindingsSnapshot();
+
+    // A single deep equality over the full projection, in a deterministic
+    // order, simultaneously proves: no finding inserted, none deleted, no
+    // status changed, no lifecycle field changed, no diagnosis or
+    // recommendation field changed, and no timestamp changed.
+    expect(after).toEqual(baseline.rows);
   });
 });

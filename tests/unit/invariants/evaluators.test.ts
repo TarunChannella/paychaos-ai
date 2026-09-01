@@ -2208,6 +2208,7 @@ describe("INV-011 — payment state is legal, monotonic and convergent", () => {
 
   it.each([
     ["UNPAID", "PENDING"],
+    ["UNPAID", "FAILED_OBSERVED"],
     ["UNPAID", "PAID"],
     ["PENDING", "FAILED_OBSERVED"],
     ["PENDING", "PAID"],
@@ -2216,6 +2217,59 @@ describe("INV-011 — payment state is legal, monotonic and convergent", () => {
     ["PAID", "PAID"],
   ])("PASS: %s -> %s is legal", (from, to) => {
     expect(evaluateInv011(transition(from, to)).disposition).toBe("PASS");
+  });
+
+  it("INV-011/v2 — PASS: UNPAID -> FAILED_OBSERVED, the genuine C11-A transition", () => {
+    // The exact shape the Phase 4E-R3-B C11-A regression observed against real
+    // Razorpay Test Mode evidence: a verified `payment.failed` reached an
+    // order still recorded UNPAID, leaving business status OPEN with no
+    // fulfilment and no capture authority. Under v1's seven-member set this
+    // FAILED even though no money-safety guarantee was broken
+    // (docs/MONEY_INVARIANTS.md Section 11.1).
+    const result = evaluateInv011(transition("UNPAID", "FAILED_OBSERVED"));
+
+    expect(
+      evaluateOrderPaymentStatusTransition("UNPAID", "FAILED_OBSERVED"),
+    ).toBe("LEGAL");
+    expect(result.disposition).toBe("PASS");
+    // Counted as a real transition, not silently treated as no observation.
+    expect(persistableOf(result).observedSummary).toContain(
+      "legal transitions observed = 1",
+    );
+  });
+
+  it("INV-011/v2 — the addition did NOT weaken PAID monotonicity or permit fulfilment on failure", () => {
+    // Rules B/D are untouched by the v2 legal-set change.
+    for (const to of ["UNPAID", "PENDING", "FAILED_OBSERVED"]) {
+      expect(evaluateInv011(transition("PAID", to)).disposition).toBe("FAIL");
+    }
+    // A failure-state order carrying a fulfilment is still a violation.
+    expect(
+      evaluateInv011(
+        bundle({
+          originalProcessingAttempts: [
+            attempt({
+              stateBefore: captured(
+                snapshot({
+                  orderPaymentStatus: "UNPAID",
+                  orderBusinessStatus: "OPEN",
+                  fulfilments: [],
+                }),
+              ),
+              stateAfter: captured(
+                snapshot({
+                  orderPaymentStatus: "FAILED_OBSERVED",
+                  orderBusinessStatus: "FULFILLED",
+                  fulfilments: [],
+                }),
+              ),
+            }),
+          ],
+          authoritativeCapture: { kind: "NONE_OBSERVED" },
+          authoritativeCaptureWebhook: null,
+        }),
+      ).disposition,
+    ).toBe("FAIL");
   });
 
   it.each([
@@ -2908,9 +2962,11 @@ describe("authoritative capture authority requires BOTH identities to agree", ()
 // STATE LEGALITY HELPER
 // ============================================================================
 
-describe("state legality helper — the frozen seven-member transition set", () => {
+describe("state legality helper — the eight-member INV-011/v2 transition set", () => {
   it.each([
     ["UNPAID", "PENDING"],
+    // Added in INV-011/v2 (docs/MONEY_INVARIANTS.md Section 11.1).
+    ["UNPAID", "FAILED_OBSERVED"],
     ["UNPAID", "PAID"],
     ["PENDING", "FAILED_OBSERVED"],
     ["PENDING", "PAID"],
@@ -2939,7 +2995,7 @@ describe("state legality helper — the frozen seven-member transition set", () 
     );
   });
 
-  it("the legal set has exactly seven members and no others", () => {
+  it("the legal set has exactly eight members and no others", () => {
     const statuses = ["UNPAID", "PENDING", "FAILED_OBSERVED", "PAID"];
     const legal: string[] = [];
     for (const from of statuses) {
@@ -2955,10 +3011,11 @@ describe("state legality helper — the frozen seven-member transition set", () 
       "PAID->PAID",
       "PENDING->FAILED_OBSERVED",
       "PENDING->PAID",
+      "UNPAID->FAILED_OBSERVED",
       "UNPAID->PAID",
       "UNPAID->PENDING",
     ]);
-    expect(legal).toHaveLength(7);
+    expect(legal).toHaveLength(8);
   });
 
   it("ARCHITECT REGRESSION — FULFILLED -> OPEN is always ILLEGAL; OPEN -> FULFILLED is CONDITIONAL, never a bare LEGAL", () => {
@@ -3090,9 +3147,14 @@ describe("the pure dispatcher", () => {
     expect(results.map((r) => r.invariantId)).toEqual([...MONEY_INVARIANT_IDS]);
   });
 
-  it("every envelope carries the run's truthful correlations and version 1", () => {
+  it("every envelope carries the run's truthful correlations and its own catalogue version", () => {
+    // Narrowed, not weakened: each envelope's version is still asserted
+    // exactly. INV-011 reports "2" as of Phase 4E-R3-B
+    // (docs/MONEY_INVARIANTS.md Section 48.1); every other P0 rule is "1".
     for (const result of evaluateAllInvariants(bundle())) {
-      expect(result.invariantVersion).toBe("1");
+      expect(result.invariantVersion, result.invariantId).toBe(
+        result.invariantId === "INV-011" ? "2" : "1",
+      );
       expect(result.correlations.chaosRunId).not.toBeNull();
       expect(result.correlations.orderId).toBe(ORDER_ID);
       expect(result.correlations.paymentAttemptId).toBe(ATTEMPT_ID);

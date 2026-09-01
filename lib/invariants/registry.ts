@@ -267,7 +267,14 @@ const CATALOGUE: Readonly<Record<MoneyInvariantId, MoneyInvariantDefinition>> =
 
     "INV-011": Object.freeze({
       invariantId: "INV-011",
-      version: "1",
+      // v2 (Phase 4E-R3-B). The deterministic meaning of Rule A changed:
+      // `UNPAID -> FAILED_OBSERVED` became legal after genuine Razorpay Test
+      // Mode evidence proved the direct provider-failure transition the
+      // frozen Phase 2F processing path actually produces
+      // (docs/MONEY_INVARIANTS.md §11, §26 §8 Rule A, §48). Historical
+      // INV-011/v1 results stay exactly as persisted and remain
+      // distinguishable by their stored `invariant_version`.
+      version: "2",
       name: "Payment State Is Legal, Monotonic and Convergent",
       priority: "P0",
       defaultSeverity: "CRITICAL",
@@ -285,7 +292,7 @@ const CATALOGUE: Readonly<Record<MoneyInvariantId, MoneyInvariantDefinition>> =
         "FIX-RECONCILIATION",
         "FIX-CLIENT-INDEPENDENCE",
       ] as const),
-      evaluatorKey: "INV-011/v1",
+      evaluatorKey: "INV-011/v2",
     }),
 
     "INV-012": Object.freeze({

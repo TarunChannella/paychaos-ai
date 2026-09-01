@@ -115,11 +115,11 @@ export function isSupportedBusinessEventType(eventType: string): boolean {
  * false FAIL.
  *
  * `NO_TRANSITION` (architect blocker 3F-B-05) is equally distinct from
- * `LEGAL`. The frozen legal set in docs/MONEY_INVARIANTS.md §26 §8 Rule A
- * contains SEVEN members and `PAID -> PAID` is the only self-transition among
- * them. `UNPAID -> UNPAID`, `PENDING -> PENDING` and
+ * `LEGAL`. The legal set in docs/MONEY_INVARIANTS.md §26 §8 Rule A contains
+ * EIGHT members under INV-011/v2 and `PAID -> PAID` is the only
+ * self-transition among them. `UNPAID -> UNPAID`, `PENDING -> PENDING` and
  * `FAILED_OBSERVED -> FAILED_OBSERVED` are NOT members, and silently adding
- * them would widen a frozen contract to model no-op processing. Idempotent
+ * them would widen the contract to model no-op processing. Idempotent
  * re-processing that leaves a status where it was is simply NOT A TRANSITION:
  * there is nothing for Rule A to judge. Callers must treat `NO_TRANSITION` as
  * "no observation", never as a legality claim.
@@ -140,13 +140,29 @@ export type TransitionVerdict =
   | "REQUIRES_FULFILMENT_AUTHORITY";
 
 /**
- * The frozen legal set, transcribed EXACTLY from docs/MONEY_INVARIANTS.md §26
- * §8 Rule A — seven members, no additions:
+ * The legal set, transcribed EXACTLY from docs/MONEY_INVARIANTS.md §26 §8
+ * Rule A under INV-011/v2 — eight members, no additions:
  *
  *   UNPAID -> PENDING            UNPAID -> PAID
+ *   UNPAID -> FAILED_OBSERVED    [ADDED IN v2]
  *   PENDING -> FAILED_OBSERVED   PENDING -> PAID
  *   FAILED_OBSERVED -> PENDING   FAILED_OBSERVED -> PAID
  *   PAID -> PAID
+ *
+ * WHY v2 ADDED `UNPAID -> FAILED_OBSERVED`. Genuine Razorpay Test Mode
+ * evidence (the Phase 4E-R3-B C11-A regression) produced exactly this
+ * transition: the frozen Phase 2F processing path sets
+ * `orders.payment_status = FAILED_OBSERVED` on a verified `payment.failed`,
+ * and nothing in the real flow ever moves the ORDER to `PENDING` merely
+ * because Checkout opened. The v1 seven-member set therefore modelled a
+ * `PENDING` waypoint the implementation deliberately does not create, and
+ * failed a run in which no money-safety guarantee was broken.
+ *
+ * WHAT THIS DOES NOT CHANGE. `PAID` monotonicity (Rule B) is untouched — the
+ * only legal successor of `PAID` is still `PAID`. Nothing here permits a
+ * fulfilment on failure, and nothing here makes a browser/client-reported
+ * failure authoritative: only verified provider processing writes
+ * `FAILED_OBSERVED` in the first place.
  */
 const LEGAL_ORDER_PAYMENT_STATUS_TRANSITIONS: ReadonlyMap<
   string,
@@ -154,7 +170,11 @@ const LEGAL_ORDER_PAYMENT_STATUS_TRANSITIONS: ReadonlyMap<
 > = new Map([
   [
     ORDER_PAYMENT_STATUS_UNPAID,
-    new Set([ORDER_PAYMENT_STATUS_PENDING, ORDER_PAYMENT_STATUS_PAID]),
+    new Set([
+      ORDER_PAYMENT_STATUS_PENDING,
+      ORDER_PAYMENT_STATUS_FAILED_OBSERVED,
+      ORDER_PAYMENT_STATUS_PAID,
+    ]),
   ],
   [
     ORDER_PAYMENT_STATUS_PENDING,
@@ -177,7 +197,7 @@ const KNOWN_ORDER_PAYMENT_STATUSES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Rule A + Rule B, implemented against the frozen seven-member set exactly.
+ * Rule A + Rule B, implemented against the eight-member v2 set exactly.
  *
  * `PAID -> PAID` is `LEGAL` because the source-of-truth lists it. Every OTHER
  * self-transition returns `NO_TRANSITION` — the status did not move, so no

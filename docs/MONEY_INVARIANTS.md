@@ -388,6 +388,7 @@ stateDiagram-v2
     [*] --> CREATED
 
     CREATED --> PAYMENT_PENDING: Payment attempt starts
+    CREATED --> PAYMENT_FAILED: Verified failure observed before pending order state
     CREATED --> PAID: Verified capture arrives before pending UI state
 
     PAYMENT_PENDING --> PAYMENT_FAILED: Verified failure observed
@@ -406,10 +407,11 @@ stateDiagram-v2
 
 # 11. Legal Payment-State Transitions
 
-Allowed:
+Allowed (INV-011/v2 — eight transitions):
 
 ```text
 UNPAID → PENDING
+UNPAID → FAILED_OBSERVED
 UNPAID → PAID
 
 PENDING → FAILED_OBSERVED
@@ -428,6 +430,42 @@ PAID → PAID
 ```
 
 represents idempotent handling of duplicate or stale events.
+
+Every other self-pair — `UNPAID → UNPAID`, `PENDING → PENDING`,
+`FAILED_OBSERVED → FAILED_OBSERVED` — is **not** a member of this set. The
+status did not move, so no transition was observed; idempotent re-processing
+is judged as no observation rather than as a legality claim.
+
+## 11.1 `UNPAID → FAILED_OBSERVED` (added in INV-011/v2)
+
+`UNPAID → FAILED_OBSERVED` was **not** in the original seven-transition set.
+It was added after the Phase 4E-R3-B C11-A regression observed it in genuine
+Razorpay Test Mode evidence:
+
+- a genuine `payment.failed` webhook (`REAL_RAZORPAY_WEBHOOK`, signature
+  verified, processed successfully) arrived for an order still recorded as
+  `UNPAID`;
+- the frozen Phase 2F processing path sets
+  `orders.payment_status = FAILED_OBSERVED` (unless the order is already
+  `PAID`) and leaves `business_status = OPEN` with no fulfilment;
+- nothing in the real flow moves the **order** to `PENDING` merely because
+  Checkout opened — only the payment **attempt** advances to
+  `CHECKOUT_IN_PROGRESS`.
+
+The v1 set therefore modelled a `PENDING` waypoint the implementation
+deliberately does not create, and reported a violation for a run in which no
+money-safety guarantee was broken. The contract was corrected; the merchant
+processing path was not changed.
+
+This addition:
+
+- does **not** weaken `PAID` monotonicity — the only legal successor of
+  `PAID` is still `PAID`, and `PAID → UNPAID`, `PAID → PENDING` and
+  `PAID → FAILED_OBSERVED` remain illegal;
+- does **not** permit any fulfilment on failure — INV-004's fulfilment
+  authority rules are untouched;
+- does **not** make browser or client-reported failure authoritative — only
+  verified provider processing may write `FAILED_OBSERVED` at all.
 
 ---
 
@@ -2111,10 +2149,11 @@ Enough evidence exists to determine at least one state transition or final provi
 
 ### Rule A — Legal Transition
 
-Every observed authoritative merchant payment-state transition must belong to the legal transition set:
+Every observed authoritative merchant payment-state transition must belong to the legal transition set (v2 — eight members, Section 11):
 
 ```text
 UNPAID → PENDING
+UNPAID → FAILED_OBSERVED
 UNPAID → PAID
 
 PENDING → FAILED_OBSERVED
@@ -2125,6 +2164,9 @@ FAILED_OBSERVED → PAID
 
 PAID → PAID
 ```
+
+`UNPAID → FAILED_OBSERVED` is the v2 addition (Section 11.1). Rule B below is
+unchanged by it.
 
 ### Rule B — Paid Is Monotonic
 
@@ -3211,6 +3253,25 @@ increment its version.
 
 Do not silently change an evaluator while leaving historical results indistinguishable.
 
+## 48.1 Version History
+
+| Invariant | Version | Meaning |
+|---|---|---|
+| INV-001 … INV-010, INV-012 | `1` | Original frozen P0 rule. Unchanged. |
+| INV-011 | `1` | Rule A over the original **seven**-transition legal set. Historical only. |
+| INV-011 | `2` | Rule A over the **eight**-transition legal set, adding `UNPAID → FAILED_OBSERVED` (Section 11.1). Current. |
+
+INV-011 was incremented to `2` in Phase 4E-R3-B, after a genuine Razorpay Test
+Mode C11-A regression proved that a verified `payment.failed` legitimately
+reaches an order still recorded as `UNPAID`. Rules B, C, D and E are unchanged
+between v1 and v2.
+
+Persisted INV-011/v1 results remain exactly as they were written and are not
+re-evaluated, rewritten or backfilled (Section 49). Because every result row
+stores its own `invariant_version`, a historical v1 verdict stays
+distinguishable from a current v2 verdict, and a v1 result is read as v1
+semantics rather than being reinterpreted under the current rule.
+
 ---
 
 # 49. Invariant Immutability
@@ -3422,6 +3483,7 @@ At minimum, automated tests must cover:
 | From | To | Expected |
 |---|---|---|
 | UNPAID | PENDING | Legal |
+| UNPAID | FAILED_OBSERVED | Legal (INV-011/v2 — Section 11.1) |
 | UNPAID | PAID | Legal |
 | PENDING | FAILED_OBSERVED | Legal |
 | PENDING | PAID | Legal |

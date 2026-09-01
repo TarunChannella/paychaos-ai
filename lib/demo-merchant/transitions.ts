@@ -30,14 +30,25 @@
 import { DemoMerchantDomainError, type OrderPaymentStatus } from "./types";
 
 /**
- * The complete, frozen allowlist of legal `orders.payment_status`
- * transitions (docs/MONEY_INVARIANTS.md Section 11). Every pair not listed
- * here is illegal, including but not limited to the explicitly documented
- * illegal transitions in Section 12 (`PAID -> UNPAID`, `PAID -> PENDING`,
- * `PAID -> FAILED_OBSERVED`) and `UNPAID -> FAILED_OBSERVED`.
+ * The complete allowlist of legal `orders.payment_status` transitions
+ * (docs/MONEY_INVARIANTS.md Section 11). Every pair not listed here is
+ * illegal, including but not limited to the explicitly documented illegal
+ * transitions in Section 12 (`PAID -> UNPAID`, `PAID -> PENDING`,
+ * `PAID -> FAILED_OBSERVED`).
+ *
+ * `UNPAID -> FAILED_OBSERVED` is legal as of INV-011/v2 (Phase 4E-R3-B):
+ * a verified `payment.failed` legitimately reaches an order that is still
+ * `UNPAID`, because opening Checkout does not move the ORDER to `PENDING`.
+ * This set is kept in step with the invariant engine's own Rule A set in
+ * `lib/invariants/evaluator-utils.ts` — the two must never disagree about
+ * which transitions are legal.
+ *
+ * Legality is still not authority: see the module notice above. Only
+ * verified provider processing may actually write `FAILED_OBSERVED`.
  */
 const LEGAL_PAYMENT_STATUS_TRANSITIONS: ReadonlySet<string> = new Set([
   "UNPAID->PENDING",
+  "UNPAID->FAILED_OBSERVED",
   "UNPAID->PAID",
   "PENDING->FAILED_OBSERVED",
   "PENDING->PAID",

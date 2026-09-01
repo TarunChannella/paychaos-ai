@@ -1836,7 +1836,7 @@ export function evaluateInv010(
  * observed transition — never from event arrival order and never from "latest
  * timestamp wins". A self-transition other than `PAID -> PAID` returns
  * `NO_TRANSITION` and counts as no observation at all, rather than being
- * claimed as a member of the frozen seven-member legal set.
+ * claimed as a member of the eight-member v2 legal set.
  *
  * Rule C uses EXACT successful-processing semantics: only `SUCCEEDED` is
  * first-party success. `PENDING`, `HELD` and `PROCESSING` are in flight and

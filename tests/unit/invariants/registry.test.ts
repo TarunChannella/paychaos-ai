@@ -181,9 +181,33 @@ describe("Phase 3F-A — catalogue values match docs/MONEY_INVARIANTS.md", () =>
     }
   });
 
-  it("7: every version is the P0 baseline '1' (docs/MONEY_INVARIANTS.md Section 48)", () => {
+  it("7: every invariant carries its documented version — INV-011 is '2', every other P0 rule is the baseline '1' (docs/MONEY_INVARIANTS.md Sections 48/48.1)", () => {
+    // Narrowed, not weakened: each version is still asserted exactly. INV-011
+    // incremented to "2" in Phase 4E-R3-B when `UNPAID -> FAILED_OBSERVED`
+    // became legal (Section 11.1); nothing else changed meaning, so a blanket
+    // "everything is 2" would be wrong and is deliberately not asserted.
     for (const definition of listInvariantDefinitions()) {
-      expect(definition.version).toBe("1");
+      expect(definition.version, definition.invariantId).toBe(
+        definition.invariantId === "INV-011" ? "2" : "1",
+      );
+    }
+  });
+
+  it("7b: INV-011 is version '2' with evaluatorKey 'INV-011/v2', and no other invariant moved off v1", () => {
+    const inv011 = getInvariantDefinition("INV-011")!;
+    expect(inv011.version).toBe("2");
+    expect(inv011.evaluatorKey).toBe("INV-011/v2");
+
+    const nonBaseline = listInvariantDefinitions()
+      .filter((definition) => definition.version !== "1")
+      .map((definition) => definition.invariantId);
+    expect(nonBaseline).toEqual(["INV-011"]);
+
+    // Every evaluatorKey still agrees with its own declared version.
+    for (const definition of listInvariantDefinitions()) {
+      expect(definition.evaluatorKey, definition.invariantId).toBe(
+        `${definition.invariantId}/v${definition.version}`,
+      );
     }
   });
 

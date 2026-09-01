@@ -174,16 +174,44 @@ describe("Phase 3G — finding authority", () => {
   });
 
   it("9: the title is the exact deterministic registry value, per invariant", async () => {
-    for (const [id, expected] of [
-      ["INV-003", INV_003_TITLE],
-      ["INV-005", "INV-005 — Invalid Webhook Signature Causes Zero Mutation"],
-      ["INV-011", "INV-011 — Payment State Is Legal, Monotonic and Convergent"],
+    // Each fixture carries the version the catalogue CURRENTLY defines for
+    // that invariant. INV-011 is "2" as of Phase 4E-R3-B
+    // (docs/MONEY_INVARIANTS.md Section 48.1); everything else is still "1".
+    for (const [id, version, expected] of [
+      ["INV-003", "1", INV_003_TITLE],
+      [
+        "INV-005",
+        "1",
+        "INV-005 — Invalid Webhook Signature Causes Zero Mutation",
+      ],
+      [
+        "INV-011",
+        "2",
+        "INV-011 — Payment State Is Legal, Monotonic and Convergent",
+      ],
     ] as const) {
       insertOpenFinding.mockClear();
-      findInvariantResultById.mockResolvedValue(dbResult({ invariant_id: id }));
+      findInvariantResultById.mockResolvedValue(
+        dbResult({ invariant_id: id, invariant_version: version }),
+      );
       await createFindingFromInvariantResult(RESULT_ID);
       expect(insertOpenFinding).toHaveBeenCalledWith(RESULT_ID, expected);
     }
+  });
+
+  it("9b: a HISTORICAL INV-011/v1 result fails closed — v1 semantics are not silently reinterpreted as v2", async () => {
+    // The C11-A regression that exposed the contract gap persisted an
+    // INV-011/v1 FAIL. That row stays exactly as written; asking the CURRENT
+    // catalogue to title it must raise an integrity error rather than quietly
+    // treating a seven-transition verdict as an eight-transition one.
+    findInvariantResultById.mockResolvedValue(
+      dbResult({ invariant_id: "INV-011", invariant_version: "1" }),
+    );
+
+    await expect(
+      createFindingFromInvariantResult(RESULT_ID),
+    ).rejects.toMatchObject({ code: "FINDING_INVARIANT_VERSION_MISMATCH" });
+    expect(insertOpenFinding).not.toHaveBeenCalled();
   });
 
   it("10: the public API accepts NOTHING but an identifier", () => {
@@ -334,7 +362,11 @@ describe("Phase 3G — run-level generation", () => {
     const rows = [
       dbResult({ id: RESULT_ID, invariant_id: "INV-003" }),
       dbResult({ id: RESULT_ID_2, invariant_id: "INV-004" }),
-      dbResult({ id: RESULT_ID_3, invariant_id: "INV-011" }),
+      dbResult({
+        id: RESULT_ID_3,
+        invariant_id: "INV-011",
+        invariant_version: "2",
+      }),
     ];
     listInvariantResultsForChaosRun.mockResolvedValue(rows);
     findInvariantResultById.mockImplementation(async (id: string) =>
