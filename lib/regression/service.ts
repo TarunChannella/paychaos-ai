@@ -400,18 +400,77 @@ async function isNewestConclusiveAttempt(run: RegressionRun): Promise<boolean> {
  * never reach the Finding at all. Converging first makes the sequence behave
  * the way it reads: the Finding always carries the newest CONCLUSIVE result.
  *
- * Creates no chaos run and no regression row, and never rewrites a historical
- * status — an already-applied verdict converges as a zero-write `ALREADY`.
+ * LIFECYCLE CONVERGENCE ONLY — IT NEVER RE-EVALUATES THE OLD RUN.
+ *
+ * The durable ordering this module guarantees is: terminalize
+ * `regression_runs` FIRST, then apply the Finding lifecycle. So a regression
+ * row that already reads `RESOLVED` or `STILL_FAILING` has ALREADY been
+ * through the chaos run, the invariant evaluation and the deterministic
+ * finalization — the stored status IS that verdict. The only durable step
+ * that can still be missing is the later Finding write, and recovering it
+ * needs the stored status and nothing else.
+ *
+ * Re-deriving the verdict by re-running the historical chaos run is therefore
+ * unnecessary, and after an invariant version increment it is actively WRONG.
+ * Determinism in docs/MONEY_INVARIANTS.md §47 is "same evidence + SAME
+ * invariant version = same result". Re-evaluating a v1 run under v2 asks a
+ * different question of the same evidence and silently reinterprets a
+ * historical verdict. It is also refused at the storage layer, correctly:
+ * `persistInvariantResult` throws `INVARIANT_RESULT_INTEGRITY_CONFLICT`
+ * rather than rewrite the immutable `(chaos_run_id, invariant_id)` row (§49),
+ * which previously made every affected Finding permanently unable to start a
+ * new regression.
+ *
+ * A re-test does not reinterpret old evidence — it produces NEW evidence:
+ *
+ *   original FAIL -> Finding -> fix -> NEW chaos run -> NEW evidence
+ *     -> evaluation under the CURRENT invariant versions -> NEW results
+ *
+ * Creates no chaos run and no regression row, never rewrites a historical
+ * regression status, and writes to the Finding only when the stored verdict
+ * and the Finding actually disagree.
  */
 async function convergePreviousConclusive(
   findingId: string,
 ): Promise<{ readonly ok: boolean }> {
   const history = await listRegressionRunsForFinding(findingId);
+  // Newest-first, so this is the newest CONCLUSIVE attempt. An intervening
+  // `ERROR` carries NO_CHANGE semantics and must never mask an older verdict.
   const previous = history.find((entry) => isConclusive(entry.status));
   if (previous === undefined) return { ok: true };
 
   try {
-    await completeRegression(previous.id);
+    const lifecycle = await readFindingLifecycle(findingId);
+    if (lifecycle === null) {
+      // The Finding cannot be read, so its convergence cannot be confirmed.
+      return { ok: false };
+    }
+
+    const target =
+      previous.status === "RESOLVED" ? "RESOLVED" : "STILL_FAILING";
+    if (lifecycle.status === target) {
+      // Already converged. Zero writes — `updated_at` is not disturbed, and
+      // a RESOLVED Finding keeps its original `resolved_at`.
+      return { ok: true };
+    }
+
+    // Compare-and-set on the `updated_at` just read, so a concurrent
+    // lifecycle write always wins over this recovery rather than clobbering
+    // it. `markFindingStillFailingAfterRegression` clears `resolved_at` in
+    // the same statement when it reopens a RESOLVED Finding.
+    if (target === "RESOLVED") {
+      await resolveFindingAfterRegression({
+        findingId,
+        resolvedAt: nowIso(),
+        expectedUpdatedAt: lifecycle.updatedAt,
+      });
+    } else {
+      await markFindingStillFailingAfterRegression({
+        findingId,
+        updatedAt: nowIso(),
+        expectedUpdatedAt: lifecycle.updatedAt,
+      });
+    }
   } catch {
     // Fail closed. Starting on top of known unconverged state could lose the
     // earlier verdict permanently.

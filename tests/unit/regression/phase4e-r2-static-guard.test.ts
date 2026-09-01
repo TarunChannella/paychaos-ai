@@ -39,6 +39,35 @@ const serviceCode = codeOf(serviceSource);
 const lifecycleCode = codeOf(lifecycleSource);
 const R2_CODE = `${serviceCode}\n${lifecycleCode}`;
 
+/**
+ * The source of one top-level function in `service.ts`, from its declaration
+ * to the next top-level declaration. Lets an assertion say WHERE a call site
+ * lives, not merely how many exist.
+ */
+function bodyOf(declaration: string): string {
+  const start = serviceCode.indexOf(declaration);
+  if (start === -1) return "";
+  const after = serviceCode.slice(start);
+  const newline = String.fromCharCode(10);
+  let end = after.length;
+  for (const marker of [`${newline}function `, `${newline}async function `]) {
+    const index = after.indexOf(marker, 1);
+    if (index !== -1 && index < end) end = index;
+  }
+  return after.slice(0, end);
+}
+
+/** Occurrences of a plain substring. No regex, so no escaping hazard. */
+function countOf(haystack: string, needle: string): number {
+  let count = 0;
+  let index = haystack.indexOf(needle);
+  while (index !== -1) {
+    count += 1;
+    index = haystack.indexOf(needle, index + needle.length);
+  }
+  return count;
+}
+
 describe("Phase 4E-R2 — module boundaries", () => {
   it("1: both R2 modules are server-only", () => {
     expect(serviceSource).toContain('import "server-only"');
@@ -383,15 +412,27 @@ describe("Phase 4E-R2 — the newest attempt owns the Finding", () => {
   });
 
   it("34: a stale attempt never retries its lifecycle write in a loop", () => {
-    // Exactly one call site each; the conflict path returns SUPERSEDED or
-    // rethrows, it never loops.
-    expect(
-      (serviceCode.match(/resolveFindingAfterRegression\(/g) ?? []).length,
-    ).toBe(1);
-    expect(
-      (serviceCode.match(/markFindingStillFailingAfterRegression\(/g) ?? [])
-        .length,
-    ).toBe(1);
+    // Narrowed in Phase 4E-R3-B, not relaxed. There are now exactly TWO call
+    // sites for each lifecycle write, and this pins both to their owning
+    // function rather than merely counting them: one in `completeRegression`
+    // (a new attempt's own verdict) and one in `convergePreviousConclusive`
+    // (recovering a lost write from a STORED verdict). Each executes at most
+    // once per call - the conflict path returns SUPERSEDED or rethrows, and
+    // there is still no loop anywhere in the module.
+    const converge = bodyOf("async function convergePreviousConclusive(");
+    const complete = bodyOf("export async function completeRegression(");
+    expect(converge.length).toBeGreaterThan(0);
+    expect(complete.length).toBeGreaterThan(0);
+
+    for (const call of [
+      "resolveFindingAfterRegression(",
+      "markFindingStillFailingAfterRegression(",
+    ]) {
+      expect(countOf(serviceCode, call), call).toBe(2);
+      expect(countOf(converge, call), `converge ${call}`).toBe(1);
+      expect(countOf(complete, call), `complete ${call}`).toBe(1);
+    }
+
     expect(serviceCode).not.toContain("while (");
     expect(serviceCode).not.toContain("for (");
   });
@@ -414,6 +455,44 @@ describe("Phase 4E-R2 — the newest attempt owns the Finding", () => {
     const create = serviceCode.indexOf("createChaosRun(planned.plan.create)");
     expect(converge).toBeGreaterThan(start);
     expect(converge).toBeLessThan(create);
+  });
+
+  it("34e: convergence applies the STORED verdict and never re-evaluates the historical run", () => {
+    // Phase 4E-R3-B. A terminal regression row IS the durable verdict, so
+    // recovering a lost Finding write needs its stored status and nothing
+    // else. Re-running the historical chaos run asks a different question of
+    // the same evidence once an invariant version has been incremented, and
+    // the immutable result store correctly refuses to rewrite the existing
+    // (chaos_run_id, invariant_id) row — which used to block every future
+    // regression for the affected Finding permanently.
+    const body = bodyOf("async function convergePreviousConclusive(");
+    expect(body.length).toBeGreaterThan(0);
+
+    for (const forbidden of [
+      "completeRegression(",
+      "evaluateChaosRun(",
+      "evaluateInvariant(",
+      "persistInvariantResult(",
+      "createChaosRun(",
+      "insertPendingRegressionRun(",
+      "executeC01Replay(",
+      "executeC03InvalidSignatureTest(",
+      "armC07ClientConfirmationDrop(",
+      "executeC11RealWebhookReplay(",
+      "startC11AFailureObservation(",
+    ]) {
+      expect(body, forbidden).not.toContain(forbidden);
+    }
+
+    // It converges through the existing narrow lifecycle repository only,
+    // reading first so the write is a genuine compare-and-set.
+    expect(body).toContain("readFindingLifecycle(");
+    expect(body).toContain("resolveFindingAfterRegression(");
+    expect(body).toContain("markFindingStillFailingAfterRegression(");
+    expect(body).toContain("expectedUpdatedAt");
+    // And it still selects the newest CONCLUSIVE attempt, so an intervening
+    // ERROR cannot mask an older verdict.
+    expect(body).toContain("isConclusive(");
   });
 
   it("34d: only a CONCLUSIVE attempt can supersede another", () => {

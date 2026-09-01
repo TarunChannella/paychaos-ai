@@ -261,9 +261,14 @@ describe("065-phase3g-findings.integration.test.ts — provenance guard", () => 
     expect(integrationFiles.filter((name) => name.startsWith("073-"))).toEqual([
       "073-phase4e-regression-api.integration.test.ts",
     ]);
+    // 074 is the Phase 4E-R3-B terminal-convergence suite, added after this
+    // file, and is pinned by exact name for the same reason as the rest.
+    expect(integrationFiles.filter((name) => name.startsWith("074-"))).toEqual([
+      "074-phase4e-terminal-convergence.integration.test.ts",
+    ]);
     expect(
-      integrationFiles.filter((name) => name.startsWith("074-")),
-      "a 074- integration suite appeared without this guard being advanced",
+      integrationFiles.filter((name) => name.startsWith("075-")),
+      "a 075- integration suite appeared without this guard being advanced",
     ).toEqual([]);
   });
 });

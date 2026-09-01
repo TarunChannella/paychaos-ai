@@ -1732,6 +1732,299 @@ describe("Phase 4E-R2 service — evidence and recovery", () => {
     expect(insertPendingRegressionRun).not.toHaveBeenCalled();
   });
 
+  // ==========================================================================
+  // PRE-START CONVERGENCE USES THE STORED VERDICT, NEVER A RE-EVALUATION
+  // ==========================================================================
+
+  /**
+   * A terminal regression row IS the durable verdict: the run, the evaluation
+   * and the deterministic finalization all happened before it was written.
+   * Convergence therefore recovers a lost Finding write from that STORED
+   * status, and must never re-run the historical chaos run -- which after an
+   * invariant version increment would ask a different question of the same
+   * evidence, and is refused outright by the immutable result store.
+   *
+   * `completeRegression(prior)` cannot be spied on directly (it is an export
+   * of the module under test), so its absence is proven structurally: it
+   * begins with `findRegressionRunById(prior)` and would go on to
+   * `evaluateChaosRun(priorRun)` and `finalize*({regressionRunId: prior})`.
+   * None of those may touch the prior attempt.
+   */
+  function expectNoHistoricalReEvaluation(priorId: string, priorRunId: string) {
+    expect(findRegressionRunById).not.toHaveBeenCalledWith(priorId);
+    expect(evaluateChaosRun).not.toHaveBeenCalledWith(priorRunId);
+    expect(getChaosRunById).not.toHaveBeenCalledWith(priorRunId);
+    for (const finalize of [
+      finalizeRegressionResolved,
+      finalizeRegressionStillFailing,
+      finalizeRegressionError,
+    ]) {
+      for (const call of finalize.mock.calls) {
+        expect(
+          (call[0] as { regressionRunId: string }).regressionRunId,
+        ).not.toBe(priorId);
+      }
+    }
+  }
+
+  /**
+   * Lifecycle writes attributable to CONVERGENCE alone.
+   *
+   * The new attempt legitimately writes the Finding too when it reaches its
+   * own verdict, so a bare call count cannot tell the two apart. Convergence
+   * runs strictly before `createChaosRun`, so anything written before that
+   * point — and only that — belongs to convergence.
+   */
+  function convergenceWriteCount(): number {
+    const createOrder =
+      createChaosRun.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
+    return [
+      ...resolveFindingAfterRegression.mock.invocationCallOrder,
+      ...markFindingStillFailingAfterRegression.mock.invocationCallOrder,
+    ].filter((order) => order < createOrder).length;
+  }
+
+  function lifecycle(status: string, resolvedAt: string | null = null) {
+    readFindingLifecycle.mockResolvedValue({
+      kind: "NO_CHANGE",
+      findingId: FINDING_ID,
+      status,
+      resolvedAt,
+      updatedAt: "OBSERVED",
+    });
+  }
+
+  it("59A: no previous conclusive attempt -- nothing is converged and the start proceeds", async () => {
+    arrangeC03();
+    // Empty at convergence time; the new attempt joins the history once it
+    // exists, exactly as the real reader would report it.
+    listRegressionRunsForFinding.mockReset();
+    listRegressionRunsForFinding.mockResolvedValueOnce([]).mockResolvedValue([
+      {
+        id: REGRESSION_ID,
+        findingId: FINDING_ID,
+        chaosRunId: NEW_RUN_ID,
+        status: "PENDING",
+      },
+    ]);
+
+    const result = await startRegression({ findingId: FINDING_ID });
+
+    expect(result.kind).toBe("COMPLETED");
+    expect(convergenceWriteCount()).toBe(0);
+    // With no conclusive history there is nothing to converge, so the
+    // lifecycle is not even read before the new run is created. (The new
+    // attempt reads it later, for its own verdict.)
+    const createOrder = createChaosRun.mock.invocationCallOrder[0]!;
+    expect(
+      readFindingLifecycle.mock.invocationCallOrder.filter(
+        (order) => order < createOrder,
+      ),
+    ).toEqual([]);
+    expect(createChaosRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("59B: RESOLVED prior + already RESOLVED finding -- zero write, zero re-evaluation", async () => {
+    arrangeC03();
+    arrangePriorConclusive("RESOLVED", "prior-b", "prior-run-b");
+    lifecycle("RESOLVED", "T0");
+
+    const result = await startRegression({ findingId: FINDING_ID });
+
+    // The Finding already agrees with the stored verdict: convergence writes
+    // nothing, so its original resolved_at/updated_at are left exactly as
+    // they are. (The NEW attempt's own verdict may still write, later.)
+    expect(convergenceWriteCount()).toBe(0);
+    expectNoHistoricalReEvaluation("prior-b", "prior-run-b");
+    expect(result.kind).toBe("COMPLETED");
+    expect(createChaosRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("59C: STILL_FAILING prior + already STILL_FAILING finding -- zero write, zero re-evaluation", async () => {
+    arrangeC03(
+      evaluation("FAIL", [{ invariantId: "INV-005", disposition: "FAIL" }]),
+    );
+    arrangePriorConclusive("STILL_FAILING", "prior-c", "prior-run-c");
+    lifecycle("STILL_FAILING");
+
+    const result = await startRegression({ findingId: FINDING_ID });
+
+    expect(convergenceWriteCount()).toBe(0);
+    expectNoHistoricalReEvaluation("prior-c", "prior-run-c");
+    expect(result.kind).toBe("COMPLETED");
+    expect(createChaosRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("59E: RESOLVED prior + STILL_FAILING finding -- resolved once from the stored verdict", async () => {
+    arrangeC03();
+    arrangePriorConclusive("RESOLVED", "prior-e", "prior-run-e");
+    lifecycle("STILL_FAILING");
+
+    await startRegression({ findingId: FINDING_ID });
+
+    expect(convergenceWriteCount()).toBe(1);
+    expect(resolveFindingAfterRegression).toHaveBeenCalledWith(
+      expect.objectContaining({
+        findingId: FINDING_ID,
+        expectedUpdatedAt: "OBSERVED",
+      }),
+    );
+    expectNoHistoricalReEvaluation("prior-e", "prior-run-e");
+  });
+
+  it("59G: STILL_FAILING prior + RESOLVED finding -- reopened through the repository that clears resolved_at", async () => {
+    arrangeC03(
+      evaluation("FAIL", [{ invariantId: "INV-005", disposition: "FAIL" }]),
+    );
+    arrangePriorConclusive("STILL_FAILING", "prior-g", "prior-run-g");
+    lifecycle("RESOLVED", "T0");
+
+    await startRegression({ findingId: FINDING_ID });
+
+    // The frozen lifecycle repository clears resolved_at in the same
+    // statement when it reopens a RESOLVED finding; convergence reuses it
+    // rather than writing those columns itself.
+    expect(convergenceWriteCount()).toBe(1);
+    expect(markFindingStillFailingAfterRegression).toHaveBeenCalledWith(
+      expect.objectContaining({
+        findingId: FINDING_ID,
+        expectedUpdatedAt: "OBSERVED",
+      }),
+    );
+    expectNoHistoricalReEvaluation("prior-g", "prior-run-g");
+  });
+
+  it("59H: an unreadable finding fails convergence closed and creates nothing", async () => {
+    arrangeC03();
+    arrangePriorConclusive("RESOLVED", "prior-h", "prior-run-h");
+    readFindingLifecycle.mockResolvedValue(null);
+
+    const result = await startRegression({ findingId: FINDING_ID });
+
+    expect(result).toMatchObject({
+      kind: "NOT_STARTED",
+      reason: "PRIOR_CONVERGENCE_FAILED",
+    });
+    expect(createChaosRun).not.toHaveBeenCalled();
+    expect(insertPendingRegressionRun).not.toHaveBeenCalled();
+  });
+
+  it("59H2: a failed lifecycle READ fails convergence closed and creates nothing", async () => {
+    arrangeC03();
+    arrangePriorConclusive("RESOLVED", "prior-h2", "prior-run-h2");
+    readFindingLifecycle.mockRejectedValue(
+      new FindingLifecycleError("FINDING_LIFECYCLE_READ_FAILED", "safe"),
+    );
+
+    const result = await startRegression({ findingId: FINDING_ID });
+
+    expect(result).toMatchObject({
+      kind: "NOT_STARTED",
+      reason: "PRIOR_CONVERGENCE_FAILED",
+    });
+    expect(createChaosRun).not.toHaveBeenCalled();
+    expect(insertPendingRegressionRun).not.toHaveBeenCalled();
+  });
+
+  it("59I: a CAS conflict on the reopening write fails convergence closed", async () => {
+    arrangeC03(
+      evaluation("FAIL", [{ invariantId: "INV-005", disposition: "FAIL" }]),
+    );
+    arrangePriorConclusive("STILL_FAILING", "prior-i", "prior-run-i");
+    lifecycle("OPEN");
+    markFindingStillFailingAfterRegression.mockRejectedValue(
+      new FindingLifecycleError("FINDING_LIFECYCLE_STATE_CONFLICT", "safe"),
+    );
+
+    const result = await startRegression({ findingId: FINDING_ID });
+
+    expect(result).toMatchObject({
+      kind: "NOT_STARTED",
+      reason: "PRIOR_CONVERGENCE_FAILED",
+    });
+    expect(createChaosRun).not.toHaveBeenCalled();
+    expect(insertPendingRegressionRun).not.toHaveBeenCalled();
+  });
+
+  it("59J: a newer ERROR never masks an older STILL_FAILING stored verdict", async () => {
+    arrangeC03(
+      evaluation("FAIL", [{ invariantId: "INV-005", disposition: "FAIL" }]),
+    );
+    arrangePriorConclusive("STILL_FAILING", "prior-j", "prior-run-j");
+    listRegressionRunsForFinding.mockReset();
+    listRegressionRunsForFinding.mockResolvedValue([
+      {
+        id: "newer-error-j",
+        findingId: FINDING_ID,
+        chaosRunId: "newer-run-j",
+        status: "ERROR",
+      },
+      {
+        id: "prior-j",
+        findingId: FINDING_ID,
+        chaosRunId: "prior-run-j",
+        status: "STILL_FAILING",
+      },
+    ]);
+    lifecycle("OPEN");
+
+    await startRegression({ findingId: FINDING_ID });
+
+    expect(convergenceWriteCount()).toBe(1);
+    expect(markFindingStillFailingAfterRegression).toHaveBeenCalled();
+    // The ERROR attempt's own run is never evaluated by convergence either.
+    expect(evaluateChaosRun).not.toHaveBeenCalledWith("newer-run-j");
+    expectNoHistoricalReEvaluation("prior-j", "prior-run-j");
+  });
+
+  it("59K: VERSION-BUMP REGRESSION -- a prior verdict from a superseded invariant version never blocks a new attempt", async () => {
+    // The exact Phase 4E-R3-B failure. The prior attempt is STILL_FAILING and
+    // its chaos run holds INV-011/v1 FAIL. Under the CURRENT catalogue that
+    // same evidence evaluates to INV-011/v2 PASS, so re-running the old run
+    // would produce a different verdict and persistInvariantResult would
+    // throw INVARIANT_RESULT_INTEGRITY_CONFLICT rather than rewrite the
+    // immutable row -- permanently blocking every future regression for this
+    // Finding. Convergence must never go near it.
+    arrangeC03(
+      evaluation("FAIL", [{ invariantId: "INV-005", disposition: "FAIL" }]),
+    );
+    arrangePriorConclusive("STILL_FAILING", "prior-k", "prior-run-k");
+    lifecycle("STILL_FAILING");
+    // Any attempt to re-evaluate the historical run reproduces the conflict.
+    evaluateChaosRun.mockImplementation((id: string) => {
+      if (id === "prior-run-k") {
+        return Promise.reject(new Error("INVARIANT_RESULT_INTEGRITY_CONFLICT"));
+      }
+      return Promise.resolve(
+        evaluation("FAIL", [{ invariantId: "INV-005", disposition: "FAIL" }]),
+      );
+    });
+
+    const result = await startRegression({ findingId: FINDING_ID });
+
+    expectNoHistoricalReEvaluation("prior-k", "prior-run-k");
+    // The Finding already matched the stored verdict, so convergence wrote
+    // nothing — and, critically, never touched the v1 historical run.
+    expect(convergenceWriteCount()).toBe(0);
+    // And the NEW attempt genuinely proceeded.
+    expect(createChaosRun).toHaveBeenCalledTimes(1);
+    expect(insertPendingRegressionRun).toHaveBeenCalledTimes(1);
+    expect(result.kind).toBe("COMPLETED");
+  });
+
+  it("59L: convergence completes BEFORE the new chaos run and BEFORE the regression row", async () => {
+    arrangeC03();
+    arrangePriorConclusive("RESOLVED", "prior-l", "prior-run-l");
+
+    await startRegression({ findingId: FINDING_ID });
+
+    const converge = resolveFindingAfterRegression.mock.invocationCallOrder[0]!;
+    expect(converge).toBeLessThan(createChaosRun.mock.invocationCallOrder[0]!);
+    expect(converge).toBeLessThan(
+      insertPendingRegressionRun.mock.invocationCallOrder[0]!,
+    );
+  });
+
   it("42: an unknown regression id is a typed service error", async () => {
     findRegressionRunById.mockResolvedValue(null);
     await expect(advanceRegression(REGRESSION_ID)).rejects.toMatchObject({
