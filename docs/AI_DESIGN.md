@@ -1853,6 +1853,61 @@ Every readiness UI must retain the disclaimer:
 
 > PayChaos Go-Live Readiness is an engineering assessment from the implemented PayChaos test suite. It is not Razorpay certification.
 
+### Phase 4G Implementation Note — Gate States and the Reachability of READY
+
+The rules above are unchanged. This note records how the implemented runtime
+answers each READY prerequisite, because two of them have no runtime authority
+in this project and the difference matters when reading a live assessment.
+
+A gate has three states: `PASS`, `FAIL` and `UNKNOWN`.
+
+`UNKNOWN` means **the evidence required for this gate cannot be authoritatively
+established by the current runtime**. It is not a failure — it never produces a
+blocking reason, and no screen may render it as `FAILED`. It is also not a
+pass: an `UNKNOWN` gate always prevents `READY`, via
+`NA_REQUIRED_VERIFICATION_INCOMPLETE`. Absence of evidence is never evidence of
+correctness.
+
+Gates derived from persisted evidence:
+
+| Gate | Source |
+| --- | --- |
+| `TEST_MODE_SECURITY` | `getRazorpayEnv()` — it fails closed on any non-Test-Mode key, so resolving a value at all IS the Test Mode proof |
+| `MANDATORY_SCENARIOS` | the frozen `RELIABILITY-V1` scenario breakdown |
+| `SELECTED_RUN_INVARIANTS` | persisted `invariant_results` for the selected current runs |
+| `UNRESOLVED_FINDINGS` | `findings` in `OPEN` or `STILL_FAILING`, at the severity of the invariant result each reports |
+| `RELIABILITY_SCORE` | the frozen `RELIABILITY-V1` score |
+
+Gates reported `UNKNOWN` by deliberate decision:
+
+- `HEALTHY_BASELINE` — the project freezes no rule for selecting the CURRENT
+  authoritative healthy baseline. The only baseline the codebase implements is
+  the Phase 3 chaos subject-freshness check, which answers a different question
+  (whether an order may be used as a chaos subject). Inventing a
+  latest-baseline selection rule here would let `READY` rest on an unapproved
+  authority.
+- `REAL_RAZORPAY_MANUAL_VERIFICATION`, `BUILD_VERIFICATION`,
+  `SECURITY_VERIFICATION`, `AUTOMATED_TEST_VERIFICATION`,
+  `MANUAL_VERIFICATION` — these are historical developer verifications. A
+  handoff recording that the build passed is not current runtime evidence, and
+  the runtime must not launder one into the other.
+
+**Consequence:** `READY` is not reachable from runtime evidence alone in Phase
+4G, and that is the correct and intended behaviour rather than a gap. The pure
+evaluator accepts `PASS` for every one of these gates, so the `READY` path is
+fully implemented and fully tested; it becomes reachable when Phase 5 supplies
+an authoritative verification adapter. Until then the honest answer to "is this
+verified?" is "not by this runtime", and the assessment says exactly that.
+
+**Readiness is never persisted.** It is derived on demand from the frozen
+Phase 4F read model plus two SELECT-only reads. There is no `readiness_scores`,
+`readiness_snapshots` or `go_live_status` table, and Phase 4G adds no
+migration.
+
+**A read failure is not a clean state.** A failed read raises a typed error and
+is never converted into "no unresolved findings". An outage reported as a clean
+bill of health is the single most dangerous defect this feature could contain.
+
 ---
 
 # 55. Failure Classification

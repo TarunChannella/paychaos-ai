@@ -1,10 +1,11 @@
 import Link from "next/link";
 
+import { ReadinessOverview } from "@/components/reliability/readiness-overview";
 import { ReliabilityOverview } from "@/components/reliability/reliability-overview";
 import { Badge } from "@/components/ui/badge";
-import { getCurrentReliabilityScore } from "@/lib/reliability/service";
+import { getCurrentGoLiveReadiness } from "@/lib/readiness/service";
 
-import type { ReliabilityScoreReadModel } from "@/lib/reliability/service";
+import type { GoLiveReadinessReadModel } from "@/lib/readiness/service";
 
 /**
  * Phase 4F-R3 — the operator Reliability Score page (P4-AC-10/11/12).
@@ -26,9 +27,12 @@ import type { ReliabilityScoreReadModel } from "@/lib/reliability/service";
 export const dynamic = "force-dynamic";
 
 export default async function ReliabilityPage() {
-  let model: ReliabilityScoreReadModel | null = null;
+  // One call: the readiness service composes the frozen 4F reliability read
+  // model and returns it unmodified alongside the assessment, so the page
+  // makes no second read and no second score calculation.
+  let model: GoLiveReadinessReadModel | null = null;
   try {
-    model = await getCurrentReliabilityScore();
+    model = await getCurrentGoLiveReadiness();
   } catch {
     // Deliberately swallow the detail: raw exception text could carry a
     // database message. The distinction that matters — read failure, not
@@ -46,10 +50,10 @@ export default async function ReliabilityPage() {
           PayChaos AI — Reliability Score
         </h1>
         <p className="max-w-xl text-balance text-sm text-muted-foreground">
-          A deterministic score over the four mandatory P0 chaos scenarios,
-          calculated from persisted evidence. No AI, no estimate and no stored
-          score — it is recalculated from the database every time this page is
-          opened.
+          A deterministic score over the four mandatory P0 chaos scenarios, and
+          the Go-Live Readiness assessment derived from it. No AI, no estimate
+          and nothing stored — both are recalculated from the database every
+          time this page is opened.
         </p>
       </header>
 
@@ -62,13 +66,16 @@ export default async function ReliabilityPage() {
             Reliability data unavailable.
           </p>
           <p className="mt-2 text-sm text-muted-foreground">
-            No score was calculated because the required evidence could not be
-            read. This is a read failure, not an absence of evidence — no score
-            is shown rather than a misleading one.
+            No score or readiness assessment was calculated because the required
+            evidence could not be read. This is a read failure, not an absence
+            of evidence — nothing is shown rather than something misleading.
           </p>
         </section>
       ) : (
-        <ReliabilityOverview model={model} />
+        <>
+          <ReliabilityOverview model={model.reliability} />
+          <ReadinessOverview readiness={model.readiness} />
+        </>
       )}
 
       <footer className="flex justify-center">

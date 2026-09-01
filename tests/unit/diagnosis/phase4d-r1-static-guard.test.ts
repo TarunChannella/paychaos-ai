@@ -643,8 +643,12 @@ describe("Phase 4D-R1 — frozen upstream modules unchanged", () => {
     // Advanced again in Phase 4F-R3: the reliability read API and page are
     // now legitimate too. The list stays exact, so an unapproved fifth
     // surface still fails here.
+    // Advanced again in Phase 4G: the Go-Live Readiness read API is now a
+    // legitimate surface. The list stays EXACT, so an unapproved surface
+    // still fails here rather than slipping in.
     expect(surfaces).toEqual([
       "/app/api/findings/[findingId]/regressions/route.ts",
+      "/app/api/readiness/route.ts",
       "/app/api/regressions/[regressionRunId]/advance/route.ts",
       "/app/api/reliability/route.ts",
       "/app/reliability/page.tsx",

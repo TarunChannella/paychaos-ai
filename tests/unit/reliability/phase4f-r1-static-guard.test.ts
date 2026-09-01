@@ -77,8 +77,9 @@ describe("Phase 4F-R1 — the approved surface", () => {
   });
 
   it("5: the 4F integration suite is exactly the approved 075 read proof", () => {
-    // Advanced in R2: 075 now legitimately exists and is read-only. Pinned by
-    // exact name, and 076 stays forbidden until R3 advances it.
+    // Advanced in R2 (075), R3 (076) and Phase 4G (077). Each is pinned by
+    // exact name so an unreviewed suite cannot appear beside them, and the
+    // tripwire moves forward to 078 rather than being removed.
     const integration = readdirSync(
       join(ROOT, "tests", "integration", "supabase"),
     );
@@ -88,9 +89,12 @@ describe("Phase 4F-R1 — the approved surface", () => {
     expect(integration.filter((name) => name.startsWith("076-"))).toEqual([
       "076-phase4f-reliability-api.integration.test.ts",
     ]);
+    expect(integration.filter((name) => name.startsWith("077-"))).toEqual([
+      "077-phase4g-readiness.integration.test.ts",
+    ]);
     expect(
-      integration.filter((name) => name.startsWith("077-")),
-      "a 077- integration suite appeared without this guard being advanced",
+      integration.filter((name) => name.startsWith("078-")),
+      "a 078- integration suite appeared without this guard being advanced",
     ).toEqual([]);
   });
 });

@@ -180,10 +180,18 @@ test.describe("Phase 4F-R3 — the Reliability Score page", () => {
       }
     }
 
-    // Nothing anywhere calls the current state healthy or production ready.
+    // Nothing anywhere calls the current STATE healthy or production ready.
+    //
+    // Narrowed in Phase 4G. The bare word "healthy" is no longer bannable:
+    // the readiness checklist legitimately names a gate called
+    // HEALTHY_BASELINE and reports it as "The required healthy baseline is
+    // not verified...". Naming a gate is not claiming the system is healthy,
+    // so the ban now targets the CLAIM rather than the vocabulary.
     for (const forbidden of [
-      "healthy",
-      "Healthy",
+      "is healthy",
+      "System is healthy",
+      "All healthy",
+      "looks healthy",
       "production ready",
       "Production Ready",
       "certified",
@@ -193,22 +201,26 @@ test.describe("Phase 4F-R3 — the Reliability Score page", () => {
     }
   });
 
-  test("E2E-4F-06: no Go-Live Readiness verdict appears in Phase 4F", async ({
+  test("E2E-4G-01: the Go-Live Readiness panel is rendered with a verdict", async ({
     page,
   }) => {
+    // ADVANCED IN PHASE 4G. This assertion previously required that NO
+    // readiness verdict appear on this page, which was correct while the
+    // readiness engine did not exist. Phase 4G deliberately renders the
+    // assessment beneath the score, so the guarantee is re-pointed rather
+    // than dropped: a verdict must appear, and it must be one of the three
+    // frozen statuses — never an invented one.
     await page.goto("/reliability");
-    const body = (await page.textContent("body")) ?? "";
 
-    for (const forbidden of [
-      "NOT READY",
-      "NOT_READY",
-      "NEEDS ATTENTION",
-      "NEEDS_ATTENTION",
-    ]) {
-      expect(body, forbidden).not.toContain(forbidden);
-    }
-    // A neutral pointer is allowed; a verdict is not.
-    expect(body).toContain("Go-Live Readiness is evaluated separately.");
+    await expect(page.getByTestId("readiness-overview")).toBeVisible();
+    await expect(page.getByTestId("readiness-version")).toHaveText(
+      "GO-LIVE-READINESS-V1",
+    );
+
+    const status = (
+      await page.getByTestId("readiness-status").textContent()
+    )?.trim();
+    expect(["NOT READY", "NEEDS ATTENTION", "READY"]).toContain(status);
   });
 
   test("E2E-4F-07: a selected run links to its existing chaos-run page", async ({
@@ -222,6 +234,134 @@ test.describe("Phase 4F-R3 — the Reliability Score page", () => {
 
       const href = await link.getAttribute("href");
       expect(href, scenarioId).toMatch(/^\/chaos\/runs\/[0-9a-f-]{36}$/);
+    }
+  });
+});
+
+test.describe("Phase 4G — the Go-Live Readiness assessment", () => {
+  // Same reasoning as the 4F block: a cold dev-server load compiles the route
+  // and makes Supabase round-trips.
+  test.slow();
+
+  test("E2E-4G-02: the status is justified by visible reasons", async ({
+    page,
+  }) => {
+    const errors = watchConsole(page);
+    await page.goto("/reliability");
+
+    const status = (
+      await page.getByTestId("readiness-status").textContent()
+    )?.trim();
+
+    // A bare verdict with no visible justification is exactly what this
+    // project forbids, so anything short of READY must show its reasons.
+    if (status !== "READY") {
+      const blocking = await page.getByTestId("readiness-blocking").count();
+      const attention = await page.getByTestId("readiness-attention").count();
+      expect(blocking + attention).toBeGreaterThan(0);
+    }
+
+    // Precedence is visible too: a blocking reason means NOT READY.
+    if ((await page.getByTestId("readiness-blocking").count()) > 0) {
+      expect(status).toBe("NOT READY");
+    }
+
+    expect(errors, errors.join(String.fromCharCode(10))).toEqual([]);
+  });
+
+  test("E2E-4G-03: every frozen gate is listed with an honest state", async ({
+    page,
+  }) => {
+    await page.goto("/reliability");
+
+    const gateIds = [
+      "TEST_MODE_SECURITY",
+      "HEALTHY_BASELINE",
+      "MANDATORY_SCENARIOS",
+      "SELECTED_RUN_INVARIANTS",
+      "UNRESOLVED_FINDINGS",
+      "RELIABILITY_SCORE",
+      "REAL_RAZORPAY_MANUAL_VERIFICATION",
+      "BUILD_VERIFICATION",
+      "SECURITY_VERIFICATION",
+      "AUTOMATED_TEST_VERIFICATION",
+      "MANUAL_VERIFICATION",
+    ] as const;
+
+    for (const gateId of gateIds) {
+      await expect(
+        page.getByTestId(`readiness-gate-${gateId}`),
+        gateId,
+      ).toBeVisible();
+    }
+  });
+
+  test("E2E-4G-04: an unverified gate is never displayed as a pass", async ({
+    page,
+  }) => {
+    await page.goto("/reliability");
+    const body = (await page.textContent("body")) ?? "";
+
+    // Gates this runtime cannot establish must read as unverified. If any
+    // UNKNOWN gate is present the wording must be visible, and READY must be
+    // unreachable — absence of evidence is never evidence of correctness.
+    const unverified = "Not verified by the current runtime evidence";
+    if (body.includes(unverified)) {
+      const status = (
+        await page.getByTestId("readiness-status").textContent()
+      )?.trim();
+      expect(status).not.toBe("READY");
+    }
+
+    for (const forbidden of [
+      "All gates passed",
+      "Everything verified",
+      "Verified by Razorpay",
+      "Razorpay approved",
+    ]) {
+      expect(body, forbidden).not.toContain(forbidden);
+    }
+  });
+
+  test("E2E-4G-05: the assessment is never presented as a certification", async ({
+    page,
+  }) => {
+    await page.goto("/reliability");
+
+    // P4-AC-14: the mandatory disclaimer is visible on the real page.
+    await expect(page.getByTestId("readiness-disclaimer")).toContainText(
+      "It is not Razorpay certification.",
+    );
+
+    const body = (await page.textContent("body")) ?? "";
+    for (const forbidden of [
+      "Razorpay certified",
+      "certified by Razorpay",
+      "approved for production",
+      "guaranteed safe",
+      "safe to go live",
+      "cleared for launch",
+    ]) {
+      expect(body, forbidden).not.toContain(forbidden);
+    }
+  });
+
+  test("E2E-4G-06: no secret or credential is exposed to the browser", async ({
+    page,
+  }) => {
+    await page.goto("/reliability");
+    const html = await page.content();
+
+    for (const forbidden of [
+      "rzp_live",
+      "key_secret",
+      "keySecret",
+      "webhook_secret",
+      "service_role",
+      "SUPABASE_SERVICE_ROLE_KEY",
+      "PAYCHAOS_SESSION_SECRET",
+    ]) {
+      expect(html, forbidden).not.toContain(forbidden);
     }
   });
 });

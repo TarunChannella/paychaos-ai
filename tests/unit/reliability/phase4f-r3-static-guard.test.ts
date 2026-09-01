@@ -55,9 +55,12 @@ describe("Phase 4F-R3 — the approved surface", () => {
     ]);
   });
 
-  it("3: the reliability component directory holds only the approved file", () => {
+  it("3: the reliability component directory holds only approved files", () => {
+    // ADVANCED, NOT LOOSENED (Phase 4G). The readiness panel legitimately
+    // lives beside the score panel and is listed by exact name, so an
+    // unapproved third component still fails here.
     expect(readdirSync(join(ROOT, "components", "reliability")).sort()).toEqual(
-      ["reliability-overview.tsx"],
+      ["readiness-overview.tsx", "reliability-overview.tsx"],
     );
   });
 
@@ -151,12 +154,18 @@ describe("Phase 4F-R3 — the route is an adapter only", () => {
 });
 
 describe("Phase 4F-R3 — the page is server-rendered from the trusted service", () => {
-  it("11: it calls the service directly and is dynamic", () => {
-    expect(pageCode).toContain("getCurrentReliabilityScore");
+  it("11: it calls a trusted service directly and is dynamic", () => {
+    // ADVANCED, NOT LOOSENED (Phase 4G). The page now makes ONE call, to the
+    // readiness service, which composes and returns the frozen 4F reliability
+    // read model alongside the assessment. The property this guard protects
+    // is unchanged: the page reaches a trusted server service directly rather
+    // than fetching its own HTTP API, and it is never cached.
+    expect(pageCode).toContain("getCurrentGoLiveReadiness");
     expect(pageCode).toContain('export const dynamic = "force-dynamic"');
     // It must not fetch its own HTTP API, which would add a needless hop.
     expect(pageCode).not.toContain("fetch(");
     expect(pageCode).not.toContain("/api/reliability");
+    expect(pageCode).not.toContain("/api/readiness");
   });
 
   it("12: it is a server component — no client directive, no client state", () => {

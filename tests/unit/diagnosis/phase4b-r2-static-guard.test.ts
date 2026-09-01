@@ -326,7 +326,11 @@ describe("Phase 4B-R2 signal service — static guard", () => {
         file.replace(repoRoot, "").split(String.fromCharCode(92)).join("/"),
       )
       .sort();
+    // Advanced again in Phase 4G: the Go-Live Readiness read API is now a
+    // legitimate surface. The list stays EXACT, so an unapproved surface
+    // still fails here rather than slipping in.
     expect(normalised).toEqual([
+      "/app/api/readiness/route.ts",
       "/app/api/reliability/route.ts",
       "/app/reliability/page.tsx",
     ]);

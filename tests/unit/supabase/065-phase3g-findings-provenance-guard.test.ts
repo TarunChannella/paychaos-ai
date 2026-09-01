@@ -278,9 +278,15 @@ describe("065-phase3g-findings.integration.test.ts — provenance guard", () => 
     expect(integrationFiles.filter((name) => name.startsWith("076-"))).toEqual([
       "076-phase4f-reliability-api.integration.test.ts",
     ]);
+    // 077 is the Phase 4G Go-Live Readiness proof, added after this file.
+    // Like 075 and 076 it is READ-ONLY — it creates, updates and deletes
+    // nothing — so it adds no provenance risk of its own.
+    expect(integrationFiles.filter((name) => name.startsWith("077-"))).toEqual([
+      "077-phase4g-readiness.integration.test.ts",
+    ]);
     expect(
-      integrationFiles.filter((name) => name.startsWith("077-")),
-      "a 077- integration suite appeared without this guard being advanced",
+      integrationFiles.filter((name) => name.startsWith("078-")),
+      "a 078- integration suite appeared without this guard being advanced",
     ).toEqual([]);
   });
 });
