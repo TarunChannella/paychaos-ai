@@ -3,10 +3,12 @@
  * enforcement (docs/SECURITY.md Section 17, docs/ARCHITECTURE.md ADR-A16,
  * docs/PHASE_PLAN.md Section 6.4 item 2/6.8 item 1).
  *
- * Protects the two operator surfaces that can mutate state: the Demo
- * Merchant (`/demo-merchant` and every server action it posts to, which
- * Next.js routes through that same page URL), and — added in Phase 3H — the
- * Chaos Lab (`/chaos`), which can start a chaos run.
+ * Protects the operator surfaces: the Demo Merchant (`/demo-merchant` and
+ * every server action it posts to, which Next.js routes through that same
+ * page URL), the Chaos Lab (`/chaos`) added in Phase 3H, which can start a
+ * chaos run, and the Reliability Score page (`/reliability`) added in Phase
+ * 4F-R3, which is read-only but exposes persisted chaos evidence and run
+ * identifiers.
  * `POST /api/webhooks/razorpay` is deliberately NOT
  * protected: its trust boundary is the Razorpay webhook HMAC signature, not
  * an operator session (docs/SECURITY.md Section 28 "Webhook Exception",
@@ -61,7 +63,15 @@ export const runtime = "nodejs";
  * `/api/chaos` (widening it would also catch the public Razorpay webhook
  * path pattern in future). The two layers are independent on purpose.
  */
-const PROTECTED_PATH_PREFIXES = ["/demo-merchant", "/chaos"] as const;
+const PROTECTED_PATH_PREFIXES = [
+  "/demo-merchant",
+  "/chaos",
+  // Phase 4F-R3: the Reliability Score page reads persisted chaos evidence
+  // and names selected run identifiers, so it is an operator surface and is
+  // gated exactly like the other two. `GET /api/reliability` additionally
+  // runs its own in-route gate, for the same reason the chaos API routes do.
+  "/reliability",
+] as const;
 
 function isProtectedPath(pathname: string): boolean {
   return PROTECTED_PATH_PREFIXES.some(
@@ -125,5 +135,5 @@ export function middleware(request: NextRequest): NextResponse {
 }
 
 export const config = {
-  matcher: ["/demo-merchant/:path*", "/chaos/:path*"],
+  matcher: ["/demo-merchant/:path*", "/chaos/:path*", "/reliability/:path*"],
 };

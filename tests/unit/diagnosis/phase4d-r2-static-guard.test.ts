@@ -460,9 +460,14 @@ describe("Phase 4D-R2 — schema and surface boundaries", () => {
     // reliability and readiness — remains absolutely forbidden, and an
     // unexpected THIRD regression surface would fail here rather than slip
     // in. Phase 4D itself still contributes no route or UI of its own.
+    // Advanced again in Phase 4F-R3: the reliability read API and page are
+    // now legitimate too. The list stays exact, so an unapproved fifth
+    // surface still fails here.
     expect(surfaces).toEqual([
       "/app/api/findings/[findingId]/regressions/route.ts",
       "/app/api/regressions/[regressionRunId]/advance/route.ts",
+      "/app/api/reliability/route.ts",
+      "/app/reliability/page.tsx",
     ]);
   });
 

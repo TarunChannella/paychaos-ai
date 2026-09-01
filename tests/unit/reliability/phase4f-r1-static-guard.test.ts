@@ -53,10 +53,17 @@ describe("Phase 4F-R1 — the approved surface", () => {
     ]);
   });
 
-  it("3: 4F introduces no API route and no UI page yet", () => {
-    // Both belong to R3.
-    expect(existsSync(join(ROOT, "app", "api", "reliability"))).toBe(false);
-    expect(existsSync(join(ROOT, "app", "reliability"))).toBe(false);
+  it("3: the 4F read surfaces exist and are pinned to the approved two", () => {
+    // Advanced in R3: the route and the page are now legitimate. Pinned so an
+    // unapproved third reliability surface cannot appear unnoticed. The purity
+    // assertions below still apply to types.ts and score.ts alone.
+    expect(
+      existsSync(join(ROOT, "app", "api", "reliability", "route.ts")),
+    ).toBe(true);
+    expect(existsSync(join(ROOT, "app", "reliability", "page.tsx"))).toBe(true);
+    expect(readdirSync(join(ROOT, "app", "api", "reliability"))).toEqual([
+      "route.ts",
+    ]);
   });
 
   it("4: R1 introduces no migration", () => {
@@ -78,9 +85,12 @@ describe("Phase 4F-R1 — the approved surface", () => {
     expect(integration.filter((name) => name.startsWith("075-"))).toEqual([
       "075-phase4f-reliability-read.integration.test.ts",
     ]);
+    expect(integration.filter((name) => name.startsWith("076-"))).toEqual([
+      "076-phase4f-reliability-api.integration.test.ts",
+    ]);
     expect(
-      integration.filter((name) => name.startsWith("076-")),
-      "a 076- integration suite appeared without this guard being advanced",
+      integration.filter((name) => name.startsWith("077-")),
+      "a 077- integration suite appeared without this guard being advanced",
     ).toEqual([]);
   });
 });

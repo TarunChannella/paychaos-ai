@@ -256,9 +256,21 @@ describe("middleware — Chaos Lab is protected (Phase 3H)", () => {
 });
 
 describe("middleware config matcher", () => {
-  it("declares exactly the two mutation-capable operator surfaces", async () => {
+  it("declares exactly the three gated operator surfaces", async () => {
+    // Advanced in Phase 4F-R3, still an exact equality. `/reliability` is
+    // read-only rather than mutation-capable, but it exposes persisted chaos
+    // evidence and run identifiers, so it sits behind the same operator gate.
     const { config } = await import("@/middleware");
-    expect(config.matcher).toEqual(["/demo-merchant/:path*", "/chaos/:path*"]);
+    expect(config.matcher).toEqual([
+      "/demo-merchant/:path*",
+      "/chaos/:path*",
+      "/reliability/:path*",
+    ]);
+  });
+
+  it("gates the reliability page exactly like the other operator surfaces", async () => {
+    const { config } = await import("@/middleware");
+    expect(config.matcher).toContain("/reliability/:path*");
   });
 
   it("never declares the public webhook or the login route", async () => {

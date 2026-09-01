@@ -322,19 +322,33 @@ describe("Phase 4F-R2 — nothing is persisted and nothing later-phase exists", 
     );
   });
 
-  it("20: R2 introduces no API route and no UI page", () => {
-    expect(existsSync(join(ROOT, "app", "api", "reliability"))).toBe(false);
-    expect(existsSync(join(ROOT, "app", "reliability"))).toBe(false);
-    const routes = readdirSync(join(ROOT, "app", "api"));
-    expect(routes).not.toContain("reliability");
+  it("20: the R3 read surfaces exist, and R2 itself still reaches neither", () => {
+    // Advanced in R3. What R2 must keep proving is that the REPOSITORY and
+    // SERVICE do not depend on the route or the page — the dependency runs
+    // one way only.
+    expect(
+      existsSync(join(ROOT, "app", "api", "reliability", "route.ts")),
+    ).toBe(true);
+    expect(existsSync(join(ROOT, "app", "reliability", "page.tsx"))).toBe(true);
+    for (const forbidden of [
+      "@/app/api/reliability",
+      "@/app/reliability",
+      "@/components/reliability",
+      "next/server",
+    ]) {
+      expect(R2_CODE, forbidden).not.toContain(forbidden);
+    }
   });
 
-  it("21: the 075 read proof exists and is the only 4F integration suite", () => {
+  it("21: the 4F integration suites are exactly the approved 075 and 076", () => {
     const integration = readdirSync(
       join(ROOT, "tests", "integration", "supabase"),
     );
     expect(integration.filter((name) => name.startsWith("075-"))).toEqual([
       "075-phase4f-reliability-read.integration.test.ts",
+    ]);
+    expect(integration.filter((name) => name.startsWith("076-"))).toEqual([
+      "076-phase4f-reliability-api.integration.test.ts",
     ]);
   });
 

@@ -324,6 +324,20 @@ describe("Phase 4A-R2 evidence pack service — static guard", () => {
     const diagnosisSurfaces = walk(appDir).filter((file) =>
       /diagnos|evidence-pack|recommend|reliabilit|readiness/i.test(file),
     );
-    expect(diagnosisSurfaces).toEqual([]);
+    // ADVANCED, NOT LOOSENED (Phase 4F-R3). Phase 4F legitimately adds the
+    // reliability read API and page required by P4-AC-10/11, so those two
+    // exact files are now expected. Every other surface this guard protects
+    // remains absolutely forbidden, and an unexpected THIRD reliability
+    // surface would fail here rather than slip in. This phase itself still
+    // contributes no route or UI of its own.
+    const normalised = diagnosisSurfaces
+      .map((file) =>
+        file.replace(repoRoot, "").split(String.fromCharCode(92)).join("/"),
+      )
+      .sort();
+    expect(normalised).toEqual([
+      "/app/api/reliability/route.ts",
+      "/app/reliability/page.tsx",
+    ]);
   });
 });

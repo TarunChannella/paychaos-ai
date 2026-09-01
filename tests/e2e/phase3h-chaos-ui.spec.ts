@@ -58,10 +58,62 @@ test.describe("Phase 3H — chaos landing", () => {
       await expect(page.getByText(id, { exact: true }).first()).toBeVisible();
     }
 
-    // No P1 scenario may appear anywhere on the page.
-    const body = (await page.locator("body").innerText()).toUpperCase();
+    // CORRECTED (Phase 4F-R3, confirmed bug). This previously uppercased the
+    // WHOLE page body and asserted it contained no "C02".."C12" substring.
+    // That is not a test of what the page OFFERS: the landing page also
+    // renders persisted chaos-run UUIDs, and a run id may legitimately
+    // contain a P1 scenario id as a hex substring — the historical run
+    // 8a30bd7f-bdd3-432b-8c05-526d980cd6a6 contains "8c05", which uppercased
+    // to "8C05" and tripped the C05 check. The evidence is correct; the
+    // assertion was wrong.
+    //
+    // The replacement is STRICTLY STRONGER. Instead of a substring search
+    // over arbitrary text, it reads the scenario-offering elements the page
+    // actually renders and requires the offered set to be EXACTLY the frozen
+    // P0 four. That catches a missing P0 scenario as well as an extra P1 one,
+    // which the old body scan could not do, and it cannot be fooled by an
+    // identifier that merely happens to appear elsewhere on the page.
+    const offeredFromCards = (
+      await page.locator('[data-testid^="scenario-card-"]').all()
+    ).map(async (card) =>
+      ((await card.getAttribute("data-testid")) ?? "").replace(
+        "scenario-card-",
+        "",
+      ),
+    );
+    const offeredScenarioIds = (await Promise.all(offeredFromCards)).sort();
+
+    expect(offeredScenarioIds).toEqual(["C01", "C03", "C07", "C11"]);
+
+    // The same set, proven independently from the links an operator can
+    // actually follow — so a card rendered without a working entry point, or
+    // an entry point with no card, would also fail here.
+    const offeredHrefs = (
+      await page.locator('a[href^="/chaos/scenarios/"]').all()
+    ).map(async (link) =>
+      ((await link.getAttribute("href")) ?? "").replace(
+        "/chaos/scenarios/",
+        "",
+      ),
+    );
+    expect((await Promise.all(offeredHrefs)).sort()).toEqual([
+      "C01",
+      "C03",
+      "C07",
+      "C11",
+    ]);
+
+    // And no P1 scenario has an offering of any kind.
     for (const p1 of ["C02", "C04", "C05", "C06", "C08", "C09", "C10", "C12"]) {
-      expect(body, `${p1} must not be offered`).not.toContain(p1);
+      expect(offeredScenarioIds, `${p1} must not be offered`).not.toContain(p1);
+      await expect(
+        page.locator(`[data-testid="scenario-card-${p1}"]`),
+        `${p1} card must not exist`,
+      ).toHaveCount(0);
+      await expect(
+        page.locator(`a[href="/chaos/scenarios/${p1}"]`),
+        `${p1} link must not exist`,
+      ).toHaveCount(0);
     }
   });
 
