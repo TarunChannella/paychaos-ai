@@ -422,19 +422,34 @@ describe("Phase 3H Finding page — static safety", () => {
     }
   });
 
-  it("28: it exposes NO Phase 4 surface", () => {
-    const lower = findingPage.toLowerCase();
+  it("28: the Phase 4 surface is delegated, never re-derived here", () => {
+    // ADVANCED, NOT LOOSENED (Phase 5B). Phase 4 diagnosis, recommendation and
+    // regression are now legitimately rendered on this page — that was the
+    // whole point of Phase 5B, and refusing to show them was the P0 gap.
+    //
+    // What the original guard actually protected still holds and is checked
+    // here: this page must not FORM a Phase 4 opinion of its own. It delegates
+    // to the read-only casefile model and its presentation component, so every
+    // classification, recommendation and lifecycle decision stays in the frozen
+    // Phase 4C/4D/4E services.
+    expect(findingPage).toContain("getFindingCasefile");
+    expect(findingPage).toContain("FindingCasefilePanel");
+
     for (const forbidden of [
-      "diagnosis",
-      "root cause",
-      "rootcause",
-      "recommendation",
-      "regression",
-      "reliability score",
-      "go-live",
+      // No classifier, recommender or scorer may be reached from a screen.
+      "diagnoseFinding",
+      "recommendFinding",
+      "classifyRootCause",
+      "startRegression",
+      "advanceRegression",
+      "completeRegression",
+      "calculateReliabilityScoreV1",
+      "evaluateGoLiveReadinessV1",
+      // No invented certainty, ever.
       "confidence",
+      "probability",
     ]) {
-      expect(lower, forbidden).not.toContain(forbidden);
+      expect(findingPage, forbidden).not.toContain(forbidden);
     }
   });
 

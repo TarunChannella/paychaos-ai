@@ -71,6 +71,12 @@ const PROTECTED_PATH_PREFIXES = [
   // gated exactly like the other two. `GET /api/reliability` additionally
   // runs its own in-route gate, for the same reason the chaos API routes do.
   "/reliability",
+  // Phase 5B: both read persisted chaos/finding evidence and name internal
+  // identifiers, so they are operator surfaces and are gated exactly like the
+  // three above. `/settings` additionally hosts the Demo Reset control, whose
+  // API runs its own in-route gate for the same reason the chaos routes do.
+  "/findings",
+  "/settings",
 ] as const;
 
 function isProtectedPath(pathname: string): boolean {
@@ -135,5 +141,11 @@ export function middleware(request: NextRequest): NextResponse {
 }
 
 export const config = {
-  matcher: ["/demo-merchant/:path*", "/chaos/:path*", "/reliability/:path*"],
+  matcher: [
+    "/demo-merchant/:path*",
+    "/chaos/:path*",
+    "/reliability/:path*",
+    "/findings/:path*",
+    "/settings/:path*",
+  ],
 };

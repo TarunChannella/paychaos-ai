@@ -1,8 +1,18 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { FindingCasefilePanel } from "@/components/findings/finding-casefile";
 import { Badge } from "@/components/ui/badge";
+import {
+  getFindingCasefile,
+  getRegressionComparison,
+} from "@/lib/findings/casefile-read";
 import { getFindingDetailByInvariantResultId } from "@/lib/findings/service";
+
+import type {
+  FindingCasefile,
+  RegressionComparison,
+} from "@/lib/findings/casefile-read";
 
 /**
  * Phase 3H Round 2B — the inspectable Finding evidence screen.
@@ -23,11 +33,18 @@ import { getFindingDetailByInvariantResultId } from "@/lib/findings/service";
  * references are read live from the immutable invariant result through the
  * join — never from a duplicate stored on the finding.
  *
- * NO PHASE 4 SURFACE. Diagnosis, root cause, recommendation, regression,
- * reliability score and go-live readiness are absent — not blank, not
- * placeholder cards, absent. Those columns exist in the database and are NULL
- * after Phase 3G; rendering an empty "Likely root cause" panel would imply the
- * product has an opinion it has not formed.
+ * PHASE 5B ADDS THE PHASE 4 SURFACE. Diagnosis, recommended fix and
+ * regression before/after are now rendered from the columns Phases 4C-4E
+ * actually persisted, through a separate READ-ONLY casefile model. The
+ * original rule still holds and is now enforced by that model rather than by
+ * omission: when a column is NULL the panel says "not yet diagnosed" instead
+ * of rendering an empty "Likely root cause" card, because the product must
+ * never imply an opinion it has not formed.
+ *
+ * THE CASEFILE IS OPTIONAL, THE EVIDENCE IS NOT. If the Phase 4 read fails,
+ * this page still renders the authoritative expected/observed evidence and
+ * omits the casefile — a diagnosis outage must never blank out a real
+ * money-invariant failure.
  */
 
 const UUID_PATTERN =
@@ -87,6 +104,23 @@ export default async function FindingDetailPage({
       notFound();
     }
     throw error;
+  }
+
+  // The Phase 4 casefile is additive. A failure here must not remove the
+  // authoritative Phase 3 evidence below, so it degrades to "not shown".
+  let casefile: FindingCasefile | null = null;
+  let comparison: RegressionComparison | null = null;
+  try {
+    casefile = await getFindingCasefile(detail.findingId);
+    if (casefile !== null) {
+      comparison = await getRegressionComparison(
+        detail.findingId,
+        detail.invariantResultId,
+      );
+    }
+  } catch {
+    casefile = null;
+    comparison = null;
   }
 
   return (
@@ -220,6 +254,10 @@ export default async function FindingDetailPage({
           </ul>
         )}
       </section>
+
+      {casefile !== null && (
+        <FindingCasefilePanel casefile={casefile} comparison={comparison} />
+      )}
 
       <section className="rounded-lg border border-border bg-card p-5">
         <h2 className="text-sm font-semibold text-card-foreground">

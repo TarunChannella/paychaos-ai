@@ -256,15 +256,20 @@ describe("middleware — Chaos Lab is protected (Phase 3H)", () => {
 });
 
 describe("middleware config matcher", () => {
-  it("declares exactly the three gated operator surfaces", async () => {
-    // Advanced in Phase 4F-R3, still an exact equality. `/reliability` is
-    // read-only rather than mutation-capable, but it exposes persisted chaos
-    // evidence and run identifiers, so it sits behind the same operator gate.
+  it("declares exactly the five gated operator surfaces", async () => {
+    // Advanced in Phase 4F-R3 and again in Phase 5B, still an exact equality.
+    // `/reliability`, `/findings` and `/settings` are read-only rather than
+    // mutation-capable, but each exposes persisted chaos evidence and internal
+    // identifiers — and `/settings` hosts the Demo Reset control — so all sit
+    // behind the same operator gate. Exact equality is the point: a new
+    // operator surface cannot appear ungated without failing here.
     const { config } = await import("@/middleware");
     expect(config.matcher).toEqual([
       "/demo-merchant/:path*",
       "/chaos/:path*",
       "/reliability/:path*",
+      "/findings/:path*",
+      "/settings/:path*",
     ]);
   });
 

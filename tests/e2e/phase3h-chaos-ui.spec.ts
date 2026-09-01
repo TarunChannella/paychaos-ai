@@ -44,9 +44,15 @@ test.describe("Phase 3H — chaos landing", () => {
   test("E2E-3H-01: the landing page navigates to the Chaos Lab", async ({
     page,
   }) => {
+    // ADVANCED, NOT LOOSENED (Phase 5B). The assertion is unchanged: from the
+    // landing page an operator reaches the Chaos Lab in one click. Only the
+    // LOCATOR moved, because `/chaos/i` became ambiguous the moment the
+    // console shell added a brand link — "PayChaos AI" contains "Chaos", so
+    // `.first()` matched the logo and navigated to "/". Targeting the actual
+    // navigation control is stricter than the old loose match, not weaker.
     await page.goto("/");
-    await page.getByRole("link", { name: /chaos/i }).first().click();
-    await expect(page).toHaveURL(/\/chaos$/);
+    await page.getByTestId("nav-chaos-runs").click();
+    await expect(page).toHaveURL(/\/chaos$/, { timeout: 120_000 });
   });
 
   test("E2E-3H-02: exactly the four frozen P0 scenarios are offered", async ({
