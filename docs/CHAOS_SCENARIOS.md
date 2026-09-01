@@ -1102,6 +1102,8 @@ C03 remains **verification-only**. It still calls the fixed internal `verifyWebh
 
 What changed: the before/after merchant state this scenario's §7 ("Capture merchant/payment state before test") and §13 ("state before/after; trusted webhook row count before/after") already required is now actually captured, during the same C03 execution, and persisted on the existing `chaos_runs.fault_state` column as `mutationEvidence`. See `docs/DATABASE.md` → `chaos_runs` → "C03 `fault_state` shape" for the exact structure.
 
+**Phase 4F scoring cross-reference.** Because C03's request is constructed internally by PayChaos, its runs are correctly classified `SYNTHETIC_DEMO` and are never authentic Razorpay deliveries. Phase 4F's `RELIABILITY-V1` therefore carries an explicit **scenario-aware eligibility exception**: C03 is score-eligible under `SYNTHETIC_DEMO`, while C01, C07 and C11 still require `RECORDED_TEST_EVIDENCE` (`docs/AI_DESIGN.md` → "Scenario-Aware Classification Eligibility"). This changes only which runs the score may select. It does **not** change C03's mechanism, its provenance labelling, or how it is described anywhere: a PayChaos-controlled simulation is never presented as a real Razorpay webhook.
+
 Frozen execution order:
 
 ```text

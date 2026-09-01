@@ -1067,6 +1067,26 @@ Formula:
 score = max(0, 100 - sum(C01, C03, C07, C11 deductions))
 ```
 
+## Scenario-Aware Score Eligibility
+
+Every score fixture must respect the frozen scenario-aware classification
+matrix in `AI_DESIGN.md` → `Reliability Score V1`:
+
+| Scenario | Required `chaos_runs.data_classification` |
+|---|---|
+| C01 | `RECORDED_TEST_EVIDENCE` |
+| C03 | `SYNTHETIC_DEMO` |
+| C07 | `RECORDED_TEST_EVIDENCE` |
+| C11 | `RECORDED_TEST_EVIDENCE` |
+
+The required classification is exact in both directions. `SYNTHETIC_DEMO` is
+score-eligible **only** for C03; a C03 run labelled `RECORDED_TEST_EVIDENCE`
+is ineligible.
+
+Selection ordering is `LATEST_SELECTION_V1` — `created_at DESC, id DESC` —
+applied after eligibility filtering. `completed_at` is required for finality
+but is never the ordering key.
+
 ## Required Exact Fixtures
 
 ### SCORE-FIX-01 — All Required PASS
@@ -1161,18 +1181,117 @@ Expected:
 
 ### SCORE-FIX-10 — Synthetic Data Exclusion
 
+Use a scenario whose eligibility requires `RECORDED_TEST_EVIDENCE` — that is
+**C01, C07 or C11**, never C03.
+
 Add a newer:
 
 ```text
 SYNTHETIC_DEMO
 ```
 
-run that would otherwise change the score.
+run for that scenario that would otherwise change the score.
 
 Expected:
 
 - genuine score is unchanged;
-- synthetic run is not selected as the current genuine result.
+- the synthetic run is not selected as the current genuine result;
+- an older eligible `RECORDED_TEST_EVIDENCE` run remains the current state.
+
+This fixture must **not** be written against C03, whose approved provenance is
+`SYNTHETIC_DEMO` and which is deliberately score-eligible under that
+classification.
+
+### SCORE-FIX-11 — C03 Synthetic Is Eligible
+
+```text
+C03 run, data_classification = SYNTHETIC_DEMO
+status = COMPLETED, outcome = PASS, completed_at set
+```
+
+Expected:
+
+- the run **is** eligible;
+- current state = `PASS`;
+- deduction = 0;
+- the breakdown reports C03 provenance as `SYNTHETIC_DEMO`, described as a
+  controlled PayChaos security simulation;
+- the breakdown never describes C03 as a real Razorpay event or recorded
+  provider evidence.
+
+### SCORE-FIX-12 — C03 Recorded Evidence Is Ineligible
+
+```text
+C03 run, data_classification = RECORDED_TEST_EVIDENCE
+status = COMPLETED, outcome = PASS, completed_at set
+```
+
+Expected:
+
+- the run is **not** eligible;
+- it is not selected as C03's current state;
+- if it is the only C03 candidate, C03 is `NOT RUN` with deduction 15.
+
+This guards against "fixing" a low score later by falsely relabelling C03 as
+real recorded evidence.
+
+### SCORE-FIX-13 — Terminal Technical Failure
+
+```text
+status = FAILED, outcome = ERROR, completed_at set
+```
+
+Expected:
+
+- the run is eligible (`FAILED` is a terminal status);
+- current state = `ERROR`;
+- deduction = 15.
+
+### SCORE-FIX-14 — Inconsistent FAIL Contract
+
+```text
+status = COMPLETED, outcome = FAIL
+zero persisted invariant_results rows with result = FAIL
+```
+
+Expected:
+
+- current state = `ERROR`;
+- deduction = 15;
+- never `PASS`, and never a severity-derived deduction.
+
+### SCORE-FIX-15 — Deterministic Tie-Break
+
+Two eligible candidates for the same scenario with the **same** `created_at`
+and different `id` values.
+
+Expected:
+
+- the higher `id` under deterministic descending string ordering is selected;
+- the result is stable across repeated evaluation.
+
+### SCORE-FIX-16 — `created_at` Beats `completed_at`
+
+Two eligible candidates where the run with the **later** `created_at` has the
+**earlier** `completed_at`.
+
+Expected:
+
+- the later `created_at` wins, per `LATEST_SELECTION_V1`;
+- `completed_at` ordering does not influence selection.
+
+### SCORE-FIX-17 — Non-Final Rows Are Not Eligible
+
+```text
+outcome = null
+completed_at = null
+```
+
+Expected:
+
+- neither row is score-eligible;
+- no arithmetic is invented for an unfinished run;
+- if no other candidate exists, the scenario is `NOT RUN` with deduction 15.
 
 ## Readiness Gate Tests
 
@@ -2414,7 +2533,7 @@ The Reliability Score formula and readiness thresholds are no longer pending.
 
 `RELIABILITY-V1` and `Go-Live Readiness V1` are frozen in `AI_DESIGN.md` Section 54, including the
 exact deduction table and formula. Section 12 of this document already asserts those exact
-deduction vectors and the `SCORE-FIX-01`–`SCORE-FIX-10` fixtures against that frozen algorithm.
+deduction vectors and the `SCORE-FIX-01`–`SCORE-FIX-17` fixtures against that frozen algorithm (`SCORE-FIX-11` through `SCORE-FIX-17` were added by the Phase 4F-C0 scenario-aware eligibility correction).
 
 Phase 4 implementation and testing must use `RELIABILITY-V1` and `Go-Live Readiness V1` as written in
 `AI_DESIGN.md`. Do not invent a different formula or numeric weights, and do not treat the score or

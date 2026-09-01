@@ -1642,14 +1642,48 @@ Start with:
 score = 100
 ```
 
-For each mandatory P0 scenario, select the latest eligible terminal recorded test run. An eligible run must:
+For each mandatory P0 scenario, select the latest eligible terminal test run. An eligible run must:
 
-- use `data_classification = RECORDED_TEST_EVIDENCE`;
 - belong to that scenario;
-- have a non-null terminal `outcome`;
+- carry the **scenario-specific** `data_classification` required below;
+- have a terminal `status` (`COMPLETED` or `FAILED`);
+- have a non-null `outcome`;
 - have `completed_at` recorded.
 
-`SYNTHETIC_DEMO` runs are excluded from the genuine Reliability Score.
+### Scenario-Aware Classification Eligibility
+
+| Scenario | Required `chaos_runs.data_classification` |
+|---|---|
+| C01 | `RECORDED_TEST_EVIDENCE` |
+| C03 | `SYNTHETIC_DEMO` |
+| C07 | `RECORDED_TEST_EVIDENCE` |
+| C11 | `RECORDED_TEST_EVIDENCE` |
+
+The required classification is **exact**, not a minimum. A run whose classification differs from the value above is **not** score-eligible for that scenario, in either direction.
+
+#### Why C03 is the exception
+
+C03 — Invalid Webhook Signature deliberately tests invalid, missing or modified webhook signatures. Its request is constructed **internally by PayChaos**: the scenario calls the fixed internal `verifyWebhookSignature` primitive directly, creates **zero** `webhook_events` rows and **zero** `event_processing_attempts` rows, and makes no Razorpay network call (`docs/CHAOS_SCENARIOS.md` Section 15).
+
+By definition it therefore **cannot** be an authentic Razorpay delivery, and `SYNTHETIC_DEMO` is the truthful classification for it. Labelling a C03 run `RECORDED_TEST_EVIDENCE` merely to make it score-eligible would be provenance dishonesty, and is forbidden.
+
+C03 is nevertheless a **mandatory P0 deterministic security test**, and it must be able to contribute `PASS` / `FAIL` / `UNKNOWN` / `BLOCKED` / `ERROR` to the Reliability Score like every other mandatory scenario. Excluding it entirely would leave a required scenario permanently `NOT RUN` and permanently deduct 15 points for a test that is in fact running correctly.
+
+The exception is therefore scenario-aware eligibility, **not** a relaxation of provenance labelling.
+
+#### The synthetic exclusion still exists
+
+`SYNTHETIC_DEMO` is score-eligible **only for C03**.
+
+For **C01**, **C07** and **C11**, `SYNTHETIC_DEMO` runs remain excluded from the genuine Reliability Score. A newer `SYNTHETIC_DEMO` run for C01, C07 or C11 must never override an older eligible `RECORDED_TEST_EVIDENCE` run. This remains a mandatory anti-contamination rule.
+
+Equally, a C03 run classified `RECORDED_TEST_EVIDENCE` is **ineligible**: that classification violates C03's approved provenance contract, and accepting it would reopen the dishonesty this exception exists to avoid.
+
+#### Provenance must survive into the breakdown
+
+The score breakdown must always expose C03's true provenance as `SYNTHETIC_DEMO`, described as a **controlled PayChaos security simulation** (or equivalent approved deterministic wording).
+
+C03 must **never** be described as a *Real Razorpay Event*, a real webhook delivery, or recorded provider evidence — in the breakdown, the UI, the API response or the demo.
 
 If no eligible completed run exists for a required scenario, its current derived state is:
 
@@ -1657,7 +1691,54 @@ If no eligible completed run exists for a required scenario, its current derived
 NOT RUN
 ```
 
-For a current `FAIL`, use the highest severity among that run's persisted `invariant_results` whose result is `FAIL`. If a run is marked `FAIL` but no failed invariant result exists, treat the score input as `ERROR` because the scenario/finding contract is internally inconsistent.
+### Terminal Candidate Contract
+
+The terminal `chaos_runs.status` values relevant to selection are:
+
+```text
+COMPLETED
+FAILED
+```
+
+A candidate must additionally have `outcome != null` and `completed_at != null`, and must satisfy its scenario-specific `data_classification` above.
+
+A row with `outcome = null` **or** `completed_at = null` is **not** score-eligible. No arithmetic is invented for an unfinished or non-final row.
+
+Approved persisted state mapping:
+
+| Persisted status + outcome | Score state |
+|---|---|
+| `COMPLETED` + `PASS` | `PASS` |
+| `COMPLETED` + `FAIL`, with at least one persisted `invariant_results` row whose `result` is `FAIL` | `FAIL` |
+| `COMPLETED` + `UNKNOWN` | `UNKNOWN` |
+| `COMPLETED` + `BLOCKED` | `BLOCKED` |
+| `COMPLETED` + `ERROR` | `ERROR` |
+| `FAILED` + `ERROR` | `ERROR` |
+
+Any selected terminal status/outcome combination **outside** these approved shapes maps to `ERROR` with a deduction of 15. An inconsistent state is never silently converted into `PASS`.
+
+For a current `FAIL`, use the highest severity among that run's persisted `invariant_results` whose result is `FAIL`. If a run is marked `FAIL` but **no** failed invariant result exists, the score input is `ERROR` with a deduction of 15, because the scenario/finding contract is internally inconsistent.
+
+### Latest-Run Selection — `LATEST_SELECTION_V1`
+
+After filtering candidates by scenario ID, scenario-specific `data_classification`, and the terminal/final eligibility above, order the remaining eligible candidates by:
+
+```text
+created_at DESC, id DESC
+```
+
+and take exactly the first row.
+
+```text
+LATEST_SELECTION_V1 = created_at DESC, id DESC
+```
+
+`completed_at` is **required for finality but is not the ordering key.** The rationale:
+
+- `created_at DESC, id DESC` matches the existing project convention for "latest" (`lib/chaos/run-read-model.ts`, `lib/regression/repository.ts`);
+- `created_at` is the run's identity/creation ordering and is assigned by the database;
+- `id` provides a total, deterministic tie-break when two runs share a `created_at`;
+- `completed_at` is supplied by the caller and is not guaranteed to order consistently with `created_at`.
 
 Use the following deduction table:
 
@@ -1689,7 +1770,34 @@ A regression creates a new chaos run and new invariant results. It never rewrite
 
 If that newer eligible run becomes the latest terminal genuine run for the required scenario, it becomes the current scenario state used by `RELIABILITY-V1`.
 
-Therefore a successful regression can restore the scenario's deduction to zero while the original failure remains preserved in history.
+Therefore a successful regression can restore the scenario's deduction to zero while the original failure remains preserved in history, provided the newer run wins the frozen `LATEST_SELECTION_V1` selection.
+
+No `regression_runs` row is itself required for score arithmetic. A regression influences the score only indirectly, by creating a newer eligible chaos run that becomes the current scenario state.
+
+### Finding / Regression Boundary
+
+`RELIABILITY-V1` arithmetic requires exactly three inputs:
+
+- the eligible chaos run selected per scenario;
+- that run's persisted `invariant_results`;
+- the severity of its failed invariant results.
+
+Finding and regression information may be used for **explanatory display only**. The following must **never** directly change the score:
+
+```text
+findings.status
+findings.resolved_at
+regression_runs.status
+diagnosis_code
+diagnosis_strength
+diagnosis_summary
+recommendation_code
+recommendation_text
+ML output
+LLM output
+```
+
+Unresolved-Finding gates belong to **Phase 4G Go-Live Readiness**, not to Phase 4F score arithmetic. Applying them in both places would double-count the same fact.
 
 ## Go-Live Readiness V1 — Frozen P0 Rules
 
