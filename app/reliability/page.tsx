@@ -1,35 +1,41 @@
 import Link from "next/link";
 
 import { ReadinessOverview } from "@/components/reliability/readiness-overview";
+import { ReadinessDecision } from "@/components/reliability/readiness-decision";
 import { ReliabilityOverview } from "@/components/reliability/reliability-overview";
-import { Badge } from "@/components/ui/badge";
+import { Card, PageShell, Section } from "@/components/ui/page";
 import { getCurrentGoLiveReadiness } from "@/lib/readiness/service";
 
 import type { GoLiveReadinessReadModel } from "@/lib/readiness/service";
 
 /**
- * Phase 4F-R3 — the operator Reliability Score page (P4-AC-10/11/12).
+ * The Reliability decision dashboard.
  *
- * SERVER COMPONENT. It calls the trusted service directly rather than fetching
- * its own HTTP API: the browser never reaches Supabase, never receives a
- * service-role credential, and no needless network hop or second auth check is
- * introduced. `GET /api/reliability` and this page are two adapters over the
- * same service, not layers of each other.
+ * IT LEADS WITH THE DECISION, NOT THE ALGORITHM. Previously the version
+ * strings and run UUIDs competed with the score for attention, which made a
+ * go-live judgement read as a debug report. The order is now: what is the
+ * verdict, what is the score, why, which scenario contributed what, and only
+ * then the identifiers and algorithm metadata.
+ *
+ * SERVER COMPONENT. It calls the trusted service directly rather than
+ * fetching its own HTTP API: the browser never reaches Supabase, never
+ * receives a service-role credential, and no needless network hop or second
+ * auth check is introduced.
  *
  * ALWAYS FRESH. The score is derived on demand, so a cached snapshot would
  * show an operator a stale verdict — exactly the thing that must never be
- * stale here. Same reasoning, same mechanism as the Chaos Lab page.
+ * stale here.
  *
  * FAILURE IS NOT A SCORE. If the evidence cannot be read, this page says so.
- * It never renders 0, never renders 40, and never renders four NOT_RUN rows
- * from an outage: a fabricated number is worse than an honest gap.
+ * It never renders 0, never renders a number from an outage, and never shows
+ * four NOT_RUN rows in place of a real answer.
+ *
+ * NO CHARTS. There is no persisted score history, so a trend line would be a
+ * fabricated one.
  */
 export const dynamic = "force-dynamic";
 
 export default async function ReliabilityPage() {
-  // One call: the readiness service composes the frozen 4F reliability read
-  // model and returns it unmodified alongside the assessment, so the page
-  // makes no second read and no second score calculation.
   let model: GoLiveReadinessReadModel | null = null;
   try {
     model = await getCurrentGoLiveReadiness();
@@ -41,15 +47,15 @@ export default async function ReliabilityPage() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-10 px-6 py-16">
-      <header className="flex flex-col items-center gap-3 text-center">
-        <Badge variant="outline" className="text-sm">
-          Razorpay Test Mode
-        </Badge>
-        <h1 className="text-3xl font-semibold tracking-tight text-foreground">
-          PayChaos AI — Reliability Score
+    <PageShell wide>
+      <header className="flex flex-col gap-1.5">
+        <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          Ready
+        </span>
+        <h1 className="text-2xl font-semibold leading-8 tracking-tight text-foreground">
+          Go-Live Reliability
         </h1>
-        <p className="max-w-xl text-balance text-sm text-muted-foreground">
+        <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
           A deterministic score over the four mandatory P0 chaos scenarios, and
           the Go-Live Readiness assessment derived from it. No AI, no estimate
           and nothing stored — both are recalculated from the database every
@@ -58,34 +64,51 @@ export default async function ReliabilityPage() {
       </header>
 
       {model === null ? (
-        <section
-          className="rounded-lg border border-destructive/40 bg-card p-6 text-center"
-          data-testid="reliability-unavailable"
-        >
+        <Card tone="danger" data-testid="reliability-unavailable">
           <p className="text-sm font-medium text-card-foreground">
             Reliability data unavailable.
           </p>
-          <p className="mt-2 text-sm text-muted-foreground">
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
             No score or readiness assessment was calculated because the required
             evidence could not be read. This is a read failure, not an absence
             of evidence — nothing is shown rather than something misleading.
           </p>
-        </section>
+        </Card>
       ) : (
         <>
+          <ReadinessDecision
+            readiness={model.readiness}
+            score={model.reliability.score.score}
+            href="#readiness-gates"
+          />
+
+          {/* The frozen 4F panel carries the per-scenario explanations and
+              candidate diagnostics; it is restyled, never re-derived. */}
           <ReliabilityOverview model={model.reliability} />
-          <ReadinessOverview readiness={model.readiness} />
+
+          <div id="readiness-gates">
+            <ReadinessOverview readiness={model.readiness} />
+          </div>
+
+          <p
+            className="border-t border-border pt-4 font-mono text-[11px] uppercase tracking-wider text-muted-foreground"
+            data-testid="reliability-algorithm-meta"
+          >
+            {model.reliability.score.algorithmVersion} ·{" "}
+            {model.reliability.score.selectionVersion} · total deduction{" "}
+            {model.reliability.score.totalDeduction}
+          </p>
         </>
       )}
 
-      <footer className="flex justify-center">
+      <footer className="flex flex-wrap gap-3 border-t border-border pt-6">
         <Link
           href="/chaos"
-          className="inline-flex items-center justify-center rounded-md border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent"
+          className="inline-flex items-center justify-center rounded-md border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           Back to Chaos Lab
         </Link>
       </footer>
-    </div>
+    </PageShell>
   );
 }
