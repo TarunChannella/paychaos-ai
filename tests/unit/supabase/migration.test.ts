@@ -1575,7 +1575,7 @@ describe("Phase 3E-A migration — event_processing_attempts evidence snapshots"
     expect(phase3eMigration).toBeDefined();
   });
 
-  it("2: it sorts AFTER every migration that precedes it and BEFORE the Phase 3F-A, Phase 3G and Phase 4E migrations (chronological filename ordering is preserved, so nothing can be applied out of order)", () => {
+  it("2: it sorts AFTER every migration that precedes it and BEFORE the Phase 3F-A, Phase 3G, Phase 4E and Phase 5 migrations (chronological filename ordering is preserved, so nothing can be applied out of order)", () => {
     const index = migrations.findIndex(
       (m) => m.name === phase3eMigration!.name,
     );
@@ -1587,6 +1587,8 @@ describe("Phase 3E-A migration — event_processing_attempts evidence snapshots"
       "20260902000000_phase3f_invariant_results.sql",
       "20260903000000_phase3g_findings.sql",
       "20260904000000_phase4e_regression_runs.sql",
+      // Phase 5 Demo Reset fix — additive, and still an exact-name list.
+      "20260905000000_phase5_demo_reset_atomic.sql",
     ]);
     expect(phase3eMigration!.name).toMatch(
       /^\d{14}_phase3e_evidence_snapshots\.sql$/,
@@ -1789,21 +1791,25 @@ describe("Phase 3F-A migration — invariant_results (the first Money Invariant 
       .join("\n");
   }
 
-  it("1: exists, is the expected filename and sorts exactly two places before the last migration (Phase 3G, then Phase 4E, follow it)", () => {
+  it("1: exists, is the expected filename and sorts exactly three places before the last migration (Phase 3G, Phase 4E, then the Phase 5 reset function follow it)", () => {
     expect(phase3fMigration).toBeDefined();
     expect(phase3fMigration!.name).toBe(
       "20260902000000_phase3f_invariant_results.sql",
     );
-    // Advanced, not loosened: Phase 4E now sorts last, Phase 3G one place
-    // ahead of it and Phase 3F-A one ahead of that — still exact-position
-    // assertions, shifted by exactly the one new migration.
+    // Advanced, not loosened, twice: Phase 4E shifted these once, and the
+    // Phase 5 Demo Reset function shifts them again. Every position is still
+    // an exact-name assertion — only the offsets moved, by exactly the number
+    // of legitimately added migrations.
     expect(migrations[migrations.length - 1]!.name).toBe(
-      "20260904000000_phase4e_regression_runs.sql",
+      "20260905000000_phase5_demo_reset_atomic.sql",
     );
     expect(migrations[migrations.length - 2]!.name).toBe(
-      "20260903000000_phase3g_findings.sql",
+      "20260904000000_phase4e_regression_runs.sql",
     );
     expect(migrations[migrations.length - 3]!.name).toBe(
+      "20260903000000_phase3g_findings.sql",
+    );
+    expect(migrations[migrations.length - 4]!.name).toBe(
       phase3fMigration!.name,
     );
   });

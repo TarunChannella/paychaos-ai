@@ -2318,17 +2318,21 @@ Do not manually delete rows in Supabase during the presentation.
 Runtime/demo records are removed in dependency-safe order from:
 
 ```text
+fulfilments
 regression_runs
+event_processing_attempts
 findings
 invariant_results
-event_processing_attempts
 chaos_runs
 webhook_events
-fulfilments
 payments
 payment_attempts
 orders
 ```
+
+The reset is atomic: all ten deletes run in one transaction, so it either
+fully applies or does not apply at all. If it fails, the database is unchanged
+and the UI says so — it never reports that some tables were cleared.
 
 ---
 

@@ -3,61 +3,55 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
 
 /**
- * Phase 5B — the deterministic Demo Reset.
+ * Phase 5 — the atomic Demo Reset.
  *
  * This is the only destructive operation in the product, so the tests are
- * about SCOPE and ORDER rather than about happy-path plumbing: exactly which
- * tables it touches, in exactly which sequence, that nothing else is
- * reachable, and that a partial failure is reported instead of hidden.
+ * about SCOPE, ORDER and ATOMICITY rather than happy-path plumbing.
+ *
+ * WHY THIS FILE WAS REWRITTEN. The previous version froze a deletion order
+ * that was WRONG, and its "children are deleted before their parents" test
+ * passed anyway — because it hand-listed seven foreign-key pairs and happened
+ * to omit `fulfilments -> event_processing_attempts`, which is the pair that
+ * actually broke production. A test that enumerates a hand-picked subset of a
+ * schema constraint can only ever catch the cases its author already thought
+ * of. The order test below therefore PARSES the migrations and derives every
+ * edge, so a future FK cannot be silently left out.
  */
 
 interface Call {
   readonly table: string;
-  op: "delete" | "select" | "insert" | "update" | "upsert";
-  filters: string[];
+  op: "delete" | "select" | "insert" | "update" | "upsert" | "rpc";
 }
 
 const calls: Call[] = [];
-let failOnTable: string | null = null;
-
-function makeBuilder(record: Call) {
-  const builder: Record<string, unknown> = {};
-  const chain =
-    (fn: () => void) =>
-    (...args: unknown[]) => {
-      fn();
-      record.filters.push(args.map(String).join(":"));
-      return builder;
-    };
-
-  builder.delete = chain(() => {
-    record.op = "delete";
-  });
-  for (const op of ["select", "insert", "update", "upsert"] as const) {
-    builder[op] = chain(() => {
-      record.op = op;
-    });
-  }
-  builder.not = chain(() => {});
-  builder.eq = chain(() => {});
-  builder.then = (resolve: (value: unknown) => unknown) =>
-    Promise.resolve(
-      record.table === failOnTable
-        ? { data: null, error: { message: "permission denied for relation" } }
-        : { data: null, error: null },
-    ).then(resolve);
-  return builder;
-}
+let rpcError: { message: string } | null = null;
+let rpcData: unknown = {
+  fulfilments: 1,
+  regression_runs: 2,
+  event_processing_attempts: 3,
+  findings: 4,
+  invariant_results: 5,
+  chaos_runs: 6,
+  webhook_events: 7,
+  payments: 8,
+  payment_attempts: 9,
+  orders: 10,
+};
 
 const fakeClient = {
   from(table: string) {
-    const record: Call = { table, op: "select", filters: [] };
-    calls.push(record);
-    return makeBuilder(record);
+    // Any table access at all is now a defect: the reset is one RPC.
+    calls.push({ table, op: "select" });
+    throw new Error(`unexpected table access: ${table}`);
   },
-  rpc(name: string) {
-    calls.push({ table: `rpc:${name}`, op: "select", filters: [] });
-    return Promise.resolve({ data: null, error: null });
+  rpc(name: string, args?: unknown) {
+    calls.push({ table: `rpc:${name}`, op: "rpc" });
+    if (args !== undefined) throw new Error("reset RPC must take no arguments");
+    return Promise.resolve(
+      rpcError === null
+        ? { data: rpcData, error: null }
+        : { data: null, error: rpcError },
+    );
   },
 };
 
@@ -65,144 +59,107 @@ vi.mock("@/lib/supabase/server", () => ({
   getSupabaseServerClient: () => fakeClient,
 }));
 
-const { runDemoReset, DEMO_RESET_TABLES } =
+const { runDemoReset, DEMO_RESET_TABLES, DEMO_RESET_RPC } =
   await import("@/lib/demo-reset/service");
 
 beforeEach(() => {
   calls.length = 0;
-  failOnTable = null;
+  rpcError = null;
 });
 
-describe("demo reset — scope is frozen", () => {
-  it("1: clears exactly the ten documented runtime tables", async () => {
+describe("demo reset — one atomic call, not ten deletes", () => {
+  it("1: the whole reset is a single RPC", async () => {
     await runDemoReset();
 
-    expect(calls.map((c) => c.table)).toEqual([
-      "regression_runs",
-      "findings",
-      "invariant_results",
-      "event_processing_attempts",
-      "chaos_runs",
-      "webhook_events",
-      "fulfilments",
-      "payments",
-      "payment_attempts",
-      "orders",
-    ]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.table).toBe(`rpc:${DEMO_RESET_RPC}`);
   });
 
-  it("2: the exported table list matches the documented order exactly", () => {
-    // docs/TESTING.md "Demo Reset" and docs/DATABASE.md Section 39.
-    expect([...DEMO_RESET_TABLES]).toEqual([
-      "regression_runs",
-      "findings",
-      "invariant_results",
-      "event_processing_attempts",
-      "chaos_runs",
-      "webhook_events",
-      "fulfilments",
-      "payments",
-      "payment_attempts",
-      "orders",
-    ]);
-  });
-
-  it("3: children are deleted before their parents", async () => {
+  it("2: no table is deleted from application code", async () => {
+    // The loop is what allowed a partial reset to commit in production.
     await runDemoReset();
-    const order = calls.map((c) => c.table);
-
-    // Each pair would violate a foreign key if reversed.
-    for (const [child, parent] of [
-      ["regression_runs", "findings"],
-      ["findings", "invariant_results"],
-      ["invariant_results", "chaos_runs"],
-      ["event_processing_attempts", "webhook_events"],
-      ["fulfilments", "payments"],
-      ["payments", "payment_attempts"],
-      ["payment_attempts", "orders"],
-    ] as const) {
-      expect(
-        order.indexOf(child),
-        `${child} must precede ${parent}`,
-      ).toBeLessThan(order.indexOf(parent));
-    }
+    expect(calls.some((c) => c.op === "delete")).toBe(false);
+    expect(calls.filter((c) => !c.table.startsWith("rpc:"))).toEqual([]);
   });
 
-  it("4: no schema, config or fixture table is ever touched", async () => {
-    await runDemoReset();
-    const touched = calls.map((c) => c.table);
-
-    for (const forbidden of [
-      "schema_migrations",
-      "supabase_migrations",
-      "pg_policies",
-      "users",
-      "auth.users",
-      "storage.objects",
-    ]) {
-      expect(touched, forbidden).not.toContain(forbidden);
-    }
+  it("3: the RPC is called with no arguments at all", async () => {
+    // `fakeClient.rpc` throws if anything is passed. A reset that can accept
+    // an argument is one refactor away from a generic delete surface.
+    await expect(runDemoReset()).resolves.toBeDefined();
   });
 
-  it("5: every statement is a DELETE — no truncate, no rpc, no select", async () => {
-    await runDemoReset();
-
-    expect(calls.every((c) => c.op === "delete")).toBe(true);
-    expect(calls.some((c) => c.table.startsWith("rpc:"))).toBe(false);
-  });
-
-  it("6: it takes no arguments, so no caller can widen the scope", () => {
-    // The signature is the guarantee: there is nothing to pass.
+  it("4: runDemoReset itself takes no arguments", () => {
     expect(runDemoReset.length).toBe(0);
   });
 
-  it("7: the frozen table list cannot be mutated at runtime", () => {
+  it("5: the frozen table list cannot be mutated at runtime", () => {
     expect(Object.isFrozen(DEMO_RESET_TABLES)).toBe(true);
+    expect(DEMO_RESET_TABLES).toHaveLength(10);
   });
 });
 
-describe("demo reset — a partial reset is reported, not hidden", () => {
-  it("8: a clean run reports ok with every table cleared", async () => {
+describe("demo reset — failure means nothing was applied", () => {
+  it("6: a clean run reports ok and resetApplied", async () => {
     const result = await runDemoReset();
 
     expect(result.ok).toBe(true);
-    expect(result.failedTable).toBeNull();
-    expect(result.clearedTables).toHaveLength(DEMO_RESET_TABLES.length);
+    expect(result.resetApplied).toBe(true);
+    expect(result.deletedCounts).not.toBeNull();
   });
 
-  it("9: a failure stops immediately and names the table", async () => {
-    failOnTable = "invariant_results";
+  it("7: a failure reports resetApplied false, never a partial success", async () => {
+    rpcError = {
+      message: 'update or delete on table "x" violates foreign key',
+    };
 
     const result = await runDemoReset();
 
     expect(result.ok).toBe(false);
-    expect(result.failedTable).toBe("invariant_results");
-    // The two earlier tables succeeded; nothing after it was attempted.
-    expect(result.clearedTables).toEqual(["regression_runs", "findings"]);
-    expect(calls.map((c) => c.table)).toEqual([
-      "regression_runs",
-      "findings",
-      "invariant_results",
-    ]);
+    expect(result.resetApplied).toBe(false);
+    expect(result.deletedCounts).toBeNull();
   });
 
-  it("10: a failure never reports ok", async () => {
-    // A half-cleared demo reported as clean would make every subsequent
-    // screen unreadable.
-    for (const table of DEMO_RESET_TABLES) {
-      calls.length = 0;
-      failOnTable = table;
-      const result = await runDemoReset();
-      expect(result.ok, table).toBe(false);
+  it("8: the result shape cannot describe a partial reset", async () => {
+    // The old contract carried `clearedTables` / `failedTable`, which existed
+    // ONLY to describe a half-finished reset. Their absence is the guarantee:
+    // no route or UI can render a partial story it cannot obtain.
+    rpcError = { message: "boom" };
+    const failure = JSON.stringify(await runDemoReset());
+    rpcError = null;
+    const success = JSON.stringify(await runDemoReset());
+
+    for (const banned of ["clearedTables", "failedTable"]) {
+      expect(failure, banned).not.toContain(banned);
+      expect(success, banned).not.toContain(banned);
     }
   });
 
-  it("11: no raw database message escapes the result", async () => {
-    failOnTable = "orders";
+  it("9: no raw database message escapes the result", async () => {
+    rpcError = {
+      message:
+        'update or delete on table "event_processing_attempts" violates ' +
+        'foreign key constraint "fulfilments_trigger_processing_attempt_id_fkey"',
+    };
 
+    const serialized = JSON.stringify(await runDemoReset());
+
+    for (const leak of [
+      "violates",
+      "foreign key",
+      "constraint",
+      "event_processing_attempts",
+      "permission denied",
+    ]) {
+      expect(serialized, leak).not.toContain(leak);
+    }
+  });
+
+  it("10: a malformed count payload never fabricates numbers", async () => {
+    rpcData = "not an object";
     const result = await runDemoReset();
+    rpcData = { orders: 1 };
 
-    expect(JSON.stringify(result)).not.toContain("permission denied");
-    expect(JSON.stringify(result)).not.toContain("relation");
+    expect(result.ok).toBe(true);
+    expect(result.deletedCounts).toBeNull();
   });
 });

@@ -28,18 +28,19 @@ vi.mock("@/lib/demo-reset/service", () => ({
 const logEventMock = vi.fn();
 vi.mock("@/lib/security/logger", () => ({ logEvent: logEventMock }));
 
-const CLEARED = [
-  "regression_runs",
-  "findings",
-  "invariant_results",
-  "event_processing_attempts",
-  "chaos_runs",
-  "webhook_events",
-  "fulfilments",
-  "payments",
-  "payment_attempts",
-  "orders",
-];
+/** Row counts the atomic reset reports on success. */
+const DELETED_COUNTS = {
+  fulfilments: 1,
+  regression_runs: 2,
+  event_processing_attempts: 3,
+  findings: 4,
+  invariant_results: 5,
+  chaos_runs: 6,
+  webhook_events: 7,
+  payments: 8,
+  payment_attempts: 9,
+  orders: 10,
+};
 
 async function callPost(
   options: {
@@ -68,8 +69,8 @@ beforeEach(() => {
   getAccessGateEnvMock.mockReturnValue({ mode: "disabled" });
   runDemoResetMock.mockResolvedValue({
     ok: true,
-    clearedTables: CLEARED,
-    failedTable: null,
+    resetApplied: true,
+    deletedCounts: DELETED_COUNTS,
   });
 });
 
@@ -83,11 +84,12 @@ describe("POST /api/demo/reset — success", () => {
     expect(runDemoResetMock).toHaveBeenCalledWith();
   });
 
-  it("2: reports which tables were cleared", async () => {
+  it("2: reports that the reset was applied, with row counts", async () => {
     const body = await (await callPost()).json();
 
     expect(body.ok).toBe(true);
-    expect(body.clearedTables).toEqual(CLEARED);
+    expect(body.resetApplied).toBe(true);
+    expect(body.deletedCounts).toEqual(DELETED_COUNTS);
   });
 
   it("3: a request body cannot influence the reset", async () => {
@@ -169,19 +171,29 @@ describe("POST /api/demo/reset — access", () => {
 });
 
 describe("POST /api/demo/reset — failure is never reported as success", () => {
-  it("11: a partial reset is a 500 naming the failed table", async () => {
+  it("11: a failure is a 500 stating that NOTHING was applied", async () => {
+    // ADVANCED, NOT LOOSENED. This previously asserted the 500 named the
+    // table the reset "stopped at" and listed the tables already cleared.
+    // That described a partial reset, which the atomic implementation can no
+    // longer produce — so asserting it would now pin a falsehood into the
+    // contract. The stronger property is that failure says nothing changed.
     runDemoResetMock.mockResolvedValue({
       ok: false,
-      clearedTables: ["regression_runs"],
-      failedTable: "findings",
+      resetApplied: false,
+      deletedCounts: null,
     });
 
     const response = await callPost();
     const body = await response.json();
 
     expect(response.status).toBe(500);
-    expect(body.failedTable).toBe("findings");
+    expect(body.resetApplied).toBe(false);
     expect(body).not.toHaveProperty("ok");
+
+    // No vocabulary that could describe a half-finished reset survives.
+    for (const banned of ["clearedTables", "failedTable", "stopped at"]) {
+      expect(JSON.stringify(body), banned).not.toContain(banned);
+    }
   });
 
   it("12: a thrown error is a generic 500 with no raw wording", async () => {

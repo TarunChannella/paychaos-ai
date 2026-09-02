@@ -919,6 +919,19 @@ export interface Database {
         Args: { p_processing_attempt_id: string };
         Returns: Record<string, unknown>;
       };
+      /**
+       * Phase 5 — the atomic Demo Reset.
+       *
+       * `Args: Record<string, never>` is load-bearing, not cosmetic: it makes
+       * it a TYPE ERROR to pass this function anything at all, which is the
+       * same guarantee the SQL side gives by taking no parameters. A reset
+       * that could accept an argument would be a step towards a generic
+       * delete surface.
+       */
+      reset_paychaos_demo_runtime: {
+        Args: Record<string, never>;
+        Returns: Record<string, number>;
+      };
     };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;

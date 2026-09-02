@@ -344,11 +344,18 @@ describe("Phase 3G surface — static safety guard", () => {
     // (docs/DATABASE.md Section 18), so Phase 3G's migration is now second
     // from last. Both positions stay exact-name assertions, and Phase 3G
     // still owns exactly one migration — asserted below.
-    expect(migrations).toHaveLength(13);
+    // Advanced for the Phase 5 Demo Reset fix, which legitimately adds one
+    // additive migration (a narrow reset function; no table change). The
+    // protection is unchanged: THIS phase still contributes no migration of
+    // its own, and the earlier migrations stay exactly where they were.
+    expect(migrations).toHaveLength(14);
     expect(migrations[migrations.length - 1]).toBe(
-      "20260904000000_phase4e_regression_runs.sql",
+      "20260905000000_phase5_demo_reset_atomic.sql",
     );
     expect(migrations[migrations.length - 2]).toBe(
+      "20260904000000_phase4e_regression_runs.sql",
+    );
+    expect(migrations[migrations.length - 3]).toBe(
       "20260903000000_phase3g_findings.sql",
     );
     // Phase 3F still owns exactly one migration of its own — advanced, not

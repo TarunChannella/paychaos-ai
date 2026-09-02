@@ -351,6 +351,9 @@ describe("Phase 4A-R1 evidence pack — static guard", () => {
       "20260902000000_phase3f_invariant_results.sql",
       "20260903000000_phase3g_findings.sql",
       "20260904000000_phase4e_regression_runs.sql",
+      // Phase 5: the Demo Reset fix adds one additive migration (a narrow
+      // reset function). Phase 4A still contributes none of its own.
+      "20260905000000_phase5_demo_reset_atomic.sql",
     ]);
   });
 

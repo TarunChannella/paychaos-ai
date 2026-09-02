@@ -295,11 +295,18 @@ describe("Phase 4A-R2 evidence pack service — static guard", () => {
     // table (docs/DATABASE.md Section 18). The protection is unchanged: this
     // phase still contributes NO migration of its own, and the Phase 3G
     // migration remains exactly where it was.
-    expect(migrations).toHaveLength(13);
+    // Advanced for the Phase 5 Demo Reset fix, which legitimately adds one
+    // additive migration (a narrow reset function; no table change). The
+    // protection is unchanged: THIS phase still contributes no migration of
+    // its own, and the earlier migrations stay exactly where they were.
+    expect(migrations).toHaveLength(14);
     expect(migrations.at(-1)).toBe(
+      "20260905000000_phase5_demo_reset_atomic.sql",
+    );
+    expect(migrations.at(-2)).toBe(
       "20260904000000_phase4e_regression_runs.sql",
     );
-    expect(migrations.at(-2)).toBe("20260903000000_phase3g_findings.sql");
+    expect(migrations.at(-3)).toBe("20260903000000_phase3g_findings.sql");
   });
 
   it("18: the R1 pure builder remains untouched by R2 — still zero runtime imports", () => {

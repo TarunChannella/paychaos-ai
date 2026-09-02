@@ -669,6 +669,10 @@ describe("Phase 3E-B does not modify frozen Phase 3A-3E-A mechanics", () => {
       "20260902000000_phase3f_invariant_results.sql",
       "20260903000000_phase3g_findings.sql",
       "20260904000000_phase4e_regression_runs.sql",
+      // Phase 5: the Demo Reset fix adds one additive migration (a narrow
+      // reset function; no table is created or altered). Phase 3E-B still
+      // contributes none of its own, which is what this guard protects.
+      "20260905000000_phase5_demo_reset_atomic.sql",
     ]);
 
     const migrationSql = migrations.map((migration) =>

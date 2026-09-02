@@ -1859,22 +1859,35 @@ where technically possible.
 
 ## Demo Reset
 
-Demo Reset clears runtime/demo records from:
+Demo Reset clears runtime/demo records in this dependency-safe order:
 
 ```text
+fulfilments
 regression_runs
+event_processing_attempts
 findings
 invariant_results
-event_processing_attempts
 chaos_runs
 webhook_events
-fulfilments
 payments
 payment_attempts
 orders
 ```
 
-using the dependency-safe database contract.
+CORRECTED (Phase 5): `fulfilments` is deleted FIRST, because
+`fulfilments.trigger_processing_attempt_id` references
+`event_processing_attempts` `ON DELETE RESTRICT`. The previously documented
+order deleted `event_processing_attempts` first and failed in production.
+
+The reset runs as ONE transaction inside
+`public.reset_paychaos_demo_runtime()`. **If it fails, zero reset-table
+mutations commit** — a partial reset is not a reachable state, and tests must
+not assert one.
+
+Order is asserted by a test that DERIVES the foreign-key graph from the
+migrations rather than from a hand-written list of pairs. The previous test
+hand-listed seven pairs, omitted the one that mattered, and passed while the
+order was wrong.
 
 ---
 

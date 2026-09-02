@@ -70,8 +70,15 @@ describe("Phase 4F-R1 — the approved surface", () => {
     const migrations = readdirSync(join(ROOT, "supabase", "migrations"))
       .filter((name) => name.endsWith(".sql"))
       .sort();
-    expect(migrations).toHaveLength(13);
+    // Advanced for the Phase 5 Demo Reset fix, which legitimately adds one
+    // additive migration (a narrow reset function; no table change). The
+    // protection is unchanged: THIS phase still contributes no migration of
+    // its own, and the earlier migrations stay exactly where they were.
+    expect(migrations).toHaveLength(14);
     expect(migrations.at(-1)).toBe(
+      "20260905000000_phase5_demo_reset_atomic.sql",
+    );
+    expect(migrations.at(-2)).toBe(
       "20260904000000_phase4e_regression_runs.sql",
     );
   });

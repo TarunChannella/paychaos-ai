@@ -3,50 +3,59 @@ import "server-only";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 /**
- * Phase 5B — the deterministic administrative Demo Reset.
+ * Phase 5 — the deterministic administrative Demo Reset.
  *
  * WHAT IT IS. The single documented operation that returns the controlled
  * Demo Merchant to a known empty runtime state between demonstrations
- * (docs/DEMO_PLAN.md Section 73, docs/TESTING.md "Demo Reset",
- * docs/DATABASE.md Section 39). `invariant_results` retains its `DELETE`
- * privilege for `service_role` *solely* so this operation can exist.
+ * (docs/DEMO_PLAN.md, docs/TESTING.md "Demo Reset", docs/DATABASE.md).
  *
- * IT IS NOT A GENERIC DELETE ENDPOINT. The table list is a frozen constant in
- * this module. No caller — route, UI or test — can name a table, supply a
- * predicate, widen the scope or change the order. There is deliberately no
- * `resetTable(name)` and no parameter of any kind: the only thing a caller
- * can do is run exactly this, or nothing.
+ * IT IS ATOMIC, AND THAT IS THE POINT OF THIS MODULE.
  *
- * ORDER IS A CORRECTNESS PROPERTY. Deletion runs child-before-parent so
- * foreign keys are never violated mid-reset. The order is the one the
- * documentation specifies and is asserted by test, not left to chance.
+ * This previously issued ten independent Supabase DELETE requests in a loop.
+ * A real production reset failed on `event_processing_attempts`, and because
+ * each delete was its own request, the ones before it had already committed —
+ * leaving the database partially reset, the exact state a reset exists to
+ * make impossible. The order was also wrong: `fulfilments` references
+ * `event_processing_attempts` ON DELETE RESTRICT, so the delete could never
+ * have succeeded while any webhook-produced fulfilment existed.
+ *
+ * Both faults are now fixed in one place. The whole reset is a single
+ * PostgreSQL function (`public.reset_paychaos_demo_runtime`) that deletes the
+ * ten tables in verified child-before-parent order inside one transaction. If
+ * any delete fails, every earlier delete in the same call rolls back.
+ *
+ * There is therefore NO partial-success state left to report, and this module
+ * deliberately no longer has a `clearedTables` / `failedTable` vocabulary: a
+ * shape that can describe a half-finished reset invites code and copy that
+ * pretend one is survivable.
+ *
+ * IT IS NOT A GENERIC DELETE ENDPOINT. `runDemoReset()` takes no arguments
+ * and calls one argument-less function. No caller — route, UI or test — can
+ * name a table, supply a predicate, widen the scope or change the order. The
+ * order now lives in the database function, where it is enforced rather than
+ * merely intended.
  *
  * IT PRESERVES EVERYTHING THAT IS NOT RUNTIME DATA. No schema change, no
- * migration change, no RLS change, no environment value, no Razorpay
- * configuration and no source-controlled fixture is touched. It issues
- * `DELETE` and nothing else — no `DROP`, no `TRUNCATE`, no `ALTER`, no SQL
- * string, no RPC.
- *
- * A PARTIAL RESET IS REPORTED, NOT HIDDEN. If one table fails the operation
- * stops and returns which step failed, with the tables already cleared. A
- * reset that silently half-succeeded would leave a demo in a state nobody
- * can reason about.
+ * migration change, no RLS change, no environment value and no Razorpay
+ * configuration is touched.
  */
 
 /**
- * The runtime/demo tables, child-before-parent.
+ * The runtime/demo tables cleared by the reset, child-before-parent.
  *
- * Frozen. Adding a table here is a documentation-level decision, not an
- * implementation detail.
+ * DOCUMENTATION AND TEST SURFACE ONLY — this constant no longer drives
+ * execution. The authoritative order is the statement sequence inside
+ * `public.reset_paychaos_demo_runtime()`; the migration test asserts the two
+ * agree, so this cannot drift into a comfortable fiction.
  */
 export const DEMO_RESET_TABLES = Object.freeze([
+  "fulfilments",
   "regression_runs",
+  "event_processing_attempts",
   "findings",
   "invariant_results",
-  "event_processing_attempts",
   "chaos_runs",
   "webhook_events",
-  "fulfilments",
   "payments",
   "payment_attempts",
   "orders",
@@ -54,37 +63,64 @@ export const DEMO_RESET_TABLES = Object.freeze([
 
 export type DemoResetTable = (typeof DEMO_RESET_TABLES)[number];
 
+/** The database function that performs the whole reset in one transaction. */
+export const DEMO_RESET_RPC = "reset_paychaos_demo_runtime";
+
 export interface DemoResetResult {
   readonly ok: boolean;
-  /** Tables successfully cleared, in the order they were cleared. */
-  readonly clearedTables: readonly DemoResetTable[];
-  /** The table whose delete failed, when `ok` is false. */
-  readonly failedTable: DemoResetTable | null;
+  /**
+   * Whether any row was deleted at all.
+   *
+   * Always equal to `ok`, and stated explicitly because the caller's job is
+   * to tell an operator the truth: on failure NOTHING was applied, not "some
+   * of it was". It is a separate field so the route and the UI cannot
+   * accidentally imply a partial reset again.
+   */
+  readonly resetApplied: boolean;
+  /** Rows deleted per table on success; null when nothing was applied. */
+  readonly deletedCounts: Readonly<Record<string, number>> | null;
+}
+
+const FAILED: DemoResetResult = Object.freeze({
+  ok: false,
+  resetApplied: false,
+  deletedCounts: null,
+});
+
+/** Coerces the function's jsonb result into plain counts, defensively. */
+function readCounts(data: unknown): Record<string, number> | null {
+  if (typeof data !== "object" || data === null || Array.isArray(data)) {
+    return null;
+  }
+  const counts: Record<string, number> = {};
+  for (const [table, value] of Object.entries(
+    data as Record<string, unknown>,
+  )) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      counts[table] = value;
+    }
+  }
+  return counts;
 }
 
 /**
- * Clears every documented runtime/demo table, in dependency-safe order.
+ * Clears every documented runtime/demo table in one transaction.
  *
  * Takes no arguments by design: there is no scope for a caller to influence.
+ * Either the whole reset applied, or none of it did.
  */
 export async function runDemoReset(): Promise<DemoResetResult> {
   const client = getSupabaseServerClient();
-  const clearedTables: DemoResetTable[] = [];
 
-  for (const table of DEMO_RESET_TABLES) {
-    // `.delete()` requires a filter, so this matches every row by asserting
-    // the primary key is present — the deliberate, readable "all rows of
-    // exactly this table" form. It is not a caller-supplied predicate.
-    const { error } = await client.from(table).delete().not("id", "is", null);
+  const { data, error } = await client.rpc(DEMO_RESET_RPC);
 
-    if (error !== null) {
-      // Stop at the first failure: continuing would delete parents whose
-      // children still exist, or report a clean reset that did not happen.
-      // The raw database message is never forwarded.
-      return { ok: false, clearedTables, failedTable: table };
-    }
-    clearedTables.push(table);
-  }
+  // The raw database message is never forwarded — it can carry table,
+  // constraint and column detail that does not belong in an HTTP response.
+  if (error !== null) return FAILED;
 
-  return { ok: true, clearedTables, failedTable: null };
+  return {
+    ok: true,
+    resetApplied: true,
+    deletedCounts: readCounts(data),
+  };
 }

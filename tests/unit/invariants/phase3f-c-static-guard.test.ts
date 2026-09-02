@@ -298,11 +298,18 @@ describe("Phase 3F-C surface — static safety guard", () => {
     // migration (`regression_runs`, the tenth and last P0 table). The
     // exact-name property above is what this guard protects and is unchanged.
     expect(migrations[migrations.length - 1]).toBe(
-      "20260904000000_phase4e_regression_runs.sql",
+      "20260905000000_phase5_demo_reset_atomic.sql",
     );
     expect(migrations[migrations.length - 2]).toBe(
+      "20260904000000_phase4e_regression_runs.sql",
+    );
+    expect(migrations[migrations.length - 3]).toBe(
       "20260903000000_phase3g_findings.sql",
     );
-    expect(migrations).toHaveLength(13);
+    // Advanced for the Phase 5 Demo Reset fix, which legitimately adds one
+    // additive migration (a narrow reset function; no table change). The
+    // protection is unchanged: THIS phase still contributes no migration of
+    // its own, and the earlier migrations stay exactly where they were.
+    expect(migrations).toHaveLength(14);
   });
 });

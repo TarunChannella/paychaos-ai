@@ -35,10 +35,17 @@ describe("Phase 4E-R1 migration — file", () => {
   });
 
   it("2: it is the newest migration, and the count is now thirteen", () => {
-    expect(migrationFiles).toHaveLength(13);
-    expect(migrationFiles.at(-1)).toBe(MIGRATION_NAME);
+    // Advanced for the Phase 5 Demo Reset fix, which legitimately adds one
+    // additive migration (a narrow reset function; no table change). The
+    // protection is unchanged: THIS phase still contributes no migration of
+    // its own, and the earlier migrations stay exactly where they were.
+    expect(migrationFiles).toHaveLength(14);
+    expect(migrationFiles.at(-1)).toBe(
+      "20260905000000_phase5_demo_reset_atomic.sql",
+    );
+    expect(migrationFiles.at(-2)).toBe(MIGRATION_NAME);
     // The Phase 3G findings migration remains its immediate predecessor.
-    expect(migrationFiles.at(-2)).toBe("20260903000000_phase3g_findings.sql");
+    expect(migrationFiles.at(-3)).toBe("20260903000000_phase3g_findings.sql");
   });
 
   it("3: exactly one table is created, and it is regression_runs", () => {

@@ -19,9 +19,14 @@ import { useRouter } from "next/navigation";
  * NO DOUBLE SUBMIT. The button disables on the first click and an in-flight
  * ref rejects a duplicate even if a key event races the disabled attribute.
  *
- * FAILURE IS SHOWN AS FAILURE. A partial reset names the table that failed
- * rather than reporting success — an operator who believes the demo is clean
- * when it is not will misread everything they see next.
+ * FAILURE IS SHOWN AS FAILURE — AND FAILURE MEANS NOTHING WAS APPLIED. The
+ * reset runs as one PostgreSQL transaction, so it either fully applied or did
+ * not apply at all. This panel used to say the reset "stopped at" a table and
+ * that "earlier tables were cleared; later ones were not". That sentence was
+ * accurate about the OLD looping implementation — it is exactly what an
+ * operator saw in production — and it would now be a lie, because a partial
+ * reset can no longer occur. An operator who believes the demo is half-clean
+ * when it is untouched will misread everything they see next.
  */
 
 const CONFIRM_WORD = "RESET";
@@ -46,37 +51,25 @@ export function DemoResetPanel() {
 
     try {
       const response = await fetch("/api/demo/reset", { method: "POST" });
-      const body: unknown = await response.json().catch(() => null);
+      // The body is deliberately not read. The outcome is binary now, so
+      // `response.ok` carries everything the operator needs, and parsing a
+      // payload would only invite re-introducing per-table copy.
 
       if (!response.ok) {
-        const failedTable =
-          body !== null &&
-          typeof body === "object" &&
-          "failedTable" in body &&
-          typeof (body as { failedTable: unknown }).failedTable === "string"
-            ? (body as { failedTable: string }).failedTable
-            : null;
         setPhase("error");
         setMessage(
-          failedTable === null
-            ? "The demo reset did not complete. No further tables were cleared."
-            : `The demo reset stopped at "${failedTable}". Earlier tables were cleared; later ones were not.`,
+          "The demo reset failed and no reset was applied. The database is " +
+            "unchanged. Please retry after the underlying issue is resolved.",
         );
         inFlight.current = false;
         return;
       }
 
-      const cleared =
-        body !== null &&
-        typeof body === "object" &&
-        "clearedTables" in body &&
-        Array.isArray((body as { clearedTables: unknown }).clearedTables)
-          ? (body as { clearedTables: unknown[] }).clearedTables.length
-          : 0;
-
       setPhase("done");
       setMessage(
-        `Demo reset complete. ${cleared} runtime tables were cleared. Schema, migrations, RLS and configuration were not touched.`,
+        "Demo data reset successfully. Every runtime record was cleared in a " +
+          "single transaction. Schema, migrations, RLS and configuration were " +
+          "not touched.",
       );
       setConfirmation("");
       inFlight.current = false;

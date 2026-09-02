@@ -3518,16 +3518,19 @@ It is not a normal customer-facing action.
 
 ## Reset Scope
 
-Reset removes runtime/demo records from:
+Reset removes runtime/demo records from exactly these ten tables, and no
+others. This is the SCOPE; the required deletion ORDER is in "Reset Order"
+below, and the two are listed in the same sequence so they cannot be read as
+disagreeing:
 
 ```text
+fulfilments
 regression_runs
+event_processing_attempts
 findings
 invariant_results
-event_processing_attempts
 chaos_runs
 webhook_events
-fulfilments
 payments
 payment_attempts
 orders
@@ -3537,22 +3540,47 @@ orders
 
 ## Reset Order
 
-Because normal FKs should protect historical evidence, reset should delete records in dependency order inside one controlled transaction:
+Every foreign key among the ten runtime tables is `ON DELETE RESTRICT`, so
+deletion order is a correctness property, not a preference. Records are
+deleted child-before-parent inside ONE transaction:
 
 ```text
-1. regression_runs
-2. findings
-3. invariant_results
-4. event_processing_attempts
-5. chaos_runs
-6. webhook_events
-7. fulfilments
+1. fulfilments
+2. regression_runs
+3. event_processing_attempts
+4. findings
+5. invariant_results
+6. chaos_runs
+7. webhook_events
 8. payments
 9. payment_attempts
 10. orders
 ```
 
-The exact implementation may use a safe equivalent database operation.
+CORRECTED (Phase 5). The order previously documented here placed
+`event_processing_attempts` fourth and `fulfilments` seventh. That is not
+dependency-safe: `fulfilments.trigger_processing_attempt_id` references
+`event_processing_attempts (id) ON DELETE RESTRICT` (added by the Phase 2F
+migration), so any fulfilment produced by a webhook pins its processing
+attempt. A production reset failed on exactly this constraint.
+
+`fulfilments` must therefore be deleted FIRST: it is the only runtime table
+that references orders, payments AND event_processing_attempts.
+
+## Reset Atomicity
+
+The reset is performed by a single database function,
+`public.reset_paychaos_demo_runtime()`, which executes all ten deletes inside
+one transaction.
+
+**If the reset fails, zero reset-table mutations commit.** There is no partial
+reset state, and no interface may describe one. The previous implementation
+issued ten independent DELETE requests from application code; when one failed,
+the earlier ones had already committed and left the database inconsistent.
+
+The function takes no arguments, uses no dynamic SQL, and never uses `CASCADE`
+or `TRUNCATE`. `EXECUTE` is revoked from `PUBLIC`, `anon` and `authenticated`,
+and granted only to `service_role`.
 
 ---
 

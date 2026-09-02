@@ -19,9 +19,13 @@
  * additionally refuses cross-origin callers. Both matter: the dialog stops an
  * accident, the gate stops an outsider.
  *
- * FAILURE IS REPORTED AS FAILURE. A partial reset returns 500 with the stable
- * table name that failed and the tables already cleared, never a cheerful
- * success. No raw database message is ever forwarded.
+ * FAILURE IS REPORTED AS FAILURE — AND FAILURE NOW MEANS "NOTHING HAPPENED".
+ * The reset runs as one PostgreSQL transaction, so it either fully applied or
+ * did not apply at all. This route therefore reports `resetApplied: false` and
+ * says so plainly, rather than naming a table it stopped at and listing what
+ * was already cleared: that vocabulary described a partial reset, which is a
+ * state the implementation can no longer produce. No raw database message is
+ * ever forwarded.
  */
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
@@ -80,15 +84,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     if (!result.ok) {
       logEvent("demo_reset_request", {
-        outcome: "PARTIAL",
-        failed_table: result.failedTable ?? "UNKNOWN",
-        cleared_count: result.clearedTables.length,
+        outcome: "FAILED_ROLLED_BACK",
+        reset_applied: false,
       });
       return NextResponse.json(
         {
-          error: "The demo reset did not complete.",
-          failedTable: result.failedTable,
-          clearedTables: result.clearedTables,
+          error: "The demo reset failed and no reset was applied.",
+          resetApplied: false,
         },
         { status: 500 },
       );
@@ -96,16 +98,19 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     logEvent("demo_reset_request", {
       outcome: "COMPLETED",
-      cleared_count: result.clearedTables.length,
+      reset_applied: true,
     });
     return NextResponse.json(
-      { ok: true, clearedTables: result.clearedTables },
+      { ok: true, resetApplied: true, deletedCounts: result.deletedCounts },
       { status: 200 },
     );
   } catch {
     logEvent("demo_reset_request", { outcome: "FAILED" });
     return NextResponse.json(
-      { error: "The demo reset could not be performed." },
+      {
+        error: "The demo reset could not be performed.",
+        resetApplied: false,
+      },
       { status: 500 },
     );
   }
