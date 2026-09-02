@@ -1589,6 +1589,7 @@ describe("Phase 3E-A migration — event_processing_attempts evidence snapshots"
       "20260904000000_phase4e_regression_runs.sql",
       // Phase 5 Demo Reset fix — additive, and still an exact-name list.
       "20260905000000_phase5_demo_reset_atomic.sql",
+      "20260906000000_phase5_demo_reset_safeupdate.sql",
     ]);
     expect(phase3eMigration!.name).toMatch(
       /^\d{14}_phase3e_evidence_snapshots\.sql$/,
@@ -1791,25 +1792,28 @@ describe("Phase 3F-A migration — invariant_results (the first Money Invariant 
       .join("\n");
   }
 
-  it("1: exists, is the expected filename and sorts exactly three places before the last migration (Phase 3G, Phase 4E, then the Phase 5 reset function follow it)", () => {
+  it("1: exists, is the expected filename and sorts exactly four places before the last migration (Phase 3G, Phase 4E, then the two Phase 5 reset-function migrations follow it)", () => {
     expect(phase3fMigration).toBeDefined();
     expect(phase3fMigration!.name).toBe(
       "20260902000000_phase3f_invariant_results.sql",
     );
-    // Advanced, not loosened, twice: Phase 4E shifted these once, and the
-    // Phase 5 Demo Reset function shifts them again. Every position is still
-    // an exact-name assertion — only the offsets moved, by exactly the number
-    // of legitimately added migrations.
+    // Advanced, not loosened, three times: Phase 4E shifted these once, the
+    // atomic Demo Reset function again, and the safeupdate replacement once
+    // more. Every position is still an exact-name assertion — only the
+    // offsets moved, by exactly the number of legitimately added migrations.
     expect(migrations[migrations.length - 1]!.name).toBe(
-      "20260905000000_phase5_demo_reset_atomic.sql",
+      "20260906000000_phase5_demo_reset_safeupdate.sql",
     );
     expect(migrations[migrations.length - 2]!.name).toBe(
-      "20260904000000_phase4e_regression_runs.sql",
+      "20260905000000_phase5_demo_reset_atomic.sql",
     );
     expect(migrations[migrations.length - 3]!.name).toBe(
-      "20260903000000_phase3g_findings.sql",
+      "20260904000000_phase4e_regression_runs.sql",
     );
     expect(migrations[migrations.length - 4]!.name).toBe(
+      "20260903000000_phase3g_findings.sql",
+    );
+    expect(migrations[migrations.length - 5]!.name).toBe(
       phase3fMigration!.name,
     );
   });

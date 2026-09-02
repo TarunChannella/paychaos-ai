@@ -39,13 +39,19 @@ describe("Phase 4E-R1 migration — file", () => {
     // additive migration (a narrow reset function; no table change). The
     // protection is unchanged: THIS phase still contributes no migration of
     // its own, and the earlier migrations stay exactly where they were.
-    expect(migrationFiles).toHaveLength(14);
+    // Advanced again for the safeupdate fix, which legitimately adds one
+    // additive migration (CREATE OR REPLACE of the reset function; no table
+    // change). THIS phase still contributes no migration of its own.
+    expect(migrationFiles).toHaveLength(15);
     expect(migrationFiles.at(-1)).toBe(
+      "20260906000000_phase5_demo_reset_safeupdate.sql",
+    );
+    expect(migrationFiles.at(-2)).toBe(
       "20260905000000_phase5_demo_reset_atomic.sql",
     );
-    expect(migrationFiles.at(-2)).toBe(MIGRATION_NAME);
+    expect(migrationFiles.at(-3)).toBe(MIGRATION_NAME);
     // The Phase 3G findings migration remains its immediate predecessor.
-    expect(migrationFiles.at(-3)).toBe("20260903000000_phase3g_findings.sql");
+    expect(migrationFiles.at(-4)).toBe("20260903000000_phase3g_findings.sql");
   });
 
   it("3: exactly one table is created, and it is regression_runs", () => {

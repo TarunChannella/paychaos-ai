@@ -146,9 +146,17 @@ describe("demo reset — the deletion order obeys the real schema", () => {
 });
 
 describe("demo reset — the migration is narrow and safe", () => {
-  const resetMigration = migrationSql().find((m) =>
-    m.sql.includes(`function public.${DEMO_RESET_RPC}`),
-  );
+  /**
+   * The migration that currently DEFINES the deployed behaviour.
+   *
+   * The function is defined once and then replaced by a later migration, so
+   * the assertions below must read the LAST definition. Reading the first
+   * would test a version of the function that production no longer runs —
+   * which is how a fix can appear verified while the live code is stale.
+   */
+  const resetMigration = migrationSql()
+    .filter((m) => m.sql.includes(`function public.${DEMO_RESET_RPC}`))
+    .at(-1);
 
   /**
    * The EXECUTABLE body of the function, between the dollar quotes.
@@ -176,19 +184,33 @@ describe("demo reset — the migration is narrow and safe", () => {
     ].map((m) => m[1] as string);
   }
 
-  it("6: exactly one migration defines the reset function", () => {
+  it("6: the function is CREATEd exactly once and only ever replaced", () => {
     expect(resetMigration, "reset migration must exist").toBeDefined();
 
-    const defining = migrationSql().filter((m) =>
+    // A second bare `create function` would fail against a database that
+    // already has it; a later change must be `create or replace`.
+    const created = migrationSql().filter((m) =>
       m.sql.includes(`create function public.${DEMO_RESET_RPC}`),
     );
-    expect(defining).toHaveLength(1);
+    expect(created).toHaveLength(1);
+
+    // And the definition in force is the newest one.
+    expect(resetMigration?.sql).toContain(
+      `create or replace function public.${DEMO_RESET_RPC}()`,
+    );
   });
 
   it("7: the function takes zero arguments", () => {
     expect(resetMigration?.sql).toContain(
-      `create function public.${DEMO_RESET_RPC}()`,
+      `function public.${DEMO_RESET_RPC}()`,
     );
+    // Nothing a caller supplies can reach it: every mention of the function
+    // in the migration is the zero-argument form.
+    const mentions =
+      resetMigration?.sql.split(`public.${DEMO_RESET_RPC}`) ?? [];
+    for (const tail of mentions.slice(1)) {
+      expect(tail.startsWith("()"), tail.slice(0, 40)).toBe(true);
+    }
   });
 
   it("8: it deletes only the ten approved runtime tables", () => {
@@ -202,6 +224,67 @@ describe("demo reset — the migration is narrow and safe", () => {
     // The constant is documentation; the function is what runs. If they ever
     // disagree the documentation is lying, so they are pinned together.
     expect(deletedTables()).toEqual([...DEMO_RESET_TABLES]);
+  });
+
+  it("9b: SAFEUPDATE — every DELETE carries a WHERE clause", () => {
+    // THE GUARD THAT WOULD HAVE CAUGHT THE PRODUCTION BUG.
+    //
+    // Supabase's `safeupdate` refuses an unqualified DELETE in the API role
+    // context, so `delete from public.fulfilments;` fails with SQLSTATE
+    // 21000 ("DELETE requires a WHERE clause") through PostgREST while
+    // succeeding in the SQL editor. The function was therefore correct about
+    // order and atomicity and still could not run from the application.
+    //
+    // Reading statement-by-statement, rather than checking the body for the
+    // word "where", is what makes this catch a SINGLE regressed statement
+    // among ten correct ones.
+    // Each DELETE is read from its own keyword up to its terminating
+    // semicolon, so a single regressed statement among ten correct ones is
+    // still caught.
+    const statements = functionBody().match(/delete from public\.[^;]*/g) ?? [];
+
+    expect(statements).toHaveLength(10);
+
+    for (const statement of statements) {
+      expect(statement, `unqualified DELETE: "${statement}"`).toContain(
+        "where",
+      );
+    }
+  });
+
+  it("9c: SAFEUPDATE — every DELETE is qualified by a non-null key", () => {
+    // `where id is not null` is always true for an existing row because `id`
+    // is each table's primary key, so the sweep is still whole-table. It is
+    // preferred over `where true` because its always-true-ness comes from a
+    // schema guarantee rather than from a literal.
+    const body = functionBody();
+
+    for (const table of DEMO_RESET_TABLES) {
+      expect(body, table).toContain(
+        `delete from public.${table} where id is not null`,
+      );
+    }
+  });
+
+  it("9d: SAFEUPDATE — the guard is never disabled to get around this", () => {
+    // Switching the protection off for the duration of the function would
+    // remove it from every other statement in that session, to dodge a rule
+    // this function should simply satisfy.
+    //
+    // Asserted against the EXECUTABLE BODY, not the whole file: the
+    // migration's own comment legitimately names safeupdate to explain what
+    // the predicates are for, and banning the word from documentation would
+    // only teach the next author to explain the hazard less clearly.
+    const body = functionBody();
+
+    for (const banned of [
+      "safeupdate",
+      "session_replication_role",
+      "set local",
+      "reset all",
+    ]) {
+      expect(body, banned).not.toContain(banned);
+    }
   });
 
   it("10: no dynamic SQL — nothing to inject into", () => {

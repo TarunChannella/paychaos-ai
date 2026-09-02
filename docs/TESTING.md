@@ -1879,6 +1879,12 @@ CORRECTED (Phase 5): `fulfilments` is deleted FIRST, because
 `event_processing_attempts` `ON DELETE RESTRICT`. The previously documented
 order deleted `event_processing_attempts` first and failed in production.
 
+Every delete is qualified as `where id is not null`. Supabase `safeupdate`
+refuses an unqualified `DELETE` in the API role context (SQLSTATE `21000`),
+which is why an unqualified form can pass in the SQL editor and still fail
+from the application. A static test fails if any of the ten deletes loses its
+`WHERE`; safeupdate itself stays enabled.
+
 The reset runs as ONE transaction inside
 `public.reset_paychaos_demo_runtime()`. **If it fails, zero reset-table
 mutations commit** — a partial reset is not a reachable state, and tests must

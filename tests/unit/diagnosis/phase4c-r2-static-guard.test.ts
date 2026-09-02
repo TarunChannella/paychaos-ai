@@ -375,14 +375,20 @@ describe("Phase 4C-R2 — schema and surface boundaries", () => {
     // additive migration (a narrow reset function; no table change). The
     // protection is unchanged: THIS phase still contributes no migration of
     // its own, and the earlier migrations stay exactly where they were.
-    expect(migrations).toHaveLength(14);
+    // Advanced again for the safeupdate fix, which legitimately adds one
+    // additive migration (CREATE OR REPLACE of the reset function; no table
+    // change). THIS phase still contributes no migration of its own.
+    expect(migrations).toHaveLength(15);
     expect(migrations.at(-1)).toBe(
-      "20260905000000_phase5_demo_reset_atomic.sql",
+      "20260906000000_phase5_demo_reset_safeupdate.sql",
     );
     expect(migrations.at(-2)).toBe(
+      "20260905000000_phase5_demo_reset_atomic.sql",
+    );
+    expect(migrations.at(-3)).toBe(
       "20260904000000_phase4e_regression_runs.sql",
     );
-    expect(migrations.at(-3)).toBe("20260903000000_phase3g_findings.sql");
+    expect(migrations.at(-4)).toBe("20260903000000_phase3g_findings.sql");
   });
 
   it("23: lib/diagnosis contains only the approved Phase 4A/4B/4C modules", () => {

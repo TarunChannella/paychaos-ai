@@ -3567,6 +3567,32 @@ attempt. A production reset failed on exactly this constraint.
 `fulfilments` must therefore be deleted FIRST: it is the only runtime table
 that references orders, payments AND event_processing_attempts.
 
+## Reset and Supabase safeupdate
+
+Supabase enables `safeupdate`, which refuses any `DELETE` or `UPDATE` that
+carries no `WHERE` clause when executed in the API role's context. That
+protection remains ENABLED. It is not disabled globally, per role, per
+database, or temporarily inside the reset function.
+
+The reset therefore qualifies every statement explicitly:
+
+```sql
+delete from public.<table> where id is not null;
+```
+
+Each of the ten runtime tables declares `id uuid primary key`, and PRIMARY KEY
+implies NOT NULL, so the predicate is true for every row that exists: the
+statement still clears the whole table while satisfying the guard.
+
+`where id is not null` is preferred over `where true` because its
+always-true-ness comes from a schema guarantee rather than from a literal, and
+it states which key the sweep is over.
+
+CONFIRMED IN PRODUCTION (Phase 5). Unqualified statements failed through the
+application with SQLSTATE `21000`, "DELETE requires a WHERE clause", while
+succeeding in the SQL editor — the editor does not run in the API role's
+context. A static test now fails if any of the ten deletes loses its `WHERE`.
+
 ## Reset Atomicity
 
 The reset is performed by a single database function,

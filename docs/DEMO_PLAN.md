@@ -2330,6 +2330,9 @@ payment_attempts
 orders
 ```
 
+Every delete is explicitly qualified so it satisfies Supabase `safeupdate`,
+which stays enabled.
+
 The reset is atomic: all ten deletes run in one transaction, so it either
 fully applies or does not apply at all. If it fails, the database is unchanged
 and the UI says so — it never reports that some tables were cleared.
