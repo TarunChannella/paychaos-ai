@@ -268,7 +268,7 @@ lint:                          0 errors / 1 pre-existing unrelated warning
 build:                         PASS (after one documented .next EPERM retry)
 Prettier (changed paths):      PASS
 git diff --check:              PASS
-final full Playwright:         see FINAL PLAYWRIGHT below
+final full Playwright:         37 passed / 0 failed / 0 skipped / PASS
 ```
 
 The full 3995-test unit suite and the 523-test real-Supabase suite were NOT
@@ -347,8 +347,8 @@ The developer should verify in a browser:
 
 ```text
 branch:        phase-5-finalization
-HEAD:          (this correction commit)
-parent:        f51004976eae5adeb3ac747f70c59ed1aee9bf6f
+correction:    776e995ed91e4e5296e0a3eea59981001602ff0d
+implementation: f51004976eae5adeb3ac747f70c59ed1aee9bf6f
 phase base:    441cbc003728dfa7c15b78854327fd1599d49c16 (Phase 4G)
 working tree:  clean
 push state:    NOT PUSHED
