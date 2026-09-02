@@ -114,14 +114,49 @@ export interface DemoResetResult {
    * it must never appear in an HTTP response body.
    */
   readonly failureReason: DemoResetFailureReason | null;
+  /**
+   * SERVER-SIDE DIAGNOSTIC ONLY. The provider's own stable error code, e.g.
+   * "PGRST301" or "57014" — verbatim, because that identifier is exactly
+   * what makes an unrecognised failure searchable.
+   *
+   * Deliberately ONLY `error.code`. `message`, `details` and `hint` are
+   * discarded at this boundary: they are prose written by the database and
+   * routinely quote table names, column names, constraint names and even
+   * row values. A code is an identifier; the rest is content.
+   *
+   * Like `failureReason`, this must never appear in an HTTP response body —
+   * it describes deployment state to anyone who can reach the endpoint.
+   */
+  readonly providerErrorCode: string | null;
 }
 
-function failed(reason: DemoResetFailureReason): DemoResetResult {
+/**
+ * Accepts a provider error code only if it is plausibly an identifier.
+ *
+ * Defensive because the value crosses a trust boundary into a log line: a
+ * non-string, or something long enough to be a message rather than a code,
+ * is dropped entirely rather than truncated into something misleading.
+ */
+const MAX_PROVIDER_CODE_LENGTH = 32;
+
+function safeProviderCode(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+  if (trimmed.length > MAX_PROVIDER_CODE_LENGTH) return null;
+  return trimmed;
+}
+
+function failed(
+  reason: DemoResetFailureReason,
+  providerErrorCode: string | null = null,
+): DemoResetResult {
   return {
     ok: false,
     resetApplied: false,
     deletedCounts: null,
     failureReason: reason,
+    providerErrorCode,
   };
 }
 
@@ -179,7 +214,14 @@ export async function runDemoReset(): Promise<DemoResetResult> {
   // The raw database message is never forwarded — it can carry table,
   // constraint and column detail that does not belong in an HTTP response.
   // Only our own classification of its stable code survives this boundary.
-  if (error !== null) return failed(classify(error));
+  if (error !== null) {
+    // Only the code survives this boundary. `error.message`, `error.details`
+    // and `error.hint` are never read, so they cannot reach a log line.
+    return failed(
+      classify(error),
+      safeProviderCode((error as { code?: unknown }).code),
+    );
+  }
 
   // SUCCESS IS DECIDED BY THE ABSENCE OF AN ERROR, AND BY NOTHING ELSE.
   // In particular an unreadable or unexpected count payload must never be
@@ -192,5 +234,6 @@ export async function runDemoReset(): Promise<DemoResetResult> {
     resetApplied: true,
     deletedCounts: readCounts(data),
     failureReason: null,
+    providerErrorCode: null,
   };
 }

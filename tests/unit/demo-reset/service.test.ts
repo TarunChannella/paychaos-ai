@@ -27,7 +27,12 @@ interface Call {
 }
 
 const calls: Call[] = [];
-let rpcError: { message: string; code?: string } | null = null;
+let rpcError: {
+  message: string;
+  code?: string;
+  details?: string;
+  hint?: string;
+} | null = null;
 let rpcData: unknown = {
   fulfilments: 1,
   regression_runs: 2,
@@ -240,24 +245,119 @@ describe("demo reset — failure means nothing was applied", () => {
   });
 
   it("9e: the classified reason still leaks no database wording", async () => {
+    // ADVANCED, NOT LOOSENED. This previously also banned the code "23503"
+    // from the result, which was correct while the code was discarded
+    // entirely. It is now retained ON PURPOSE as a server-side diagnostic —
+    // an identifier, not prose — so banning it here would pin the very
+    // behaviour this change exists to add. The property that still matters,
+    // and is asserted below, is that NO database PROSE survives; that the
+    // code never reaches the browser is the route's boundary, pinned
+    // separately in the route test.
     rpcError = {
       code: "23503",
       message:
         'update or delete on table "event_processing_attempts" violates ' +
         'foreign key constraint "fulfilments_trigger_processing_attempt_id_fkey"',
+      details: 'Key (id)=(9eb88ed6) is still referenced from "fulfilments"',
+      hint: "Delete the referencing rows first",
     };
 
-    const serialized = JSON.stringify(await runDemoReset());
+    const result = await runDemoReset();
+    const serialized = JSON.stringify(result);
+
     for (const leak of [
       "violates",
       "foreign key",
+      "constraint",
       "fulfilments_trigger",
       "event_processing_attempts",
-      "23503",
+      "Key (id)",
+      "referenced from",
+      "Delete the referencing",
     ]) {
       expect(serialized, leak).not.toContain(leak);
     }
+
+    // The code is the ONLY database-derived value that survives, and it is
+    // confined to its own dedicated field rather than smuggled elsewhere.
+    expect(result.providerErrorCode).toBe("23503");
+    expect(result.failureReason).toBe("RESET_CONSTRAINT_VIOLATION");
+    expect(result.deletedCounts).toBeNull();
     rpcError = null;
+  });
+
+  it("9f: the provider's own error code is captured for the server log", async () => {
+    // The production failure classified as RESET_FAILED, meaning the code was
+    // none we recognise. Capturing the raw identifier is the only way to
+    // learn what it actually was without shipping another guess.
+    rpcError = { message: "statement timeout", code: "57014" };
+
+    const result = await runDemoReset();
+
+    expect(result.failureReason).toBe("RESET_FAILED");
+    expect(result.providerErrorCode).toBe("57014");
+    rpcError = null;
+  });
+
+  it("9g: message, details and hint are all discarded", async () => {
+    // A code is an identifier. `message`, `details` and `hint` are prose
+    // written by the database, and routinely quote table, column and
+    // constraint names — content that must not reach a log line.
+    rpcError = {
+      code: "57014",
+      message: 'canceling statement due to statement timeout on "orders"',
+      details: 'Key (id)=(9eb88ed6) is still referenced from "fulfilments"',
+      hint: "Increase statement_timeout or delete the referencing rows first",
+    };
+
+    const serialized = JSON.stringify(await runDemoReset());
+
+    for (const leak of [
+      "canceling statement",
+      "statement timeout",
+      "Key (id)",
+      "fulfilments",
+      "orders",
+      "Increase statement_timeout",
+      "referencing rows",
+    ]) {
+      expect(serialized, leak).not.toContain(leak);
+    }
+    // Exactly one thing survived: the code.
+    expect(serialized).toContain("57014");
+    rpcError = null;
+  });
+
+  it("9h: an implausible provider code is dropped, not truncated", async () => {
+    // Anything long enough to be a message is not an identifier. Truncating
+    // it would smuggle a prefix of database prose into the log under a field
+    // name that promises a code.
+    const longMessage = "x".repeat(33);
+    for (const code of [longMessage, "", "   ", undefined]) {
+      rpcError = { message: "boom", ...(code === undefined ? {} : { code }) };
+      const result = await runDemoReset();
+      expect(result.providerErrorCode, String(code)).toBeNull();
+      expect(result.failureReason).toBe("RESET_FAILED");
+    }
+    rpcError = null;
+  });
+
+  it("9i: a recognised code keeps BOTH its classification and its raw code", async () => {
+    rpcError = { message: "could not find the function", code: "PGRST202" };
+
+    const result = await runDemoReset();
+
+    expect(result.failureReason).toBe("RESET_FUNCTION_UNAVAILABLE");
+    expect(result.providerErrorCode).toBe("PGRST202");
+    rpcError = null;
+  });
+
+  it("9j: the success path carries no provider code", async () => {
+    const result = await runDemoReset();
+
+    expect(result.ok).toBe(true);
+    expect(result.providerErrorCode).toBeNull();
+    expect(result.failureReason).toBeNull();
   });
 
   it("10: a malformed count payload never fabricates numbers", async () => {

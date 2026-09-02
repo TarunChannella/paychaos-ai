@@ -92,6 +92,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         outcome: "FAILED_ROLLED_BACK",
         reset_applied: false,
         failure_reason: result.failureReason ?? "RESET_FAILED",
+        // The provider's stable code, and nothing else from the error. It is
+        // logged even when the reason is RESET_FAILED — especially then,
+        // because that is precisely the case our own classification could
+        // not name, and the raw identifier is the only way to name it.
+        provider_error_code: result.providerErrorCode ?? "UNKNOWN",
       });
       return NextResponse.json(
         {

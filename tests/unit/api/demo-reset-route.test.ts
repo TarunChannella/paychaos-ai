@@ -71,6 +71,8 @@ beforeEach(() => {
     ok: true,
     resetApplied: true,
     deletedCounts: DELETED_COUNTS,
+    failureReason: null,
+    providerErrorCode: null,
   });
 });
 
@@ -205,6 +207,7 @@ describe("POST /api/demo/reset — failure is never reported as success", () => 
       resetApplied: false,
       deletedCounts: null,
       failureReason: "RESET_FUNCTION_UNAVAILABLE",
+      providerErrorCode: "PGRST202",
     });
 
     const body = await (await callPost()).json();
@@ -216,6 +219,34 @@ describe("POST /api/demo/reset — failure is never reported as success", () => 
       "PGRST202",
       "schema cache",
     ]) {
+      expect(serialized, leak).not.toContain(leak);
+    }
+    expect(body.resetApplied).toBe(false);
+  });
+
+  it("11c: the provider error code is logged but never sent to the browser", async () => {
+    // The code exists so an UNRECOGNISED failure is searchable in the Vercel
+    // log. Returning it would describe deployment state to anyone who can
+    // reach the endpoint, and tells an operator nothing they can act on.
+    runDemoResetMock.mockResolvedValue({
+      ok: false,
+      resetApplied: false,
+      deletedCounts: null,
+      failureReason: "RESET_FAILED",
+      providerErrorCode: "57014",
+    });
+
+    const body = await (await callPost()).json();
+
+    // Present in the server log...
+    const logged = JSON.stringify(logEventMock.mock.calls);
+    expect(logged).toContain("provider_error_code");
+    expect(logged).toContain("57014");
+    expect(logged).toContain("RESET_FAILED");
+
+    // ...and absent from what the browser receives.
+    const serialized = JSON.stringify(body);
+    for (const leak of ["57014", "providerErrorCode", "provider_error_code"]) {
       expect(serialized, leak).not.toContain(leak);
     }
     expect(body.resetApplied).toBe(false);
