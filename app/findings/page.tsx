@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { FindingCorrelation } from "@/components/findings/finding-correlation";
 import { Card, PageShell, PageHeader } from "@/components/ui/page";
 import { LifecycleBadge, SeverityBadge } from "@/components/ui/status";
 import { listFindings } from "@/lib/findings/list-read";
@@ -92,72 +93,85 @@ export default async function FindingsPage() {
           </Link>
         </Card>
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-border">
-          <table className="w-full min-w-[52rem] border-collapse text-sm">
-            <thead>
-              <tr className="border-b border-border bg-muted/40 text-left">
-                {[
-                  "Severity",
-                  "Finding",
-                  "Scenario",
-                  "Invariant",
-                  "Status",
-                  "Regression",
-                ].map((heading) => (
-                  <th
-                    key={heading}
-                    scope="col"
-                    className="px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground"
-                  >
-                    {heading}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr
-                  key={row.findingId}
-                  className="border-b border-border align-top last:border-0 hover:bg-accent/30"
-                  data-testid={`finding-row-${row.findingId}`}
-                >
-                  <td className="px-4 py-3">
-                    <SeverityBadge severity={row.severity} />
-                  </td>
-                  <td className="px-4 py-3">
-                    <Link
-                      href={`/chaos/findings/invariant-results/${row.invariantResultId}`}
-                      className="text-sm font-medium text-card-foreground underline-offset-4 hover:underline"
+        <>
+          {/* 4H-2: exact-match correlation over the rows already loaded
+              above. No extra query, no new API. */}
+          <FindingCorrelation
+            findings={rows.map((row) => ({
+              findingId: row.findingId,
+              diagnosisCode: row.diagnosisCode,
+              invariantId: row.invariantId,
+              scenarioId: row.scenarioId,
+            }))}
+          />
+
+          <div className="overflow-x-auto rounded-lg border border-border">
+            <table className="w-full min-w-[52rem] border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-border bg-muted/40 text-left">
+                  {[
+                    "Severity",
+                    "Finding",
+                    "Scenario",
+                    "Invariant",
+                    "Status",
+                    "Regression",
+                  ].map((heading) => (
+                    <th
+                      key={heading}
+                      scope="col"
+                      className="px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground"
                     >
-                      {row.title}
-                    </Link>
-                    <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">
-                      Detected {row.detectedAt}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
-                    {row.scenarioId ?? "—"}
-                  </td>
-                  <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
-                    {row.invariantId}
-                  </td>
-                  <td className="px-4 py-3">
-                    <LifecycleBadge status={row.status} />
-                  </td>
-                  <td className="px-4 py-3">
-                    {row.regressionStatus === null ? (
-                      <span className="text-xs text-muted-foreground">
-                        Not re-tested
-                      </span>
-                    ) : (
-                      <LifecycleBadge status={row.regressionStatus} />
-                    )}
-                  </td>
+                      {heading}
+                    </th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr
+                    key={row.findingId}
+                    className="border-b border-border align-top last:border-0 hover:bg-accent/30"
+                    data-testid={`finding-row-${row.findingId}`}
+                  >
+                    <td className="px-4 py-3">
+                      <SeverityBadge severity={row.severity} />
+                    </td>
+                    <td className="px-4 py-3">
+                      <Link
+                        href={`/chaos/findings/invariant-results/${row.invariantResultId}`}
+                        className="text-sm font-medium text-card-foreground underline-offset-4 hover:underline"
+                      >
+                        {row.title}
+                      </Link>
+                      <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">
+                        Detected {row.detectedAt}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
+                      {row.scenarioId ?? "—"}
+                    </td>
+                    <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
+                      {row.invariantId}
+                    </td>
+                    <td className="px-4 py-3">
+                      <LifecycleBadge status={row.status} />
+                    </td>
+                    <td className="px-4 py-3">
+                      {row.regressionStatus === null ? (
+                        <span className="text-xs text-muted-foreground">
+                          Not re-tested
+                        </span>
+                      ) : (
+                        <LifecycleBadge status={row.regressionStatus} />
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </PageShell>
   );

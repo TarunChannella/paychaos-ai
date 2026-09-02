@@ -16,6 +16,10 @@ import type {
  * An operator asking the obvious question — "what is currently wrong with my
  * integration?" — had nowhere to look. This answers exactly that.
  *
+ * IT PROJECTS `diagnosis_code` ONLY. Phase 4H's correlation groups findings
+ * by exact root-cause equality, which needs the code and nothing else — no
+ * summary, no strength, no recommendation prose reaches this list.
+ *
  * EVERY COLUMN IS PERSISTED. Severity and invariant come from the immutable
  * invariant result the finding reports; the scenario comes from its chaos
  * run; the regression column is the newest persisted regression's status.
@@ -48,6 +52,8 @@ export interface FindingListRow {
   readonly detectedAt: string;
   /** `null` means no regression has ever been started for this finding. */
   readonly regressionStatus: RegressionRunStatus | null;
+  /** `null` means NOT DIAGNOSED — never "no root cause exists". */
+  readonly diagnosisCode: string | null;
 }
 
 /** CRITICAL first — the order an operator needs, not alphabetical. */
@@ -64,6 +70,8 @@ interface FindingRow {
   readonly title: string;
   readonly status: FindingStatus;
   readonly created_at: string;
+  /** Phase 4C writes this; NULL until a finding has been diagnosed. */
+  readonly diagnosis_code: string | null;
 }
 
 interface InvariantRow {
@@ -94,7 +102,9 @@ export async function listFindings(): Promise<readonly FindingListRow[]> {
 
   const { data: findingData, error: findingError } = await client
     .from("findings")
-    .select("id, invariant_result_id, title, status, created_at");
+    .select(
+      "id, invariant_result_id, title, status, created_at, diagnosis_code",
+    );
 
   if (findingError !== null) throw new FindingListReadError();
 
@@ -175,6 +185,7 @@ export async function listFindings(): Promise<readonly FindingListRow[]> {
         scenarioId: run?.scenario_id ?? null,
         detectedAt: finding.created_at,
         regressionStatus: latestRegression.get(finding.id)?.status ?? null,
+        diagnosisCode: finding.diagnosis_code,
       };
     })
     .sort((a, b) => {

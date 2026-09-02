@@ -63,6 +63,7 @@ describe("Phase 4B-R1 signal module — static guard", () => {
       "diagnostic-signals.ts",
       "evidence-pack-service.ts",
       "evidence-pack.ts",
+      "explanation-templates.ts",
       "recommendation-repository.ts",
       "recommendation-service.ts",
       "recommendations.ts",
@@ -288,6 +289,7 @@ describe("Phase 4B-R1 signal module — static guard", () => {
     // legitimate surface. The list stays EXACT, so an unapproved surface
     // still fails here rather than slipping in.
     expect(normalised).toEqual([
+      "/app/api/findings/[findingId]/diagnose/route.ts",
       "/app/api/readiness/route.ts",
       "/app/api/reliability/route.ts",
       "/app/reliability/page.tsx",

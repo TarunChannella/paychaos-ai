@@ -73,6 +73,7 @@ describe("Phase 4A-R1 evidence pack — static guard", () => {
       "diagnostic-signals.ts",
       "evidence-pack-service.ts",
       "evidence-pack.ts",
+      "explanation-templates.ts",
       "recommendation-repository.ts",
       "recommendation-service.ts",
       "recommendations.ts",

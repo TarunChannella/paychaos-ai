@@ -1,3 +1,4 @@
+import { DiagnoseAction } from "@/components/findings/diagnose-action";
 import { RegressionAction } from "@/components/findings/regression-action";
 import { Card, FieldLabel, Identifier, Section } from "@/components/ui/page";
 import {
@@ -6,6 +7,12 @@ import {
   VerdictBadge,
 } from "@/components/ui/status";
 
+import {
+  buildExplanation,
+  buildRegressionGuidance,
+} from "@/lib/diagnosis/explanation-templates";
+
+import type { EvidenceStrength } from "@/lib/diagnosis/explanation-templates";
 import type {
   FindingCasefile,
   RegressionComparison,
@@ -20,11 +27,16 @@ import type {
  * 4D and 4E. No classification, no recommendation lookup, no regression
  * evaluation, no scoring.
  *
- * NO AI CLAIM. Phase 4H has not been implemented. The current classifier is
- * deterministic expert logic, so the heading is "Evidence-Based Diagnosis"
- * and the authority line says diagnosis explains evidence — it does not claim
- * a model produced it. Calling this "AI Diagnosis" today would be a false
- * statement about the implementation.
+ * THE AUTHORITY BOUNDARY IS PERMANENT. The approved statement is that payment
+ * truth and invariant results are DETERMINISTIC and that the intelligence
+ * layer only EXPLAINS verified evidence — it never determines payment state.
+ * That is a statement about authority, not about implementation: it holds
+ * whether the explanation comes from today's deterministic rules or from a
+ * later model.
+ *
+ * NO FALSE MODEL CLAIM. Phase 4H ships no runtime LLM, so the heading stays
+ * "Evidence-Based Diagnosis" and no surface labels the current rules "AI
+ * Diagnosis", "AI Reasoning", "Agent Reasoning" or "AI Root Cause".
  *
  * ABSENCE IS RENDERED AS ABSENCE. An undiagnosed finding reads "Not yet
  * diagnosed", never an empty root-cause card and never a reassuring phrase.
@@ -54,9 +66,13 @@ function ResultRow({ row }: { readonly row: RegressionComparisonRow }) {
 export function FindingCasefilePanel({
   casefile,
   comparison,
+  invariantId,
+  scenarioId,
 }: {
   readonly casefile: FindingCasefile;
   readonly comparison: RegressionComparison | null;
+  readonly invariantId: string;
+  readonly scenarioId: string | null;
 }) {
   // ACTIVE means the persisted lifecycle is still open. Only PENDING and
   // RUNNING are active (Phase 4E `ACTIVE_REGRESSION_STATUSES`); a terminal
@@ -106,15 +122,66 @@ export function FindingCasefilePanel({
               >
                 {casefile.diagnosis.summary}
               </p>
+
+              {/* 4H-1: deterministic explanation, composed only from the
+                  persisted code, strength and invariant. */}
+              {(() => {
+                const explanation = buildExplanation({
+                  diagnosisCode: casefile.diagnosis.code,
+                  strength: casefile.diagnosis.strength as EvidenceStrength,
+                  diagnosisSummary: casefile.diagnosis.summary,
+                  invariantId,
+                  scenarioId,
+                  recommendationCode: casefile.recommendation?.code ?? null,
+                });
+                return (
+                  <dl
+                    className="flex flex-col gap-2.5 border-t border-border pt-3"
+                    data-testid="finding-explanation"
+                  >
+                    <div>
+                      <dt className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                        What this means
+                      </dt>
+                      <dd className="mt-0.5 text-sm leading-6 text-card-foreground">
+                        {explanation.impactStatement}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                        Evidence strength
+                      </dt>
+                      <dd className="mt-0.5 text-sm leading-6 text-muted-foreground">
+                        {explanation.confidenceStatement}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                        Limitations
+                      </dt>
+                      <dd className="mt-0.5 text-sm leading-6 text-muted-foreground">
+                        {explanation.limitationStatement}
+                      </dd>
+                    </div>
+                  </dl>
+                );
+              })()}
             </div>
           )}
+
+          <div className="mt-4 border-t border-border pt-3">
+            <DiagnoseAction
+              findingId={casefile.findingId}
+              alreadyDiagnosed={casefile.diagnosis !== null}
+            />
+          </div>
 
           <p
             className="mt-4 border-t border-border pt-3 text-xs leading-5 text-muted-foreground"
             data-testid="finding-diagnosis-boundary"
           >
-            Payment truth and invariant results are deterministic. Diagnosis
-            explains verified evidence and never determines payment state.
+            Payment truth and invariant results are deterministic. AI explains
+            verified evidence. Diagnosis never determines payment state.
           </p>
         </Card>
       </Section>
@@ -229,6 +296,57 @@ export function FindingCasefilePanel({
               </p>
             </div>
           )}
+
+          {/* 4H-3: developer-facing guidance, composed from the persisted
+              invariant, scenario and recommendation. Text only — it never
+              generates or executes code, and the Phase 4E engine remains the
+              only thing that can decide a regression verdict. */}
+          {(() => {
+            const guidance = buildRegressionGuidance({
+              invariantId,
+              scenarioId,
+              recommendationCode: casefile.recommendation?.code ?? null,
+            });
+            return (
+              <dl
+                className="mt-1 flex flex-col gap-2 rounded-md border border-dashed border-border p-4"
+                data-testid="regression-guidance"
+              >
+                <div>
+                  <dt className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                    What a passing regression proves
+                  </dt>
+                  <dd className="mt-0.5 text-xs leading-5 text-card-foreground">
+                    {guidance.objective}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                    Invariant to prove
+                  </dt>
+                  <dd className="mt-0.5 text-xs leading-5 text-muted-foreground">
+                    {guidance.invariantToProve}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                    Behaviour to eliminate
+                  </dt>
+                  <dd className="mt-0.5 text-xs leading-5 text-muted-foreground">
+                    {guidance.behaviourToEliminate}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                    Expected final state
+                  </dt>
+                  <dd className="mt-0.5 text-xs leading-5 text-muted-foreground">
+                    {guidance.expectedFinalState}
+                  </dd>
+                </div>
+              </dl>
+            );
+          })()}
 
           {/* P4-AC-06: a regression is startable from the finding itself. */}
           <RegressionAction

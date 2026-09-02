@@ -250,7 +250,12 @@ export default async function FindingDetailPage({
 
       {/* ---- 03 / 04 / 05 ----------------------------------------------- */}
       {casefile !== null && (
-        <FindingCasefilePanel casefile={casefile} comparison={comparison} />
+        <FindingCasefilePanel
+          casefile={casefile}
+          comparison={comparison}
+          invariantId={detail.invariant.invariantId}
+          scenarioId={null}
+        />
       )}
     </PageShell>
   );

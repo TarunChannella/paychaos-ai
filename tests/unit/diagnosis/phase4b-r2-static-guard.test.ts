@@ -330,6 +330,7 @@ describe("Phase 4B-R2 signal service — static guard", () => {
     // legitimate surface. The list stays EXACT, so an unapproved surface
     // still fails here rather than slipping in.
     expect(normalised).toEqual([
+      "/app/api/findings/[findingId]/diagnose/route.ts",
       "/app/api/readiness/route.ts",
       "/app/api/reliability/route.ts",
       "/app/reliability/page.tsx",

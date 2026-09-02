@@ -117,7 +117,12 @@ function renderPanel(
   comparison: RegressionComparison | null = null,
 ): string {
   return renderToStaticMarkup(
-    <FindingCasefilePanel casefile={file} comparison={comparison} />,
+    <FindingCasefilePanel
+      casefile={file}
+      comparison={comparison}
+      invariantId="INV-002"
+      scenarioId="C01"
+    />,
   );
 }
 

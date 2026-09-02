@@ -3876,6 +3876,83 @@ skip Ollama.
 
 ---
 
+# 138A. Phase 4H Decision Record — ML and Ollama NO-GO
+
+This section records the outcome of applying the Section 137 and Section 138
+gates at Phase 4H, so the absence of a shipped model is a documented
+engineering decision rather than an omission.
+
+## Optional ML Root-Cause Classifier — NO-GO
+
+**Decision:** not shipped for this submission.
+
+**Evidence at the time of the decision**, audited directly against the live
+Supabase project:
+
+```text
+findings                  = 2
+findings_with_diagnosis   = 0
+invariant_results         = 25
+chaos_runs                = 19
+regression_runs           = 4
+```
+
+**Reasoning.** A root-cause classifier needs labelled examples, and at audit
+time there were **zero** — no finding carried a `diagnosis_code`. Two findings
+would in any case be far below what Section 73 and Section 79 require, because
+there is no defensible way to split a set that size into training,
+calibration and held-out evaluation.
+
+Section 79 states that the abstention threshold "must be calibrated from
+held-out evaluation data if ML is shipped" and that an arbitrary threshold must
+not be presented as scientifically validated. With no evaluation set, any
+threshold would be invented, and any reported accuracy would be fabricated.
+
+This is a *data* decision, not a schedule decision: the dataset does not exist,
+so more time would not change the answer.
+
+**What ships instead.** The deterministic root-cause rules (Phase 4C) remain
+the diagnosis authority, exactly as Section 63 requires the ML classifier never
+to replace them. Phase 4H adds deterministic explanation templates,
+deterministic regression guidance and exact-match finding correlation — all P1
+differentiators that need no model and can be tested as contracts.
+
+**Revisit when.** Once a meaningful number of findings carry persisted
+diagnoses across multiple scenarios, the Section 137 gate can be re-applied.
+
+## Optional Ollama Integration — NO-GO
+
+**Decision:** not shipped for this submission.
+
+**Reasoning.** Section 91 states that a local Ollama process must not be
+assumed to exist in the deployed Vercel environment, and that P0 hosting must
+not be redesigned to support it. The deployment target remains Vercel plus
+Supabase. Section 138 additionally requires final deployment and a reliable
+demo before Ollama may be attempted; neither is complete.
+
+Shipping an LLM path that only works on one developer's machine would make the
+judge-facing behaviour depend on where the product is run, which is a worse
+outcome than not shipping it.
+
+**What ships instead.** Nothing is lost from the demo: Section 139 already
+records that "the strongest judge-facing AI story does not require an LLM", and
+the C01 evidence-to-regression narrative it describes is fully implemented.
+
+## Consequence for UI wording
+
+Because no model is shipped, no surface may present the current diagnosis as
+model output. The heading remains **Evidence-Based Diagnosis**, and the
+authority statement reads:
+
+> Payment truth and invariant results are deterministic. Diagnosis explains
+> verified evidence and never determines payment state.
+
+The labels `AI Diagnosis`, `AI Reasoning`, `Agent Reasoning` and `AI Root
+Cause` are forbidden until an implementation genuinely supports them. A unit
+guard fails the build if any finding surface reintroduces them.
+
+---
+
 # 139. Demo Recommendation
 
 The strongest judge-facing AI story does not require an LLM.

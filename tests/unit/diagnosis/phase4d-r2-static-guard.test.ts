@@ -427,6 +427,7 @@ describe("Phase 4D-R2 — schema and surface boundaries", () => {
       "diagnostic-signals.ts",
       "evidence-pack-service.ts",
       "evidence-pack.ts",
+      "explanation-templates.ts",
       "recommendation-repository.ts",
       "recommendation-service.ts",
       "recommendations.ts",
@@ -467,6 +468,7 @@ describe("Phase 4D-R2 — schema and surface boundaries", () => {
     // legitimate surface. The list stays EXACT, so an unapproved surface
     // still fails here rather than slipping in.
     expect(surfaces).toEqual([
+      "/app/api/findings/[findingId]/diagnose/route.ts",
       "/app/api/findings/[findingId]/regressions/route.ts",
       "/app/api/readiness/route.ts",
       "/app/api/regressions/[regressionRunId]/advance/route.ts",

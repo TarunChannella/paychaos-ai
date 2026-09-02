@@ -212,15 +212,21 @@ describe("AI truthfulness — Phase 4H has not happened", () => {
     }
   });
 
-  it("16: the authority line does not attribute the diagnosis to AI", () => {
+  it("16: the permanent authority boundary is stated exactly", () => {
+    // The approved wording. "AI explains verified evidence" is a statement
+    // about AUTHORITY — the intelligence layer explains, it never decides —
+    // and holds whether the explanation is produced by today's deterministic
+    // rules or by a later model. It is paired with the sentence that makes
+    // the limit explicit.
     const source = readFileSync(
       join(process.cwd(), "components", "findings", "finding-casefile.tsx"),
       "utf8",
     );
 
     expect(source).toContain(
-      "Diagnosis\n            explains verified evidence and never determines payment state.",
+      "Payment truth and invariant results are deterministic. AI explains",
     );
-    expect(source).not.toContain("AI explains verified evidence");
+    expect(source).toContain("verified evidence.");
+    expect(source).toContain("Diagnosis never determines payment state.");
   });
 });
