@@ -194,3 +194,155 @@ test.describe("Phase 5 — the operations console", () => {
     await expect(page.getByTestId("readiness-overview")).toBeVisible();
   });
 });
+
+test.describe("Phase 5 — the regression action (P4-AC-06)", () => {
+  test.slow();
+
+  /**
+   * Opens the first finding in the index, or skips when the database
+   * genuinely holds none. Skipping is honest here: the assertions below are
+   * about the UI contract for a finding that exists, and inventing one would
+   * mean writing fake evidence into a real database.
+   */
+  async function openFirstFinding(page: Page): Promise<boolean> {
+    await page.goto("/findings");
+    const link = page
+      .locator('[data-testid^="finding-row-"] a[href*="/invariant-results/"]')
+      .first();
+    if ((await link.count()) === 0) return false;
+    await link.click();
+    await page.waitForURL(/\/invariant-results\//, { timeout: 120_000 });
+    return true;
+  }
+
+  test("E2E-5-09: a finding offers a regression control", async ({ page }) => {
+    test.skip(
+      !(await openFirstFinding(page)),
+      "No finding exists in the current database.",
+    );
+
+    await expect(page.getByTestId("regression-action")).toBeVisible();
+    // Either start or advance must be offered — never neither, and never both.
+    const start = await page.getByTestId("regression-start").count();
+    const advance = await page.getByTestId("regression-advance").count();
+    expect(start + advance).toBe(1);
+  });
+
+  /**
+   * Clicks whichever regression control the finding currently offers.
+   *
+   * A finding with an open attempt offers `advance`; one without offers
+   * `start`. Both Phase 4E routes return the same serialized shape, so the
+   * UI contract below is identical either way — and exercising whichever
+   * control is really present beats skipping the test on live data.
+   */
+  async function clickRegressionControl(page: Page): Promise<void> {
+    // Wait for the panel to finish streaming FIRST. `count()` does not wait,
+    // so checking it against a half-rendered page reads zero for both
+    // controls and then blocks on whichever one was guessed.
+    await expect(page.getByTestId("regression-action")).toBeVisible();
+
+    const start = page.getByTestId("regression-start");
+    if ((await start.count()) > 0) {
+      await start.click();
+      return;
+    }
+    await page.getByTestId("regression-advance").click();
+  }
+
+  test("E2E-5-10: an awaiting-external-action result is never shown as complete", async ({
+    page,
+  }) => {
+    test.skip(
+      !(await openFirstFinding(page)),
+      "No finding exists in the current database.",
+    );
+
+    // UI-CONTRACT FIXTURE, NOT REAL EVIDENCE. Both Phase 4E routes are stubbed
+    // so the multi-step lifecycle can be exercised deterministically. Nothing
+    // here is presented as a genuine Razorpay event and nothing is written.
+    const awaiting = {
+      kind: "AWAITING_EXTERNAL_ACTION",
+      findingId: "ui-contract-fixture",
+      regressionRunId: "ui-contract-fixture",
+      chaosRunId: "ui-contract-fixture",
+      scenarioId: "C07",
+      continuation: { kind: "AWAITING_EXTERNAL_ACTION" },
+    };
+    for (const pattern of [
+      "**/api/findings/*/regressions",
+      "**/api/regressions/*/advance",
+    ]) {
+      await page.route(pattern, async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(awaiting),
+        });
+      });
+    }
+
+    await clickRegressionControl(page);
+
+    await expect(page.getByTestId("regression-action-kind")).toHaveText(
+      "AWAITING_EXTERNAL_ACTION",
+    );
+    await expect(page.getByTestId("regression-action-result")).toContainText(
+      "NOT complete",
+    );
+
+    // The decisive assertion: the ACTION RESULT never claims completion.
+    //
+    // Scoped to the result panel on purpose. A finding may legitimately carry
+    // a genuinely RESOLVED earlier regression, which truthfully renders "Fix
+    // verified" elsewhere on the page — asserting page-wide would confuse
+    // real persisted history with a fabricated claim about this request.
+    const result =
+      (await page.getByTestId("regression-action-result").textContent()) ?? "";
+    expect(result).not.toContain("Fix verified");
+    expect(result).not.toContain("COMPLETED");
+  });
+
+  test("E2E-5-11: a refused request is shown as a refusal, not a success", async ({
+    page,
+  }) => {
+    test.skip(
+      !(await openFirstFinding(page)),
+      "No finding exists in the current database.",
+    );
+
+    // UI-CONTRACT FIXTURE: the real 409 shape Phase 4E returns when it
+    // deterministically refuses.
+    const refusal = {
+      kind: "NOT_STARTED",
+      findingId: "ui-contract-fixture",
+      reason: "FRESH_ORDER_REQUIRED",
+      ineligibility: null,
+    };
+    for (const pattern of [
+      "**/api/findings/*/regressions",
+      "**/api/regressions/*/advance",
+    ]) {
+      await page.route(pattern, async (route) => {
+        await route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify(refusal),
+        });
+      });
+    }
+
+    await clickRegressionControl(page);
+
+    await expect(page.getByTestId("regression-action-kind")).toHaveText(
+      "NOT_STARTED",
+    );
+
+    // Same scoping rule as above: the refusal panel is what must not claim
+    // success, not the finding's genuine regression history.
+    const result =
+      (await page.getByTestId("regression-action-result").textContent()) ?? "";
+    expect(result).toContain("No regression was created");
+    expect(result).not.toContain("Fix verified");
+  });
+});

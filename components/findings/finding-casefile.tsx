@@ -1,3 +1,4 @@
+import { RegressionAction } from "@/components/findings/regression-action";
 import { Badge } from "@/components/ui/badge";
 
 import type {
@@ -22,6 +23,9 @@ import type {
  * payment truth and invariant results are deterministic and that the
  * explanation is advisory. The current classifier is deterministic expert
  * logic, so nothing here implies a runtime model decided anything.
+ *
+ * THE ACTION IS AN ADAPTER. The regression control posts to the frozen Phase
+ * 4E routes and re-reads this server-derived casefile; it decides nothing.
  *
  * HISTORY IS NEVER REWRITTEN. The original failing evaluation stays visible
  * beside the regression outcome. "FIX VERIFIED" appears only for a persisted
@@ -99,6 +103,16 @@ export function FindingCasefilePanel({
   readonly casefile: FindingCasefile;
   readonly comparison: RegressionComparison | null;
 }) {
+  // ACTIVE means the persisted lifecycle is still open. Only PENDING and
+  // RUNNING are active (Phase 4E `ACTIVE_REGRESSION_STATUSES`); a terminal
+  // attempt must not suppress starting a new one.
+  const latest = casefile.regressionRuns[0];
+  const activeRegressionRunId =
+    latest !== undefined &&
+    (latest.status === "PENDING" || latest.status === "RUNNING")
+      ? latest.id
+      : null;
+
   return (
     <>
       {/* ---------------------------------------------------------------- */}
@@ -199,6 +213,7 @@ export function FindingCasefilePanel({
         className="rounded-lg border border-border bg-card p-5"
         data-testid="finding-regression"
       >
+        {/* P4-AC-06: a regression is startable from the finding itself. */}
         <h2 className="text-sm font-semibold text-card-foreground">
           Regression — Before vs After
         </h2>
@@ -275,6 +290,11 @@ export function FindingCasefilePanel({
             </p>
           </div>
         )}
+
+        <RegressionAction
+          findingId={casefile.findingId}
+          activeRegressionRunId={activeRegressionRunId}
+        />
       </section>
     </>
   );
