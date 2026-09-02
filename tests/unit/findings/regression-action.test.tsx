@@ -219,7 +219,13 @@ describe("regression control — every lifecycle state renders honestly", () => 
       COMPARISON,
     );
 
-    expect(html).toContain("Before — original failure");
+    // Re-pointed in the Phase 5 UI pass: the panel label changed from
+    // "Before — original failure" to "Before fix" + a HISTORICAL provenance
+    // tag. Targeting the testid is stricter than matching prose, and the
+    // property is unchanged — the original FAIL is still its own panel.
+    expect(html).toContain('data-testid="regression-before"');
+    expect(html).toContain("Before fix");
+    expect(html).toContain("Historical");
     expect(html).toContain("FAIL");
     expect(html).toContain("The protected effect executed twice.");
   });
@@ -230,7 +236,8 @@ describe("regression control — every lifecycle state renders honestly", () => 
       COMPARISON,
     );
 
-    expect(html).toContain("After — regression run");
+    expect(html).toContain('data-testid="regression-after"');
+    expect(html).toContain("After fix — regression run");
     expect(html).toContain("The protected effect executed once.");
     expect(html).toContain(
       "The original failure is preserved. A regression adds new evidence",
