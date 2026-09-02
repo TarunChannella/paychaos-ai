@@ -196,6 +196,31 @@ describe("POST /api/demo/reset — failure is never reported as success", () => 
     }
   });
 
+  it("11b: the server-side failure reason never reaches the browser", async () => {
+    // The reason exists so the SERVER LOG can tell an unreachable function
+    // from a constraint violation. Sending it to the browser would leak
+    // deployment state to anyone who can reach the endpoint.
+    runDemoResetMock.mockResolvedValue({
+      ok: false,
+      resetApplied: false,
+      deletedCounts: null,
+      failureReason: "RESET_FUNCTION_UNAVAILABLE",
+    });
+
+    const body = await (await callPost()).json();
+    const serialized = JSON.stringify(body);
+
+    for (const leak of [
+      "failureReason",
+      "RESET_FUNCTION_UNAVAILABLE",
+      "PGRST202",
+      "schema cache",
+    ]) {
+      expect(serialized, leak).not.toContain(leak);
+    }
+    expect(body.resetApplied).toBe(false);
+  });
+
   it("12: a thrown error is a generic 500 with no raw wording", async () => {
     runDemoResetMock.mockRejectedValue(
       new Error("connect ECONNREFUSED 10.0.0.4:5432"),

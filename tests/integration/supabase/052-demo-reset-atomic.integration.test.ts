@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 import { DEMO_RESET_RPC, DEMO_RESET_TABLES } from "@/lib/demo-reset/service";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
+import { getClientEnv } from "@/lib/config/client-env";
+import { getServerEnv } from "@/lib/config/server-env";
+
 import { getAnonClientForTest } from "./helpers";
 
 /**
@@ -71,6 +74,52 @@ describe("demo reset — the function's security posture on the real project", (
       const { error } = await anon.from(table).delete().not("id", "is", null);
       expect(error, `anon must not delete from ${table}`).not.toBeNull();
     }
+  });
+});
+
+describe("demo reset — the RPC is reachable through PostgREST", () => {
+  /**
+   * WHY THIS EXISTS. The reset function worked when called directly in the
+   * Supabase SQL editor while the production website reported failure. Direct
+   * SQL and the application take DIFFERENT paths: the app goes through
+   * PostgREST, which serves RPCs from a CACHED schema. A function created by
+   * hand in the SQL editor is invisible to the API until that cache reloads,
+   * so `rpc()` fails with PGRST202 even though the function exists and works.
+   *
+   * This probe reads PostgREST's own OpenAPI document. It is READ-ONLY: it
+   * never calls the reset function, so it can run on every suite execution
+   * without touching a single row.
+   */
+  it("5: PostgREST's schema exposes the reset function as an RPC", async () => {
+    const { supabaseUrl } = getClientEnv();
+    const { supabaseServiceRoleKey } = getServerEnv();
+
+    // Both headers are required by PostgREST. The key is used, never logged:
+    // only the HTTP status and the path list are ever surfaced.
+    const response = await fetch(`${supabaseUrl}/rest/v1/`, {
+      headers: {
+        apikey: supabaseServiceRoleKey,
+        Authorization: `Bearer ${supabaseServiceRoleKey}`,
+        Accept: "application/openapi+json",
+      },
+    });
+    expect(
+      response.ok,
+      `PostgREST root must be readable (status ${response.status})`,
+    ).toBe(true);
+
+    const spec = (await response.json()) as { paths?: Record<string, unknown> };
+    const paths = Object.keys(spec.paths ?? {});
+
+    // A non-empty spec is asserted first so a malformed response cannot make
+    // the real assertion below vacuously pass.
+    expect(paths.length).toBeGreaterThan(0);
+
+    expect(
+      paths,
+      "the reset RPC is missing from PostgREST's schema cache — the function " +
+        "may exist in the database yet be unreachable from the application",
+    ).toContain(`/rpc/${DEMO_RESET_RPC}`);
   });
 });
 

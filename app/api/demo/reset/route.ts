@@ -83,9 +83,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const result = await runDemoReset();
 
     if (!result.ok) {
+      // The REASON is logged server-side and deliberately absent from the
+      // response below. `RESET_FUNCTION_UNAVAILABLE` in particular has a
+      // completely different remedy from a constraint violation — reload
+      // PostgREST's schema cache rather than hunt a deletion-order bug —
+      // and without it in the log the two are indistinguishable.
       logEvent("demo_reset_request", {
         outcome: "FAILED_ROLLED_BACK",
         reset_applied: false,
+        failure_reason: result.failureReason ?? "RESET_FAILED",
       });
       return NextResponse.json(
         {

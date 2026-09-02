@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
@@ -24,7 +27,7 @@ interface Call {
 }
 
 const calls: Call[] = [];
-let rpcError: { message: string } | null = null;
+let rpcError: { message: string; code?: string } | null = null;
 let rpcData: unknown = {
   fulfilments: 1,
   regression_runs: 2,
@@ -98,6 +101,34 @@ describe("demo reset — one atomic call, not ten deletes", () => {
   });
 });
 
+describe("demo reset — it uses the trusted server credential", () => {
+  const SOURCE = readFileSync(
+    join(process.cwd(), "lib", "demo-reset", "service.ts"),
+    "utf8",
+  );
+
+  it("5b: the client comes from the server-only service-role helper", () => {
+    expect(SOURCE).toContain('from "@/lib/supabase/server"');
+    expect(SOURCE).toContain("getSupabaseServerClient()");
+    // `import "server-only"` makes a client-bundle import fail at build time
+    // rather than relying on review discipline.
+    expect(SOURCE).toContain('import "server-only"');
+  });
+
+  it("5c: the anon key can never be the credential for a reset", () => {
+    // A reset executed with the public key would either fail outright or,
+    // far worse, indicate the anon role had been granted destructive rights.
+    for (const forbidden of [
+      "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+      "supabaseAnonKey",
+      "getClientEnv",
+      "createClient",
+    ]) {
+      expect(SOURCE, forbidden).not.toContain(forbidden);
+    }
+  });
+});
+
 describe("demo reset — failure means nothing was applied", () => {
   it("6: a clean run reports ok and resetApplied", async () => {
     const result = await runDemoReset();
@@ -152,6 +183,81 @@ describe("demo reset — failure means nothing was applied", () => {
     ]) {
       expect(serialized, leak).not.toContain(leak);
     }
+  });
+
+  it("9b: a SUCCESSFUL rpc is never downgraded to a failure", async () => {
+    // THE REGRESSION THIS GUARDS. Success is decided by the absence of an
+    // error and by nothing else. If an unexpected payload shape could flip
+    // `ok` to false, the UI would tell the operator the database is
+    // untouched AFTER the transaction had already committed — the most
+    // damaging thing this surface could say.
+    for (const payload of [
+      null,
+      {},
+      [],
+      "not-json",
+      0,
+      { orders: "many" },
+      { unexpected: 1 },
+    ]) {
+      rpcData = payload;
+      const result = await runDemoReset();
+      expect(result.ok, JSON.stringify(payload)).toBe(true);
+      expect(result.resetApplied, JSON.stringify(payload)).toBe(true);
+      expect(result.failureReason).toBeNull();
+    }
+    rpcData = { orders: 1 };
+  });
+
+  it("9c: an unreachable function is classified, not reported as a data fault", async () => {
+    // PostgREST serves RPCs from a CACHED schema. A function created by hand
+    // in the SQL editor can exist and work while the API cannot see it — the
+    // exact split between "direct SQL works" and "the website fails".
+    for (const code of ["PGRST202", "42883"]) {
+      rpcError = { message: "could not find the function", code };
+      const result = await runDemoReset();
+      expect(result.ok, code).toBe(false);
+      expect(result.failureReason, code).toBe("RESET_FUNCTION_UNAVAILABLE");
+    }
+    rpcError = null;
+  });
+
+  it("9d: privilege and constraint failures are told apart", async () => {
+    rpcError = { message: "permission denied", code: "42501" };
+    expect((await runDemoReset()).failureReason).toBe("RESET_NOT_PERMITTED");
+
+    rpcError = { message: "violates foreign key constraint", code: "23503" };
+    expect((await runDemoReset()).failureReason).toBe(
+      "RESET_CONSTRAINT_VIOLATION",
+    );
+
+    rpcError = { message: "something else", code: "XX000" };
+    expect((await runDemoReset()).failureReason).toBe("RESET_FAILED");
+
+    rpcError = { message: "no code at all" };
+    expect((await runDemoReset()).failureReason).toBe("RESET_FAILED");
+    rpcError = null;
+  });
+
+  it("9e: the classified reason still leaks no database wording", async () => {
+    rpcError = {
+      code: "23503",
+      message:
+        'update or delete on table "event_processing_attempts" violates ' +
+        'foreign key constraint "fulfilments_trigger_processing_attempt_id_fkey"',
+    };
+
+    const serialized = JSON.stringify(await runDemoReset());
+    for (const leak of [
+      "violates",
+      "foreign key",
+      "fulfilments_trigger",
+      "event_processing_attempts",
+      "23503",
+    ]) {
+      expect(serialized, leak).not.toContain(leak);
+    }
+    rpcError = null;
   });
 
   it("10: a malformed count payload never fabricates numbers", async () => {
