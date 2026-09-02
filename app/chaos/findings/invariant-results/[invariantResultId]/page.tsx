@@ -81,9 +81,35 @@ export default async function FindingDetailPage({
   }
 
   // ONLY genuine absence becomes a 404.
-  const detail = await getFindingDetailByInvariantResultId(invariantResultId);
-  if (detail === null) {
-    notFound();
+  //
+  // The frozen Phase 3G service distinguishes several failures, and they mean
+  // very different things to an operator:
+  //
+  //   FINDING_NOT_FOUND        — no Finding exists for this invariant result.
+  //                              A real 404.
+  //   FINDING_READ_FAILED      — the database could not be read. The Finding
+  //                              may well exist.
+  //   FINDING_INTEGRITY_CONFLICT — the invariant result this Finding reports
+  //                              could not be read. Something is wrong.
+  //
+  // Catching all three and rendering "not found" would tell an operator that a
+  // reliability issue does not exist because a SELECT failed — the same
+  // read-failure-is-not-emptiness rule the Round 1 read models already follow.
+  // Anything that is not genuine absence is therefore re-thrown to Next's
+  // normal server error handling, which shows a generic error page and never
+  // renders the underlying message.
+  let detail;
+  try {
+    detail = await getFindingDetailByInvariantResultId(invariantResultId);
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      (error as { code?: unknown }).code === "FINDING_NOT_FOUND"
+    ) {
+      notFound();
+    }
+    throw error;
   }
 
   // The Phase 4 casefile is additive. A failure here must not remove the

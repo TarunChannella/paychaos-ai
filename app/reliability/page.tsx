@@ -3,7 +3,7 @@ import Link from "next/link";
 import { ReadinessOverview } from "@/components/reliability/readiness-overview";
 import { ReadinessDecision } from "@/components/reliability/readiness-decision";
 import { ReliabilityOverview } from "@/components/reliability/reliability-overview";
-import { Card, PageShell, Section } from "@/components/ui/page";
+import { Card, PageShell } from "@/components/ui/page";
 import { getCurrentGoLiveReadiness } from "@/lib/readiness/service";
 
 import type { GoLiveReadinessReadModel } from "@/lib/readiness/service";

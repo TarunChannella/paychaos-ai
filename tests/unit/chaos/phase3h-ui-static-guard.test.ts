@@ -107,7 +107,29 @@ describe("Phase 3H Chaos Lab UI — static guard", () => {
       "sessionSecret",
       "raw_body",
       "rawBody",
-      "signature",
+      "raw_body_sha256",
+    ]) {
+      expect(allSource.toLowerCase(), forbidden).not.toContain(
+        forbidden.toLowerCase(),
+      );
+    }
+
+    // NARROWED, NOT WEAKENED (Phase 5 UI pass). The bare word "signature" was
+    // banned outright, which also forbade honestly describing what a scenario
+    // tests — the Chaos Lab now says C03 attacks "a forged webhook signature".
+    // Naming the concept is not exposing a value, so the ban moved to the
+    // ways a signature value could actually reach a screen: a field read, a
+    // property access, an assignment or a header name. That is stricter about
+    // real data paths than the substring match it replaces.
+    for (const forbidden of [
+      "signature:",
+      ".signature",
+      "signature =",
+      "razorpay_signature",
+      "razorpaySignature",
+      "x-razorpay-signature",
+      "signaturevalue",
+      "expectedsignature",
     ]) {
       expect(allSource.toLowerCase(), forbidden).not.toContain(
         forbidden.toLowerCase(),

@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { Badge } from "@/components/ui/badge";
+import { ProvenanceTag } from "@/components/ui/status";
 import { DEMO_MERCHANT_PRODUCT } from "@/lib/demo-merchant/product";
 import { listDemoMerchantOrders } from "@/lib/demo-merchant/service";
 import {
@@ -43,26 +44,35 @@ export default async function DemoMerchantPage() {
   const orders = await listDemoMerchantOrders(10);
 
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-8 px-6 py-16">
-      <div className="flex flex-col items-center gap-3 text-center">
-        <Badge variant="outline" className="text-sm">
-          Razorpay Test Mode
-        </Badge>
-        <h1 className="text-3xl font-semibold tracking-tight text-foreground">
-          PayChaos AI — Demo Merchant
+    <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-8 px-6 py-8">
+      <header className="flex flex-col gap-1.5">
+        <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          Controlled test merchant
+        </span>
+        <h1 className="text-2xl font-semibold leading-8 tracking-tight text-foreground">
+          Demo Merchant
         </h1>
-        <p className="max-w-md text-balance text-sm text-muted-foreground">
-          A small controlled merchant used to make payment reliability testing
-          possible in later phases.
+        <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
+          The single controlled merchant PayChaos is allowed to break. Every
+          order, payment attempt and fulfilment below is internal Test Mode
+          state — this is a reliability harness, not a storefront.
         </p>
-      </div>
+      </header>
 
-      <section className="rounded-lg border border-border bg-card p-6">
-        <h2 className="text-lg font-semibold text-card-foreground">
-          {DEMO_MERCHANT_PRODUCT.name}
-        </h2>
+      <section className="rounded-lg border border-border bg-card p-5">
+        <div className="flex flex-wrap items-baseline justify-between gap-3">
+          <div>
+            <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              Fixed test product
+            </span>
+            <h2 className="mt-0.5 text-base font-semibold text-card-foreground">
+              {DEMO_MERCHANT_PRODUCT.name}
+            </h2>
+          </div>
+          <ProvenanceTag label="Razorpay Test Mode" />
+        </div>
         <p
-          className="mt-1 text-2xl font-semibold text-card-foreground"
+          className="mt-3 text-3xl font-semibold tabular-nums text-card-foreground"
           data-testid="fixed-product-price"
         >
           {formatAmountForDisplay(
@@ -73,14 +83,15 @@ export default async function DemoMerchantPage() {
             {DEMO_MERCHANT_PRODUCT.currency}
           </span>
         </p>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Creating an order below creates an INTERNAL PayChaos order only — it
-          does not contact Razorpay.
+        <p className="mt-3 text-sm leading-6 text-muted-foreground">
+          The amount and currency are fixed server-side. Creating an order
+          creates an INTERNAL PayChaos order only — it does not contact
+          Razorpay.
         </p>
 
-        <div className="mt-6 flex flex-col items-center gap-2">
+        <div className="mt-5 flex flex-col items-start gap-2 border-t border-border pt-4">
           <CreateOrderButton />
-          <p className="max-w-sm text-center text-xs text-muted-foreground">
+          <p className="max-w-xl text-xs leading-5 text-muted-foreground">
             Razorpay Checkout is not connected in Phase 1. This screen creates
             the merchant-side internal order used by the later Test Mode payment
             flow.
@@ -89,11 +100,18 @@ export default async function DemoMerchantPage() {
       </section>
 
       <section className="flex flex-col gap-3">
-        <h2 className="text-lg font-semibold text-foreground">
-          Recent Internal Orders
-        </h2>
+        <div className="flex flex-col gap-1">
+          <h2 className="text-base font-semibold tracking-tight text-foreground">
+            Test order lifecycle
+          </h2>
+          <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
+            Order, payment attempt, provider state, merchant state and
+            fulfilment — exactly as persisted. These are the records the money
+            invariants are evaluated against.
+          </p>
+        </div>
         {orders.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
+          <p className="rounded-lg border border-border bg-card p-5 text-sm text-muted-foreground">
             No internal test orders yet. Create one above.
           </p>
         ) : (

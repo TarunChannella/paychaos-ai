@@ -27,10 +27,18 @@ export function ReadinessDecision({
   readiness,
   score,
   href = "/reliability",
+  statusTestId = "readiness-decision-status",
 }: {
   readonly readiness: GoLiveReadinessV1;
   readonly score: number;
   readonly href?: string;
+  /**
+   * The status testid. Defaulted rather than hard-coded because the
+   * Reliability page renders BOTH this panel and the frozen gate checklist,
+   * and two elements sharing `readiness-status` would make every strict
+   * locator ambiguous.
+   */
+  readonly statusTestId?: string;
 }) {
   const { status, blockingReasons, attentionReasons } = readiness;
 
@@ -47,7 +55,7 @@ export function ReadinessDecision({
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex flex-col gap-2.5">
           <FieldLabel>Go-Live Readiness</FieldLabel>
-          <DecisionStatus status={status} data-testid="readiness-status" />
+          <DecisionStatus status={status} data-testid={statusTestId} />
         </div>
 
         <div className="flex flex-col items-end gap-1">

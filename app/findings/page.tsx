@@ -1,11 +1,7 @@
 import Link from "next/link";
 
 import { Card, PageShell, PageHeader } from "@/components/ui/page";
-import {
-  LifecycleBadge,
-  SeverityBadge,
-  VerdictBadge,
-} from "@/components/ui/status";
+import { LifecycleBadge, SeverityBadge } from "@/components/ui/status";
 import { listFindings } from "@/lib/findings/list-read";
 
 import type { FindingListRow } from "@/lib/findings/list-read";

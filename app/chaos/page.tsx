@@ -1,13 +1,22 @@
 import Link from "next/link";
 
 import { ProvenanceBadge } from "@/components/chaos/provenance-badge";
-import { Badge } from "@/components/ui/badge";
+import { Card, PageShell, Section } from "@/components/ui/page";
+import { ProvenanceTag, VerdictBadge } from "@/components/ui/status";
 import { listRecentChaosRuns } from "@/lib/chaos/run-read-model";
 import { listScenarioDtos } from "@/lib/chaos/scenario-dto";
 
 /**
- * Phase 3H — the Chaos Lab entry point (docs/PHASE_PLAN.md Section 7.13:
+ * The Chaos Lab — the BREAK surface (docs/PHASE_PLAN.md Section 7.13:
  * "chaos scenario list").
+ *
+ * IT LOOKS LIKE A TEST SUITE, NOT A DASHBOARD. Four oversized cards read as
+ * decoration; dense suite rows read as something an engineer runs. Each row
+ * states the assumption the scenario attacks, so a reader who has not
+ * memorised the catalogue still understands what is being tested.
+ *
+ * RECENT RUNS IS AN OPERATIONAL HISTORY. A table, exactly as persisted, with
+ * status, outcome, provenance and time — not a stack of cards.
  *
  * Always server-rendered against current Supabase state: a cached snapshot of
  * chaos runs would show an operator a stale verdict, and a verdict is exactly
@@ -30,117 +39,175 @@ function outcomeText(outcome: string | null): string {
   return outcome ?? "Not yet determined";
 }
 
+/**
+ * What each mandatory scenario attacks, in one line.
+ *
+ * Descriptive copy only — the static registry remains the authoritative
+ * catalogue, and an id absent from this map simply renders without a
+ * subtitle rather than inventing one.
+ */
+const ATTACKS: Record<string, string> = {
+  C01: "The same webhook delivered twice must not execute the protected effect twice.",
+  C03: "A forged webhook signature must cause zero business mutation.",
+  C07: "A captured payment must still reconcile when the client never returns.",
+  C11: "A failed payment must never mark an order paid.",
+};
+
+const RUN_COLUMNS = [
+  "Scenario",
+  "Status",
+  "Outcome",
+  "Evidence",
+  "Created",
+  "Inspect",
+];
+
 export default async function ChaosLabPage() {
   const scenarios = listScenarioDtos();
   const runs = await listRecentChaosRuns(20);
 
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-10 px-6 py-16">
-      <header className="flex flex-col items-center gap-3 text-center">
-        <Badge variant="outline" className="text-sm">
-          Razorpay Test Mode
-        </Badge>
-        <h1 className="text-3xl font-semibold tracking-tight text-foreground">
-          PayChaos AI — Chaos Lab
+    <PageShell wide>
+      <header className="flex flex-col gap-1.5">
+        <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          Break
+        </span>
+        <h1 className="text-2xl font-semibold leading-8 tracking-tight text-foreground">
+          Chaos Lab
         </h1>
-        <p className="max-w-xl text-balance text-sm text-muted-foreground">
-          Controlled reliability scenarios executed against the internal Demo
-          Merchant only. PayChaos never sends chaos traffic to an external
-          target and never touches Live Mode.
+        <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
+          PayChaos deliberately stresses payment assumptions against the
+          internal Demo Merchant only. It never sends chaos traffic to an
+          external target and never touches Live Mode.
         </p>
       </header>
 
-      <section className="flex flex-col gap-4">
-        <h2 className="text-lg font-semibold text-foreground">P0 Scenarios</h2>
-        <ul className="flex flex-col gap-3">
-          {scenarios.map((scenario) => (
-            <li
-              key={scenario.scenarioId}
-              className="rounded-lg border border-border bg-card p-5"
-              data-testid={`scenario-card-${scenario.scenarioId}`}
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-mono text-sm font-semibold text-card-foreground">
-                  {scenario.scenarioId}
-                </span>
-                <span className="text-sm font-medium text-card-foreground">
-                  {scenario.name}
-                </span>
-                <Badge variant="outline">{scenario.priority}</Badge>
-                {!scenario.enabled && (
-                  <Badge variant="destructive">Disabled</Badge>
-                )}
-              </div>
-
-              <ul className="mt-3 flex flex-col gap-1">
-                {scenario.executionRequirements.map((requirement) => (
-                  <li
-                    key={requirement}
-                    className="text-xs text-muted-foreground"
-                  >
-                    • {requirement}
-                  </li>
-                ))}
-              </ul>
-
-              <Link
-                href={`/chaos/scenarios/${scenario.scenarioId}`}
-                className="mt-4 inline-flex items-center justify-center rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent"
-                data-testid={`scenario-open-${scenario.scenarioId}`}
-              >
-                Open scenario
-              </Link>
-            </li>
-          ))}
-        </ul>
-      </section>
-
-      <section className="flex flex-col gap-4">
-        <h2 className="text-lg font-semibold text-foreground">Recent runs</h2>
-
-        {runs.length === 0 ? (
-          <p
-            className="rounded-lg border border-border bg-card p-5 text-sm text-muted-foreground"
-            data-testid="no-runs"
-          >
-            No chaos run has been recorded yet.
-          </p>
-        ) : (
-          <ul className="flex flex-col gap-2">
-            {runs.map((run) => (
+      <Section
+        title="Reliability test suite"
+        description="The four mandatory P0 scenarios. Each attacks a specific assumption a real payment integration is expected to hold."
+      >
+        <div className="overflow-hidden rounded-lg border border-border">
+          <ul className="divide-y divide-border">
+            {scenarios.map((scenario) => (
               <li
-                key={run.id}
-                className="rounded-lg border border-border bg-card p-4"
-                data-testid="run-row"
+                key={scenario.scenarioId}
+                className="flex flex-col gap-3 bg-card p-4 hover:bg-accent/20 md:flex-row md:items-start md:justify-between md:gap-6"
+                data-testid={`scenario-card-${scenario.scenarioId}`}
               >
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-mono text-sm font-semibold text-card-foreground">
-                    {run.scenarioId}
-                  </span>
-                  <Badge variant="outline">{run.status}</Badge>
-                  <span className="text-xs text-muted-foreground">
-                    Outcome: {outcomeText(run.outcome)}
-                  </span>
-                  <ProvenanceBadge storedValue={run.dataClassification} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-baseline gap-2">
+                    <span className="font-mono text-xs font-bold text-foreground">
+                      {scenario.scenarioId}
+                    </span>
+                    <span className="text-sm font-medium text-card-foreground">
+                      {scenario.name}
+                    </span>
+                    <ProvenanceTag label={scenario.priority} />
+                    {!scenario.enabled && <ProvenanceTag label="Disabled" />}
+                  </div>
+
+                  {ATTACKS[scenario.scenarioId] !== undefined && (
+                    <p className="mt-1 max-w-xl text-xs leading-5 text-muted-foreground">
+                      {ATTACKS[scenario.scenarioId]}
+                    </p>
+                  )}
+
+                  {scenario.executionRequirements.length > 0 && (
+                    <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-0.5">
+                      {scenario.executionRequirements.map((requirement) => (
+                        <li
+                          key={requirement}
+                          className="text-[11px] text-muted-foreground"
+                        >
+                          • {requirement}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
-                <p className="mt-2 font-mono text-xs text-muted-foreground">
-                  {run.id}
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Created {stamp(run.createdAt)} · Started{" "}
-                  {stamp(run.startedAt)} · Completed {stamp(run.completedAt)}
-                </p>
+
                 <Link
-                  href={`/chaos/runs/${run.id}`}
-                  className="mt-3 inline-flex items-center justify-center rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent"
+                  href={`/chaos/scenarios/${scenario.scenarioId}`}
+                  className="inline-flex shrink-0 items-center justify-center rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  data-testid={`scenario-open-${scenario.scenarioId}`}
                 >
-                  Inspect run
+                  Open scenario
                 </Link>
               </li>
             ))}
           </ul>
+        </div>
+      </Section>
+
+      <Section
+        title="Recent runs"
+        description="Operational history, exactly as persisted. A run that never executed is reported as such, never as a failure."
+      >
+        {runs.length === 0 ? (
+          <Card data-testid="no-runs">
+            <p className="text-sm leading-6 text-muted-foreground">
+              No chaos run has been recorded yet.
+            </p>
+          </Card>
+        ) : (
+          <div className="overflow-x-auto rounded-lg border border-border">
+            <table className="w-full min-w-[52rem] border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-border bg-muted/40 text-left">
+                  {RUN_COLUMNS.map((heading) => (
+                    <th
+                      key={heading}
+                      scope="col"
+                      className="px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground"
+                    >
+                      {heading}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {runs.map((run) => (
+                  <tr
+                    key={run.id}
+                    className="border-b border-border align-top last:border-0 hover:bg-accent/30"
+                    data-testid="run-row"
+                  >
+                    <td className="px-4 py-3">
+                      <span className="font-mono text-xs font-bold text-foreground">
+                        {run.scenarioId}
+                      </span>
+                      <div className="mt-0.5 font-mono text-[11px] break-all text-muted-foreground">
+                        {run.id}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <VerdictBadge verdict={run.status} />
+                    </td>
+                    <td className="px-4 py-3 text-xs text-muted-foreground">
+                      {outcomeText(run.outcome)}
+                    </td>
+                    <td className="px-4 py-3">
+                      <ProvenanceBadge storedValue={run.dataClassification} />
+                    </td>
+                    <td className="px-4 py-3 font-mono text-[11px] text-muted-foreground">
+                      <div>Created {stamp(run.createdAt)}</div>
+                      <div>Completed {stamp(run.completedAt)}</div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <Link
+                        href={`/chaos/runs/${run.id}`}
+                        className="text-xs underline underline-offset-4 hover:no-underline"
+                      >
+                        Inspect
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
-      </section>
-    </div>
+      </Section>
+    </PageShell>
   );
 }

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { EvidenceRail } from "@/components/chaos/evidence-rail";
 import { ProvenanceBadge } from "@/components/chaos/provenance-badge";
 import { Badge } from "@/components/ui/badge";
 import { getChaosRunDetail } from "@/lib/chaos/run-read-model";
@@ -284,68 +285,7 @@ export default async function ChaosRunPage({
             place.
           </p>
         ) : (
-          <>
-            <ol className="flex flex-col gap-2">
-              {timeline.items.map((item, index) => (
-                <li
-                  key={`${item.kind}-${item.subjectId}-${index}`}
-                  className="rounded-lg border border-border bg-card p-4"
-                  data-testid="timeline-item"
-                >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs font-medium text-card-foreground">
-                      {item.label}
-                    </span>
-                    <ProvenanceBadge storedValue={item.provenance} />
-                  </div>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {item.occurredAt ?? "No timestamp recorded"}
-                  </p>
-                  <p className="mt-1 font-mono text-xs text-muted-foreground">
-                    {item.subjectId}
-                  </p>
-                  {item.details.length > 0 && (
-                    <ul className="mt-2 flex flex-col gap-0.5">
-                      {item.details.map((line) => (
-                        <li
-                          key={line}
-                          className="text-xs text-muted-foreground"
-                        >
-                          • {line}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </li>
-              ))}
-            </ol>
-
-            {timeline.gaps.length > 0 && (
-              <div
-                className="rounded-lg border border-border bg-card p-4"
-                data-testid="timeline-gaps"
-              >
-                <p className="text-xs font-semibold text-card-foreground">
-                  Evidence not captured
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  These are stated as gaps rather than rendered as events,
-                  because the data was never recorded.
-                </p>
-                <ul className="mt-2 flex flex-col gap-0.5">
-                  {timeline.gaps.map((gap, index) => (
-                    <li
-                      key={`${gap.kind}-${gap.subjectId ?? "none"}-${index}`}
-                      className="font-mono text-xs text-muted-foreground"
-                    >
-                      {gap.kind} · {gap.label}
-                      {gap.subjectId ? ` · ${gap.subjectId}` : ""}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </>
+          <EvidenceRail timeline={timeline} />
         )}
       </section>
     </div>

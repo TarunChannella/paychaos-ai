@@ -43,19 +43,20 @@ export function AppShell({ children }: { readonly children: React.ReactNode }) {
           <span className="text-sm font-semibold tracking-tight text-foreground">
             PayChaos AI
           </span>
-          <span className="hidden text-xs text-muted-foreground sm:inline">
-            Payment Reliability Console
-          </span>
         </Link>
+
+        {/* Outside the link on purpose: including it made the logo's
+            accessible name contain "Reliability", so a by-name link query
+            for the Reliability page matched the logo and navigated home. */}
+        <span className="hidden flex-1 text-xs text-muted-foreground sm:inline">
+          Payment Reliability Console
+        </span>
 
         {/* Test Mode is never subtle and never scrolls away. */}
         <span
           className="inline-flex items-center gap-1.5 rounded-md border border-blue-600/30 bg-blue-50 px-2.5 py-1 font-mono text-[11px] font-semibold uppercase tracking-wider text-blue-700 dark:border-blue-400/30 dark:bg-blue-950/40 dark:text-blue-300"
           data-testid="env-badge"
         >
-          <span aria-hidden="true" className="text-[9px]">
-            ●
-          </span>
           RAZORPAY TEST MODE
         </span>
       </header>

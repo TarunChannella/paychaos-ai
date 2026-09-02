@@ -95,6 +95,7 @@ export default async function OverviewPage() {
             <ReadinessDecision
               readiness={model.readiness}
               score={model.reliability.score.score}
+              statusTestId="overview-readiness-status"
             />
           </div>
 

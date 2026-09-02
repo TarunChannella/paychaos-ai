@@ -59,8 +59,11 @@ test.describe("Phase 4F-R3 — the Reliability Score page", () => {
     const errors = watchConsole(page);
     await page.goto("/reliability");
 
+    // Re-pointed in the Phase 5 UI pass: the page heading is now "Go-Live
+    // Reliability", the hierarchy the approved plan specifies. The score
+    // itself is still asserted below, so nothing is proven less.
     await expect(
-      page.getByRole("heading", { name: /Reliability Score/i }),
+      page.getByRole("heading", { name: /Go-Live Reliability/i }),
     ).toBeVisible();
 
     // The score renders as `<n> / 100` with n in range — never a hard-coded

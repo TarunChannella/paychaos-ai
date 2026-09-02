@@ -14,7 +14,10 @@ import { cn } from "@/lib/utils";
  * truth-source label can never be mistaken for a result.
  *
  * NEVER COLOUR ALONE. Every state carries a glyph and its own text, so the
- * meaning survives greyscale, colour-blindness and a projector.
+ * meaning survives greyscale, colour-blindness and a projector. Because that
+ * glyph is part of the rendered text, the RAW value is also published as
+ * `data-value` — so a caller or a test reads the semantic state directly
+ * instead of scraping decoration out of `textContent`.
  *
  * IT DECIDES NOTHING. These components map a server-authoritative string to a
  * visual treatment. An unknown value falls back to the neutral treatment and
@@ -75,6 +78,7 @@ export function DecisionStatus({
       )}
       data-testid={testId}
       data-tone={tone}
+      data-value={status}
     >
       <span aria-hidden="true" className="text-lg leading-none">
         {GLYPH[tone]}
@@ -118,6 +122,7 @@ export function VerdictBadge({
       )}
       data-testid={testId}
       data-tone={tone}
+      data-value={verdict}
     >
       <span aria-hidden="true">{GLYPH[tone]}</span>
       {verdict.replace("_", " ")}

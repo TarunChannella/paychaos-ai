@@ -67,9 +67,12 @@ test.describe("Phase 5 — the operations console", () => {
     await expect(score).toContainText(/\d{1,3}\s*\/ 100/);
     await expect(score).toContainText("RELIABILITY-V1");
 
-    const status = (
-      await page.getByTestId("overview-readiness-status").textContent()
-    )?.trim();
+    // Read the published semantic value, not textContent: every status badge
+    // renders an accessibility glyph beside its label, and scraping text
+    // would assert on decoration.
+    const status = await page
+      .getByTestId("overview-readiness-status")
+      .getAttribute("data-value");
     expect(["NOT READY", "NEEDS ATTENTION", "READY"]).toContain(status);
   });
 
@@ -84,9 +87,9 @@ test.describe("Phase 5 — the operations console", () => {
         scenarioId,
       ).toBeVisible();
 
-      const state = (
-        await page.getByTestId(`overview-state-${scenarioId}`).textContent()
-      )?.trim();
+      const state = await page
+        .getByTestId(`overview-state-${scenarioId}`)
+        .getAttribute("data-value");
       expect(
         ["PASS", "FAIL", "UNKNOWN", "BLOCKED", "ERROR", "NOT_RUN"],
         scenarioId,
