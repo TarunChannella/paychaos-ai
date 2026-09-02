@@ -1,10 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { LogoLockup } from "@/components/brand/logo";
-import { AppNav } from "@/components/shell/app-nav";
+import { AppSidebar } from "@/components/shell/app-sidebar";
 
 /**
  * PayChaos AI — the operations console shell.
@@ -14,20 +12,20 @@ import { AppNav } from "@/components/shell/app-nav";
  * long evidence page scrolls beside it. On an incident screen the operator
  * should never have to scroll back to the top to move somewhere else.
  *
- * ONE NAVIGATION, ONE BRAND — RENDERED ONCE. The rail is the SAME element at
- * every breakpoint: a full-height column on desktop, a horizontal strip above
- * the content on mobile. An earlier version of this shell rendered a second
- * copy of the lockup and `<AppNav/>` for mobile and hid one with `md:hidden`.
- * That duplicated every `data-testid` and every nav link in the DOM, which is
- * how it was caught: `getByTestId("nav-overview")` resolved to two elements.
- * Hiding a duplicate is not the same as not having one — the markup, the ids
- * and the landmark all existed twice. Reflowing one element with CSS is both
- * the simpler and the more honest structure.
+ * ONE NAVIGATION, ONE BRAND — RENDERED ONCE. The rail (`AppSidebar`) is the
+ * SAME element at every breakpoint: a full-height column on desktop, a
+ * horizontal strip above the content on mobile. An earlier version of this
+ * shell rendered a second copy of the lockup and `<AppNav/>` for mobile and
+ * hid one with `md:hidden`. That duplicated every `data-testid` and every nav
+ * link in the DOM, which is how it was caught: `getByTestId("nav-overview")`
+ * resolved to two elements. Hiding a duplicate is not the same as not having
+ * one — the markup, the ids and the landmark all existed twice. Reflowing one
+ * element with CSS is both the simpler and the more honest structure.
  *
- * BRANDED, QUIETLY. The lockup sits top-left inside the rail rather than in a
- * separate banner, which is what makes the product read as one application
- * instead of a header stapled to a page. The chrome is deliberately low
- * contrast: it should recede and let the evidence carry the screen.
+ * THE RAIL OWNS ITS OWN PALETTE. `AppSidebar` is tinted entirely through
+ * `--sidebar-*` tokens that nothing else consumes, so the navigation can read
+ * as light blue glass while every page, card, table and status badge keeps
+ * the console's neutral palette unchanged.
  *
  * TEST MODE IS NEVER SUBTLE AND NEVER SCROLLS AWAY. The environment badge is
  * pinned in the sticky top bar on every protected screen, at every width.
@@ -48,34 +46,7 @@ export function AppShell({ children }: { readonly children: React.ReactNode }) {
 
   return (
     <div className="flex min-h-screen flex-col bg-muted/20 md:flex-row">
-      {/* ---- THE RAIL --------------------------------------------------- */}
-      <aside className="flex shrink-0 flex-col border-b border-border bg-background md:sticky md:top-0 md:h-screen md:w-60 md:border-b-0 md:border-r">
-        <div className="flex h-14 items-center px-4 md:border-b md:border-border">
-          <Link
-            href="/"
-            className="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            aria-label="PayChaos AI — Overview"
-            data-testid="app-brand"
-          >
-            <LogoLockup />
-          </Link>
-        </div>
-
-        <div className="px-3 pb-3 md:flex-1 md:overflow-y-auto md:py-4">
-          <p className="mb-2 hidden px-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70 md:block">
-            Reliability
-          </p>
-          <AppNav />
-        </div>
-
-        <div className="hidden border-t border-border px-4 py-3 md:block">
-          <p className="text-[11px] leading-4 text-muted-foreground">
-            Deterministic money invariants.
-            <br />
-            Evidence over inference.
-          </p>
-        </div>
-      </aside>
+      <AppSidebar />
 
       {/* ---- CONTENT ---------------------------------------------------- */}
       <div className="flex min-w-0 flex-1 flex-col">

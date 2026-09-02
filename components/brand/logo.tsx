@@ -49,31 +49,75 @@ export function LogoMark({
 /**
  * The full lockup: mark, product name, and an optional descriptor.
  *
- * `subtitle` is off by default because the sidebar has no room for it; the
- * access screen turns it on, where the product has to introduce itself to
- * someone who may never have seen it.
+ * `subtitle` is off by default; the access screen turns it on, where the
+ * product has to introduce itself to someone who may never have seen it.
+ *
+ * `size="lg"` is the sidebar's product identity: a larger mark and a
+ * two-line descriptor, so the rail opens with a real SaaS lockup rather than
+ * a favicon with a word next to it. The default stays exactly as it was so
+ * the access screen is untouched by this variant existing.
  */
 export function LogoLockup({
   subtitle = false,
+  size = "sm",
   className,
 }: {
   readonly subtitle?: boolean;
+  readonly size?: "sm" | "lg";
   readonly className?: string;
 }) {
+  const large = size === "lg";
+
   return (
-    <span className={cn("flex items-center gap-2.5", className)}>
-      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-foreground text-background">
-        <LogoMark className="h-[18px] w-[18px]" />
+    <span
+      className={cn(
+        "flex",
+        large
+          ? "items-center gap-2.5 md:items-start md:gap-3"
+          : "items-center gap-2.5",
+        className,
+      )}
+    >
+      <span
+        className={cn(
+          "flex shrink-0 items-center justify-center bg-foreground text-background",
+          large
+            ? "h-8 w-8 rounded-lg md:h-9 md:w-9 md:rounded-xl"
+            : "h-8 w-8 rounded-lg",
+        )}
+      >
+        <LogoMark
+          className={
+            large ? "h-[18px] w-[18px] md:h-5 md:w-5" : "h-[18px] w-[18px]"
+          }
+        />
       </span>
       <span className="flex min-w-0 flex-col leading-none">
-        <span className="text-[15px] font-semibold tracking-tight text-foreground">
+        <span
+          className={cn(
+            "font-semibold tracking-tight text-foreground",
+            large ? "text-[15px] md:text-[17px]" : "text-[15px]",
+          )}
+        >
           PayChaos<span className="text-muted-foreground"> AI</span>
         </span>
-        {subtitle && (
-          <span className="mt-1 truncate text-[11px] font-medium tracking-wide text-muted-foreground">
-            Autonomous Payment Reliability Engineer
-          </span>
-        )}
+        {subtitle &&
+          (large ? (
+            // ONE element, reflowed — never a second hidden copy. The
+            // descriptor is suppressed on the mobile strip, where it would
+            // push real content down, and set on two lines on the desktop
+            // rail, where truncating it to "Autonomous Payment Reliability…"
+            // would read as a tooltip rather than a positioning statement.
+            <span className="mt-1.5 hidden text-[11px] font-medium leading-[1.35] tracking-wide text-muted-foreground md:block">
+              Autonomous Payment
+              <br />
+              Reliability Engineer
+            </span>
+          ) : (
+            <span className="mt-1 truncate text-[11px] font-medium tracking-wide text-muted-foreground">
+              Autonomous Payment Reliability Engineer
+            </span>
+          ))}
       </span>
     </span>
   );

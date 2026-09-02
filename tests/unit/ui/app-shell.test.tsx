@@ -60,6 +60,14 @@ describe("app shell — exactly one of each landmark", () => {
     const markup = shellMarkup("/findings");
     expect(occurrences(markup, 'data-testid="app-brand"')).toBe(1);
     expect(occurrences(markup, 'aria-label="PayChaos AI — Overview"')).toBe(1);
+
+    // The link being unique is not enough: the LOCKUP inside it must be too.
+    // A responsive rail is tempting to build as a compact copy plus a large
+    // copy with `md:hidden` between them, which puts the wordmark and the
+    // logo in the DOM twice while every testid above still reads as unique.
+    // `LogoMark` labels itself, so counting that label counts lockups.
+    expect(occurrences(markup, 'aria-label="PayChaos AI"')).toBe(1);
+    expect(occurrences(markup, "Reliability Engineer")).toBe(1);
   });
 
   it("4: the Test Mode badge appears exactly once, and is not optional", () => {
@@ -83,9 +91,82 @@ describe("app shell — the rail survives a scrolling page", () => {
     const header = markup.slice(markup.indexOf("<header"));
     expect(header).toContain("sticky top-0");
     expect(header).toContain("RAZORPAY TEST MODE");
-    // It must never be hidden at a breakpoint.
-    const badge = header.slice(header.indexOf('data-testid="env-badge"') - 700);
-    expect(badge).not.toContain("md:hidden");
+
+    // CORRECTED (sidebar round). This previously sliced a fixed 700-character
+    // window BEFORE the badge to inspect its classes. When the badge sits
+    // nearer the start than that, `indexOf(...) - 700` goes negative and
+    // String.slice reads from the END of the string instead — so the test was
+    // quietly inspecting the wrong region and would have passed on a badge
+    // that WAS hidden at a breakpoint. Read the badge's own opening tag.
+    const badgeTag = /<span[^>]*data-testid="env-badge"[^>]*>/.exec(header);
+    expect(badgeTag, "the env badge must be a real element").not.toBeNull();
+    expect(badgeTag?.[0]).not.toContain("md:hidden");
+    expect(badgeTag?.[0]).not.toContain("sm:hidden");
+    expect(badgeTag?.[0]).not.toContain("lg:hidden");
+    expect(badgeTag?.[0]).not.toMatch(/(^|["' ])hidden(["' ])/);
+  });
+});
+
+describe("app shell — the rail's own furniture", () => {
+  it("9: the rail states the environment binding without inventing status", () => {
+    const markup = shellMarkup("/");
+    expect(markup).toContain('data-testid="sidebar-environment"');
+    expect(markup).toContain("Test Mode");
+
+    // Nothing in the rail may imply live/production capability.
+    for (const forbidden of [
+      "Live Mode",
+      "LIVE MODE",
+      "Production",
+      "rzp_live",
+    ]) {
+      expect(markup, forbidden).not.toContain(forbidden);
+    }
+  });
+
+  it("10: the branding card claims nothing that is not true", () => {
+    const markup = shellMarkup("/");
+    expect(markup).toContain("Autonomous by Design");
+
+    // "learning" would imply a runtime ML capability this product does not
+    // ship; docs/AI_DESIGN.md records ML as an explicit NO-GO.
+    expect(markup).not.toContain("learning");
+    expect(markup).toContain("verifying");
+  });
+
+  it("11: the decorative curve is not presented as a measurement", () => {
+    const markup = shellMarkup("/");
+    // The decorative curve specifically must be hidden from assistive
+    // technology: a line that announces itself is indistinguishable from a
+    // chart, and this product does not ship invented metrics.
+    const flourish = /<svg[^>]*data-testid="sidebar-flourish"[^>]*>/.exec(
+      markup,
+    );
+    expect(flourish, "the rail's decorative curve must exist").not.toBeNull();
+    expect(flourish?.[0]).toContain('aria-hidden="true"');
+
+    // The general rule this encodes: a graphic either declares itself a
+    // meaningful image (the brand mark, which SHOULD be announced) or it is
+    // hidden. Nothing may sit in between, unlabelled and exposed.
+    for (const svg of markup.match(/<svg[^>]*>/g) ?? []) {
+      if (svg.includes('role="img"')) {
+        expect(svg, svg).toContain("aria-label=");
+      } else {
+        expect(svg, svg).toContain('aria-hidden="true"');
+      }
+    }
+
+    // No axis label inside the graphic itself.
+    expect(markup).not.toContain("<text");
+
+    // And nothing the READER sees may look like a measurement. This is
+    // checked against visible text, not raw markup: the curve's gradient
+    // legitimately carries offset="0%" / "100%", which is SVG syntax rather
+    // than a number shown to anyone.
+    const visibleText = markup.replace(/<[^>]*>/g, " ");
+    for (const forbidden of ["%", "uptime", "trend", "score"]) {
+      expect(visibleText.toLowerCase(), forbidden).not.toContain(forbidden);
+    }
   });
 });
 

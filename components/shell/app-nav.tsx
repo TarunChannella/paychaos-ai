@@ -98,7 +98,7 @@ export function AppNav() {
   return (
     <nav
       aria-label="Primary"
-      className="flex gap-1 overflow-x-auto md:flex-col md:overflow-visible"
+      className="flex gap-1 overflow-x-auto md:flex-col md:gap-0.5 md:overflow-visible"
     >
       {NAV_ITEMS.map((item) => {
         const active = isActive(pathname, item.href);
@@ -109,11 +109,25 @@ export function AppNav() {
             aria-current={active ? "page" : undefined}
             data-testid={`nav-${item.label.toLowerCase().replace(/\s+/g, "-")}`}
             className={[
-              "flex shrink-0 items-center gap-2.5 rounded-md px-3 py-2 text-[13px] transition-colors",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              // The border is always present and merely transparent when
+              // inactive, so selecting an item cannot shift the rail by 1px.
+              "group flex min-h-[44px] shrink-0 items-center gap-2.5 rounded-[11px] border px-3 text-[13.5px]",
+              "transition-colors duration-150",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
               active
-                ? "bg-accent font-semibold text-accent-foreground"
-                : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                ? [
+                    "border-sidebar-active-border bg-sidebar-active font-semibold",
+                    "text-sidebar-accent-foreground",
+                    // A single hairline of light along the top edge is what
+                    // reads as glass; a drop shadow here would read as a
+                    // button and compete with the page's real actions.
+                    "shadow-[inset_0_1px_0_0_rgb(255_255_255/0.65)]",
+                  ].join(" ")
+                : [
+                    "border-transparent text-sidebar-foreground/80",
+                    "hover:border-sidebar-border hover:bg-sidebar-accent/70",
+                    "hover:text-sidebar-foreground",
+                  ].join(" "),
             ].join(" ")}
           >
             <svg
@@ -121,8 +135,13 @@ export function AppNav() {
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
-              strokeWidth="1.7"
-              className="h-4 w-4 shrink-0"
+              strokeWidth="1.6"
+              className={[
+                "h-[18px] w-[18px] shrink-0 transition-colors",
+                active
+                  ? "text-sidebar-accent-foreground"
+                  : "text-sidebar-muted group-hover:text-sidebar-foreground",
+              ].join(" ")}
             >
               {item.icon}
             </svg>

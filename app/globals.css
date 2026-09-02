@@ -12,6 +12,11 @@
   --font-heading: var(--font-sans);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-muted: var(--sidebar-muted);
+  --color-sidebar-card: var(--sidebar-card);
+  --color-sidebar-card-border: var(--sidebar-card-border);
+  --color-sidebar-active: var(--sidebar-active);
+  --color-sidebar-active-border: var(--sidebar-active-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-accent: var(--sidebar-accent);
   --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
@@ -73,14 +78,29 @@
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
   --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
+  /* --- Sidebar palette ---------------------------------------------------
+   * SCOPED BY CONSTRUCTION. Every token below is consumed only by the left
+   * rail, so tinting the navigation cannot leak into a page, a card, a table
+   * or a status badge. The rest of the console keeps its neutral palette
+   * exactly as it was.
+   *
+   * Icy, not saturated: a near-white surface carrying just enough blue to
+   * separate from the white content area without competing with it. */
+  --sidebar: oklch(0.977 0.011 245);
+  --sidebar-foreground: oklch(0.29 0.038 258);
+  --sidebar-muted: oklch(0.556 0.032 254);
+  --sidebar-primary: oklch(0.55 0.163 259);
   --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --sidebar-accent: oklch(0.945 0.024 246);
+  --sidebar-accent-foreground: oklch(0.5 0.166 260);
+  --sidebar-border: oklch(0.906 0.024 246);
+  --sidebar-ring: oklch(0.62 0.15 259);
+  /* Translucent surfaces for the status and branding cards. */
+  --sidebar-card: oklch(1 0 0 / 62%);
+  --sidebar-card-border: oklch(0.895 0.03 247);
+  /* The active navigation item: light blue glass, never a solid slab. */
+  --sidebar-active: oklch(0.936 0.041 249 / 85%);
+  --sidebar-active-border: oklch(0.79 0.083 253);
 }
 
 .dark {
@@ -107,14 +127,19 @@
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --sidebar: oklch(0.215 0.021 258);
+  --sidebar-foreground: oklch(0.93 0.012 250);
+  --sidebar-muted: oklch(0.68 0.028 253);
+  --sidebar-primary: oklch(0.66 0.145 258);
+  --sidebar-primary-foreground: oklch(0.16 0.02 258);
+  --sidebar-accent: oklch(0.285 0.032 257);
+  --sidebar-accent-foreground: oklch(0.8 0.115 256);
+  --sidebar-border: oklch(1 0 0 / 12%);
+  --sidebar-ring: oklch(0.62 0.14 258);
+  --sidebar-card: oklch(1 0 0 / 6%);
+  --sidebar-card-border: oklch(1 0 0 / 12%);
+  --sidebar-active: oklch(0.36 0.062 257 / 85%);
+  --sidebar-active-border: oklch(0.5 0.09 257);
 }
 
 @layer base {
