@@ -1,5 +1,6 @@
 import { DemoResetPanel } from "@/components/demo/demo-reset-panel";
 import { Badge } from "@/components/ui/badge";
+import { Card, PageHeader, PageShell } from "@/components/ui/page";
 import { getRazorpayEnv } from "@/lib/config/razorpay-env";
 
 /**
@@ -31,20 +32,14 @@ export default function SettingsPage() {
   const testMode = readTestModeStatus();
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-6 py-10">
-      <header className="flex flex-col gap-2">
-        <h1 className="text-2xl font-semibold tracking-tight text-foreground">
-          Settings
-        </h1>
-        <p className="max-w-2xl text-sm text-muted-foreground">
-          Deployment configuration status and demo administration.
-        </p>
-      </header>
+    <PageShell>
+      <PageHeader
+        eyebrow="Configuration"
+        title="Settings"
+        lede="Deployment configuration status and demo administration."
+      />
 
-      <section
-        className="flex flex-col gap-3 rounded-lg border border-border bg-card p-5"
-        data-testid="settings-environment"
-      >
+      <Card className="flex flex-col gap-3" data-testid="settings-environment">
         <h2 className="text-sm font-semibold text-card-foreground">
           Payment environment
         </h2>
@@ -66,9 +61,9 @@ export default function SettingsPage() {
           chaos scenario can run. No key, secret or environment value is shown
           on this page.
         </p>
-      </section>
+      </Card>
 
       <DemoResetPanel />
-    </div>
+    </PageShell>
   );
 }

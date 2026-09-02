@@ -128,3 +128,22 @@
     @apply font-sans;
   }
 }
+
+/* ---------------------------------------------------------------------------
+ * PayChaos AI — typography refinements.
+ *
+ * Geist Sans and Geist Mono are already loaded through `next/font`, and
+ * `<html>` already carries Tailwind's `antialiased`. The only thing worth
+ * adding is tabular figures: on a console where a score, a deduction and a
+ * count sit in a column, proportional digits make the numbers jitter as they
+ * change. No `font-feature-settings` is set here — the stylistic-set names
+ * commonly copied from Inter are not Geist's, and declaring features a font
+ * does not ship would be decoration that silently does nothing.
+ * ------------------------------------------------------------------------ */
+
+/* Any number the operator compares vertically. */
+.tabular-nums,
+table td,
+table th {
+  font-variant-numeric: tabular-nums;
+}

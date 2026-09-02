@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 import { ProvenanceBadge } from "@/components/chaos/provenance-badge";
-import { Card, PageShell, Section } from "@/components/ui/page";
+import { Card, PageHeader, PageShell, Section } from "@/components/ui/page";
 import { ProvenanceTag, VerdictBadge } from "@/components/ui/status";
 import { listRecentChaosRuns } from "@/lib/chaos/run-read-model";
 import { listScenarioDtos } from "@/lib/chaos/scenario-dto";
@@ -68,25 +68,17 @@ export default async function ChaosLabPage() {
 
   return (
     <PageShell wide>
-      <header className="flex flex-col gap-1.5">
-        <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-          Break
-        </span>
-        <h1 className="text-2xl font-semibold leading-8 tracking-tight text-foreground">
-          Chaos Lab
-        </h1>
-        <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
-          PayChaos deliberately stresses payment assumptions against the
-          internal Demo Merchant only. It never sends chaos traffic to an
-          external target and never touches Live Mode.
-        </p>
-      </header>
+      <PageHeader
+        eyebrow="Break"
+        title="Chaos Lab"
+        lede="PayChaos deliberately stresses payment assumptions against the internal Demo Merchant only. It never sends chaos traffic to an external target and never touches Live Mode."
+      />
 
       <Section
         title="Reliability test suite"
         description="The four mandatory P0 scenarios. Each attacks a specific assumption a real payment integration is expected to hold."
       >
-        <div className="overflow-hidden rounded-lg border border-border">
+        <div className="overflow-hidden rounded-xl border border-border bg-card shadow-[0_1px_2px_0_rgb(0_0_0/0.03)]">
           <ul className="divide-y divide-border">
             {scenarios.map((scenario) => (
               <li
@@ -150,10 +142,10 @@ export default async function ChaosLabPage() {
             </p>
           </Card>
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-border">
+          <div className="overflow-x-auto rounded-xl border border-border bg-card shadow-[0_1px_2px_0_rgb(0_0_0/0.03)]">
             <table className="w-full min-w-[52rem] border-collapse text-sm">
               <thead>
-                <tr className="border-b border-border bg-muted/40 text-left">
+                <tr className="border-b border-border bg-muted/50 text-left">
                   {RUN_COLUMNS.map((heading) => (
                     <th
                       key={heading}

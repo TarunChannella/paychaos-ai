@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
  * separate pages rather than one console. These are deliberately small and
  * unopinionated: layout scaffolding, not a component framework.
  *
- * COMPACT, NOT MARKETING. Page titles are 24px, not 48px. This is operations
+ * COMPACT, NOT MARKETING. Page titles are 26px, not 48px. This is operations
  * tooling — density and legibility beat scale.
  */
 
@@ -25,7 +25,7 @@ export function PageShell({
   return (
     <div
       className={cn(
-        "mx-auto flex w-full flex-col gap-8 px-6 py-8",
+        "mx-auto flex w-full flex-col gap-10 px-6 py-10 md:px-8",
         wide ? "max-w-6xl" : "max-w-4xl",
         className,
       )}
@@ -51,11 +51,11 @@ export function PageHeader({
     <header className="flex flex-wrap items-start justify-between gap-4">
       <div className="flex min-w-0 flex-col gap-1.5">
         {eyebrow !== undefined && (
-          <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
             {eyebrow}
           </span>
         )}
-        <h1 className="text-2xl font-semibold leading-8 tracking-tight text-foreground">
+        <h1 className="text-[26px] font-semibold leading-9 tracking-[-0.02em] text-foreground">
           {title}
         </h1>
         {lede !== undefined && (
@@ -104,12 +104,12 @@ export function Section({
           {step !== undefined && (
             <span
               aria-hidden="true"
-              className="font-mono text-xs font-semibold text-muted-foreground"
+              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border bg-muted/60 font-mono text-[11px] font-bold text-muted-foreground"
             >
               {String(step).padStart(2, "0")}
             </span>
           )}
-          <h2 className="text-base font-semibold tracking-tight text-foreground">
+          <h2 className="text-[17px] font-semibold tracking-[-0.01em] text-foreground">
             {title}
           </h2>
         </div>
@@ -140,11 +140,11 @@ export function Card({
   return (
     <div
       className={cn(
-        "rounded-lg border p-5",
+        "rounded-xl border p-5 shadow-[0_1px_2px_0_rgb(0_0_0/0.03)]",
         tone === "danger"
           ? "border-destructive/40 bg-card"
           : tone === "muted"
-            ? "border-border bg-muted/30"
+            ? "border-border bg-muted/30 shadow-none"
             : "border-border bg-card",
         className,
       )}
@@ -155,6 +155,29 @@ export function Card({
   );
 }
 
+/**
+ * Shared control surface for page-level actions.
+ *
+ * WHY A CLASS HELPER AND NOT A COMPONENT. These classes are applied to both
+ * `<Link>` and `<button>` across the console; a wrapper component would force
+ * one of the two into a polymorphic `as` prop for no gain. The point is simply
+ * that PRIMARY and SECONDARY now look different — previously every action was
+ * an identical outlined control, so no screen expressed which action the
+ * operator was actually meant to take.
+ */
+export function actionClassName(
+  variant: "primary" | "secondary" = "secondary",
+  className?: string,
+): string {
+  return cn(
+    "inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
+    variant === "primary"
+      ? "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90"
+      : "border border-border bg-background text-foreground hover:bg-accent hover:text-accent-foreground",
+    className,
+  );
+}
+
 /** A small uppercase field label. */
 export function FieldLabel({
   children,
@@ -162,7 +185,7 @@ export function FieldLabel({
   readonly children: React.ReactNode;
 }) {
   return (
-    <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+    <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
       {children}
     </span>
   );

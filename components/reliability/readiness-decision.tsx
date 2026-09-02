@@ -49,7 +49,7 @@ export function ReadinessDecision({
   return (
     <Card
       tone={status === "NOT READY" ? "danger" : "default"}
-      className="flex flex-col gap-5"
+      className="flex flex-col gap-6"
       data-testid="readiness-decision"
     >
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -61,7 +61,7 @@ export function ReadinessDecision({
         <div className="flex flex-col items-end gap-1">
           <FieldLabel>Reliability Score</FieldLabel>
           <span
-            className="text-4xl font-semibold leading-none tabular-nums tracking-tight text-foreground"
+            className="text-5xl font-semibold leading-none tabular-nums tracking-[-0.03em] text-foreground"
             data-testid="readiness-decision-score"
           >
             {score}

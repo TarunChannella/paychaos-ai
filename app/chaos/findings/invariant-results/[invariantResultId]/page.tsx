@@ -151,7 +151,7 @@ export default async function FindingDetailPage({
         </div>
 
         <h1
-          className="text-2xl font-semibold leading-8 tracking-tight text-foreground"
+          className="text-[26px] font-semibold leading-9 tracking-[-0.02em] text-foreground"
           data-testid="finding-title"
         >
           {detail.title}

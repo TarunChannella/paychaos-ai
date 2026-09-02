@@ -2,7 +2,12 @@ import Link from "next/link";
 
 import { ReadinessDecision } from "@/components/reliability/readiness-decision";
 import { ScenarioMatrix } from "@/components/reliability/scenario-matrix";
-import { Card, PageShell, Section } from "@/components/ui/page";
+import {
+  actionClassName,
+  Card,
+  PageShell,
+  Section,
+} from "@/components/ui/page";
 import { SeverityBadge } from "@/components/ui/status";
 import { listFindings } from "@/lib/findings/list-read";
 import { getCurrentGoLiveReadiness } from "@/lib/readiness/service";
@@ -63,18 +68,38 @@ export default async function OverviewPage() {
 
   return (
     <PageShell wide>
-      <header className="flex flex-col gap-1.5">
-        <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+      <header className="flex flex-col gap-3">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
           Autonomous Payment Reliability Engineer
         </span>
-        <h1 className="text-2xl font-semibold leading-8 tracking-tight text-foreground">
-          PayChaos AI
+        <h1 className="text-[32px] font-semibold leading-10 tracking-[-0.025em] text-foreground">
+          Break it here, not in production.
         </h1>
-        <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
-          Test payment integrations before failures reach production. Break the
-          integration deliberately, detect money-invariant violations
-          deterministically, then prove the fix.
+        <p className="max-w-2xl text-[15px] leading-7 text-muted-foreground">
+          PayChaos AI deliberately breaks a Razorpay Test Mode integration,
+          detects money-invariant violations deterministically, explains them
+          from verified evidence, and then proves the fix held.
         </p>
+        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          {[
+            "Break",
+            "Detect",
+            "Prove",
+            "Diagnose",
+            "Fix",
+            "Re-test",
+            "Ready",
+          ].map((stage, index, all) => (
+            <span key={stage} className="flex items-center gap-2">
+              <span>{stage}</span>
+              {index < all.length - 1 && (
+                <span aria-hidden="true" className="text-muted-foreground/40">
+                  →
+                </span>
+              )}
+            </span>
+          ))}
+        </div>
       </header>
 
       {model === null ? (
@@ -174,15 +199,12 @@ export default async function OverviewPage() {
       <div className="flex flex-wrap gap-3 border-t border-border pt-6">
         <Link
           href="/chaos"
-          className="inline-flex items-center justify-center rounded-md border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className={actionClassName("primary")}
           data-testid="overview-open-chaos"
         >
           Open Chaos Lab
         </Link>
-        <Link
-          href="/reliability"
-          className="inline-flex items-center justify-center rounded-md border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
+        <Link href="/reliability" className={actionClassName()}>
           Reliability detail
         </Link>
       </div>

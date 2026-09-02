@@ -49,6 +49,8 @@
  */
 import { type FormEvent, useRef, useState } from "react";
 
+import { LogoLockup } from "@/components/brand/logo";
+
 const GENERIC_ERROR_MESSAGE =
   "Could not verify the access token. Please try again.";
 
@@ -112,72 +114,87 @@ export default function AccessLoginPage() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-sm flex-1 flex-col items-center justify-center gap-6 px-6 py-24">
-      <h1 className="text-center text-2xl font-semibold tracking-tight text-foreground">
-        PayChaos AI — Operator Access
-      </h1>
-      <p className="text-center text-sm text-muted-foreground">
-        This deployment is protected. Enter the operator access token to
-        continue.
-      </p>
+    <div className="flex min-h-screen items-center justify-center bg-muted/30 px-6 py-16">
+      <div className="flex w-full max-w-sm flex-col gap-6">
+        <div className="flex flex-col items-center gap-5 text-center">
+          <LogoLockup subtitle />
+          <div className="flex flex-col gap-1.5">
+            <h1 className="text-xl font-semibold tracking-tight text-foreground">
+              Operator Access
+            </h1>
+            <p className="text-sm leading-6 text-muted-foreground">
+              This deployment is protected. Enter the operator access token to
+              continue.
+            </p>
+          </div>
+        </div>
 
-      <form
-        onSubmit={handleSubmit}
-        className="flex w-full flex-col gap-3"
-        data-testid="access-login-form"
-      >
-        <label htmlFor="access-token" className="sr-only">
-          Operator access token
-        </label>
-        <input
-          id="access-token"
-          name="access-token"
-          type="password"
-          autoComplete="off"
-          value={token}
-          onChange={(event) => setToken(event.target.value)}
-          disabled={isBusy}
-          aria-invalid={error !== null}
-          aria-describedby={error === null ? undefined : "access-token-error"}
-          placeholder="Access token"
-          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-          data-testid="access-token-input"
-        />
-        <button
-          type="submit"
-          disabled={isBusy || token.trim().length === 0}
-          className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
-          data-testid="access-token-submit"
-        >
-          {phase === "verifying"
-            ? "Verifying…"
-            : phase === "redirecting"
-              ? "Signing in…"
-              : "Continue"}
-        </button>
-
-        {/* Announced to assistive tech without stealing focus. */}
-        <p
-          aria-live="polite"
-          className="text-center text-xs text-muted-foreground"
-          data-testid="access-token-status"
-        >
-          {phase === "redirecting"
-            ? "Access token accepted. Opening the console…"
-            : ""}
-        </p>
-
-        {error && (
-          <p
-            id="access-token-error"
-            role="alert"
-            className="text-center text-sm text-destructive"
-            data-testid="access-token-error"
+        <div className="rounded-xl border border-border bg-background p-6 shadow-sm">
+          <form
+            onSubmit={handleSubmit}
+            className="flex w-full flex-col gap-3"
+            data-testid="access-login-form"
           >
-            {error}
-          </p>
-        )}
-      </form>
+            <label htmlFor="access-token" className="sr-only">
+              Operator access token
+            </label>
+            <input
+              id="access-token"
+              name="access-token"
+              type="password"
+              autoComplete="off"
+              value={token}
+              onChange={(event) => setToken(event.target.value)}
+              disabled={isBusy}
+              aria-invalid={error !== null}
+              aria-describedby={
+                error === null ? undefined : "access-token-error"
+              }
+              placeholder="Access token"
+              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+              data-testid="access-token-input"
+            />
+            <button
+              type="submit"
+              disabled={isBusy || token.trim().length === 0}
+              className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+              data-testid="access-token-submit"
+            >
+              {phase === "verifying"
+                ? "Verifying…"
+                : phase === "redirecting"
+                  ? "Signing in…"
+                  : "Continue"}
+            </button>
+
+            {/* Announced to assistive tech without stealing focus. */}
+            <p
+              aria-live="polite"
+              className="text-center text-xs text-muted-foreground"
+              data-testid="access-token-status"
+            >
+              {phase === "redirecting"
+                ? "Access token accepted. Opening the console…"
+                : ""}
+            </p>
+
+            {error && (
+              <p
+                id="access-token-error"
+                role="alert"
+                className="text-center text-sm text-destructive"
+                data-testid="access-token-error"
+              >
+                {error}
+              </p>
+            )}
+          </form>
+        </div>
+
+        <p className="text-center text-xs leading-5 text-muted-foreground">
+          Razorpay Test Mode only. PayChaos never touches Live Mode.
+        </p>
+      </div>
     </div>
   );
 }

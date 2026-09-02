@@ -96,7 +96,10 @@ export function AppNav() {
   const pathname = usePathname() ?? "/";
 
   return (
-    <nav aria-label="Primary" className="flex flex-col gap-1">
+    <nav
+      aria-label="Primary"
+      className="flex gap-1 overflow-x-auto md:flex-col md:overflow-visible"
+    >
       {NAV_ITEMS.map((item) => {
         const active = isActive(pathname, item.href);
         return (
@@ -106,11 +109,11 @@ export function AppNav() {
             aria-current={active ? "page" : undefined}
             data-testid={`nav-${item.label.toLowerCase().replace(/\s+/g, "-")}`}
             className={[
-              "flex items-center gap-2.5 rounded-md px-3 py-1.5 text-[13px] transition-colors",
+              "flex shrink-0 items-center gap-2.5 rounded-md px-3 py-2 text-[13px] transition-colors",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               active
-                ? "bg-background font-semibold text-foreground shadow-[inset_2px_0_0_0_var(--color-foreground)]"
-                : "text-muted-foreground hover:bg-background/60 hover:text-foreground",
+                ? "bg-accent font-semibold text-accent-foreground"
+                : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
             ].join(" ")}
           >
             <svg

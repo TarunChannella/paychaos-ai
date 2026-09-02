@@ -3,7 +3,12 @@ import Link from "next/link";
 import { ReadinessOverview } from "@/components/reliability/readiness-overview";
 import { ReadinessDecision } from "@/components/reliability/readiness-decision";
 import { ReliabilityOverview } from "@/components/reliability/reliability-overview";
-import { Card, PageShell } from "@/components/ui/page";
+import {
+  actionClassName,
+  Card,
+  PageHeader,
+  PageShell,
+} from "@/components/ui/page";
 import { getCurrentGoLiveReadiness } from "@/lib/readiness/service";
 
 import type { GoLiveReadinessReadModel } from "@/lib/readiness/service";
@@ -48,20 +53,11 @@ export default async function ReliabilityPage() {
 
   return (
     <PageShell wide>
-      <header className="flex flex-col gap-1.5">
-        <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-          Ready
-        </span>
-        <h1 className="text-2xl font-semibold leading-8 tracking-tight text-foreground">
-          Go-Live Reliability
-        </h1>
-        <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
-          A deterministic score over the four mandatory P0 chaos scenarios, and
-          the Go-Live Readiness assessment derived from it. No AI, no estimate
-          and nothing stored — both are recalculated from the database every
-          time this page is opened.
-        </p>
-      </header>
+      <PageHeader
+        eyebrow="Ready"
+        title="Go-Live Reliability"
+        lede="A deterministic score over the four mandatory P0 chaos scenarios, and the Go-Live Readiness assessment derived from it. No AI, no estimate and nothing stored — both are recalculated from the database every time this page is opened."
+      />
 
       {model === null ? (
         <Card tone="danger" data-testid="reliability-unavailable">
@@ -102,10 +98,7 @@ export default async function ReliabilityPage() {
       )}
 
       <footer className="flex flex-wrap gap-3 border-t border-border pt-6">
-        <Link
-          href="/chaos"
-          className="inline-flex items-center justify-center rounded-md border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
+        <Link href="/chaos" className={actionClassName()}>
           Back to Chaos Lab
         </Link>
       </footer>

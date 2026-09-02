@@ -72,7 +72,7 @@ export function DecisionStatus({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-base font-semibold tracking-tight",
+        "inline-flex items-center gap-2.5 rounded-lg border px-4 py-2.5 text-lg font-semibold tracking-tight",
         TONE[tone],
         className,
       )}

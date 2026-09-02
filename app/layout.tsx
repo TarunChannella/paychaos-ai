@@ -15,7 +15,10 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "PayChaos AI — Autonomous Payment Reliability Engineer",
+  title: {
+    default: "PayChaos AI — Autonomous Payment Reliability Engineer",
+    template: "%s · PayChaos AI",
+  },
   description:
     "PayChaos AI is a Razorpay Test Mode-only payment reliability platform. Razorpay AI Buildathon — Open Track.",
 };
@@ -26,7 +29,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">
+      <body className="min-h-full">
         <AppShell>{children}</AppShell>
       </body>
     </html>

@@ -105,10 +105,10 @@ export default async function FindingsPage() {
             }))}
           />
 
-          <div className="overflow-x-auto rounded-lg border border-border">
+          <div className="overflow-x-auto rounded-xl border border-border bg-card shadow-[0_1px_2px_0_rgb(0_0_0/0.03)]">
             <table className="w-full min-w-[52rem] border-collapse text-sm">
               <thead>
-                <tr className="border-b border-border bg-muted/40 text-left">
+                <tr className="border-b border-border bg-muted/50 text-left">
                   {[
                     "Severity",
                     "Finding",

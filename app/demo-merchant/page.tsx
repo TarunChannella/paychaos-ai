@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { Badge } from "@/components/ui/badge";
+import { PageHeader, PageShell } from "@/components/ui/page";
 import { ProvenanceTag } from "@/components/ui/status";
 import { DEMO_MERCHANT_PRODUCT } from "@/lib/demo-merchant/product";
 import { listDemoMerchantOrders } from "@/lib/demo-merchant/service";
@@ -44,22 +45,14 @@ export default async function DemoMerchantPage() {
   const orders = await listDemoMerchantOrders(10);
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-8 px-6 py-8">
-      <header className="flex flex-col gap-1.5">
-        <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-          Controlled test merchant
-        </span>
-        <h1 className="text-2xl font-semibold leading-8 tracking-tight text-foreground">
-          Demo Merchant
-        </h1>
-        <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
-          The single controlled merchant PayChaos is allowed to break. Every
-          order, payment attempt and fulfilment below is internal Test Mode
-          state — this is a reliability harness, not a storefront.
-        </p>
-      </header>
+    <PageShell>
+      <PageHeader
+        eyebrow="Controlled test merchant"
+        title="Demo Merchant"
+        lede="The single controlled merchant PayChaos is allowed to break. Every order, payment attempt and fulfilment below is internal Test Mode state — this is a reliability harness, not a storefront."
+      />
 
-      <section className="rounded-lg border border-border bg-card p-5">
+      <section className="rounded-xl border border-border bg-card p-5 shadow-[0_1px_2px_0_rgb(0_0_0/0.03)]">
         <div className="flex flex-wrap items-baseline justify-between gap-3">
           <div>
             <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
@@ -357,8 +350,8 @@ export default async function DemoMerchantPage() {
         href="/"
         className="text-center text-sm text-muted-foreground underline underline-offset-4"
       >
-        Back to home
+        Back to Overview
       </Link>
-    </div>
+    </PageShell>
   );
 }

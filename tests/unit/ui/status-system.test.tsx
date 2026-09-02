@@ -103,8 +103,45 @@ describe("status system — provenance is not a verdict", () => {
 
   it("9: a decision status is larger than an ordinary badge", () => {
     // READY/NOT READY are consequential; they must not read as a tag.
-    expect(html(<DecisionStatus status="READY" />)).toContain("text-base");
-    expect(html(<VerdictBadge verdict="PASS" />)).toContain("text-xs");
+    //
+    // ADVANCED, NOT LOOSENED (final Phase 5 UI pass). This previously pinned
+    // one literal class name, "text-base", so making the decision status
+    // LARGER failed a test whose stated property still held. It now compares
+    // the two sizes on the type scale, which is the property the test is
+    // named after and is strictly harder to satisfy accidentally: a decision
+    // status rendered at badge size fails either way, and one rendered with
+    // no size class at all now fails too, where before it could pass.
+    const SCALE = [
+      "text-xs",
+      "text-sm",
+      "text-base",
+      "text-lg",
+      "text-xl",
+      "text-2xl",
+    ] as const;
+
+    /** Largest size on the scale that the markup actually declares. */
+    function largestSize(markup: string, label: string): number {
+      const present = SCALE.map((size, index) =>
+        new RegExp(`(^|["' ])${size}(["' ]|$)`).test(markup) ? index : -1,
+      ).filter((index) => index >= 0);
+      expect(present, `${label} must declare a type size`).not.toHaveLength(0);
+      return Math.max(...present);
+    }
+
+    const decision = largestSize(
+      html(<DecisionStatus status="READY" />),
+      "DecisionStatus",
+    );
+    const badge = largestSize(
+      html(<VerdictBadge verdict="PASS" />),
+      "VerdictBadge",
+    );
+
+    // An ordinary badge stays at the bottom of the scale...
+    expect(badge).toBe(SCALE.indexOf("text-xs"));
+    // ...and the go-live decision is unambiguously bigger than it.
+    expect(decision).toBeGreaterThan(badge);
   });
 });
 
