@@ -5,6 +5,7 @@ import { ScenarioMatrix } from "@/components/reliability/scenario-matrix";
 import {
   actionClassName,
   Card,
+  FieldLabel,
   PageShell,
   Section,
 } from "@/components/ui/page";
@@ -68,38 +69,81 @@ export default async function OverviewPage() {
 
   return (
     <PageShell wide>
-      <header className="flex flex-col gap-3">
-        <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-          Autonomous Payment Reliability Engineer
-        </span>
-        <h1 className="text-[32px] font-semibold leading-10 tracking-[-0.025em] text-foreground">
-          Break it here, not in production.
-        </h1>
-        <p className="max-w-2xl text-[15px] leading-7 text-muted-foreground">
-          PayChaos AI deliberately breaks a Razorpay Test Mode integration,
-          detects money-invariant violations deterministically, explains them
-          from verified evidence, and then proves the fix held.
-        </p>
-        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          {[
-            "Break",
-            "Detect",
-            "Prove",
-            "Diagnose",
-            "Fix",
-            "Re-test",
-            "Ready",
-          ].map((stage, index, all) => (
-            <span key={stage} className="flex items-center gap-2">
-              <span>{stage}</span>
-              {index < all.length - 1 && (
-                <span aria-hidden="true" className="text-muted-foreground/40">
-                  →
-                </span>
-              )}
-            </span>
-          ))}
+      {/*
+        SECTION 1 — HERO.
+        Positioning on the left, the safety boundary on the right. Deliberately
+        compact: a dashboard whose first screen is a marketing panel wastes the
+        only ten seconds a reviewer reliably gives it.
+      */}
+      <header className="grid gap-6 lg:grid-cols-12 lg:items-start lg:gap-8">
+        <div className="flex flex-col gap-3 lg:col-span-8">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+            Autonomous Payment Reliability Engineer
+          </span>
+          <h1 className="text-[30px] font-semibold leading-[1.15] tracking-[-0.025em] text-foreground sm:text-[36px] lg:text-[40px]">
+            Break it here, not in production.
+          </h1>
+          <p className="max-w-[70ch] text-[15px] leading-7 text-muted-foreground">
+            PayChaos AI deliberately breaks a Razorpay Test Mode integration,
+            detects money-invariant violations deterministically, explains them
+            from verified evidence, and then proves the fix held.
+          </p>
+
+          {/* The product loop, as a legible chain rather than a slogan. */}
+          <ol className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1.5 font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+            {[
+              "Break",
+              "Detect",
+              "Prove",
+              "Diagnose",
+              "Fix",
+              "Re-test",
+              "Ready",
+            ].map((stage, index, all) => (
+              <li key={stage} className="flex items-center gap-2">
+                <span>{stage}</span>
+                {index < all.length - 1 && (
+                  <span aria-hidden="true" className="text-subtle-foreground">
+                    →
+                  </span>
+                )}
+              </li>
+            ))}
+          </ol>
         </div>
+
+        {/* The safety boundary, stated plainly. Every line here is a fact
+            about how this deployment is configured, not a metric. */}
+        <Card
+          className="flex flex-col gap-3 lg:col-span-4"
+          data-testid="overview-environment"
+        >
+          <FieldLabel>Environment</FieldLabel>
+          <dl className="flex flex-col gap-2.5 text-[13px]">
+            {[
+              ["Payment mode", "Razorpay Test Mode"],
+              ["Target", "Demo Merchant only"],
+              [
+                "Required suite",
+                `${breakdown.length === 0 ? "4" : breakdown.length} mandatory P0 scenarios`,
+              ],
+            ].map(([term, value]) => (
+              <div
+                key={term}
+                className="flex items-baseline justify-between gap-3"
+              >
+                <dt className="shrink-0 text-muted-foreground">{term}</dt>
+                <dd className="min-w-0 text-right font-medium text-foreground">
+                  {value}
+                </dd>
+              </div>
+            ))}
+          </dl>
+          <p className="border-t border-border pt-3 text-[12px] leading-5 text-muted-foreground">
+            PayChaos never sends chaos traffic to an external target and never
+            touches Live Mode.
+          </p>
+        </Card>
       </header>
 
       {model === null ? (

@@ -55,10 +55,17 @@ export function AppShell({ children }: { readonly children: React.ReactNode }) {
             Payment Reliability Console
           </span>
 
+          {/* A live status dot plus the words. It must read as a deliberate,
+              trustworthy statement of which environment this is bound to —
+              never as decoration, and never small enough to miss. */}
           <span
-            className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-md border border-blue-600/30 bg-blue-50 px-2.5 py-1 font-mono text-[11px] font-semibold uppercase tracking-wider text-blue-700 dark:border-blue-400/30 dark:bg-blue-950/40 dark:text-blue-300"
+            className="ml-auto inline-flex shrink-0 items-center gap-2 rounded-[10px] border border-[#bfdbfe] bg-[#eff6ff] px-2.5 py-1.5 font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-[#1d4ed8] dark:border-blue-400/30 dark:bg-blue-950/40 dark:text-blue-300"
             data-testid="env-badge"
           >
+            <span
+              aria-hidden="true"
+              className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#2563eb]"
+            />
             RAZORPAY TEST MODE
           </span>
         </header>

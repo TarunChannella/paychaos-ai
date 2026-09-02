@@ -124,9 +124,11 @@ export function AppNav() {
                     "shadow-[inset_0_1px_0_0_rgb(255_255_255/0.65)]",
                   ].join(" ")
                 : [
-                    "border-transparent text-sidebar-foreground/80",
-                    "hover:border-sidebar-border hover:bg-sidebar-accent/70",
-                    "hover:text-sidebar-foreground",
+                    // #475569 inactive, #172033 on hover: readable at rest,
+                    // and clearly reactive without shouting.
+                    "border-transparent text-[#475569]",
+                    "hover:border-transparent hover:bg-sidebar-accent",
+                    "hover:text-[#172033]",
                   ].join(" "),
             ].join(" ")}
           >
@@ -140,7 +142,7 @@ export function AppNav() {
                 "h-[18px] w-[18px] shrink-0 transition-colors",
                 active
                   ? "text-sidebar-accent-foreground"
-                  : "text-sidebar-muted group-hover:text-sidebar-foreground",
+                  : "text-[#64748b] group-hover:text-[#172033]",
               ].join(" ")}
             >
               {item.icon}

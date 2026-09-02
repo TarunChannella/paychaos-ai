@@ -17,6 +17,20 @@
   --color-sidebar-card-border: var(--sidebar-card-border);
   --color-sidebar-active: var(--sidebar-active);
   --color-sidebar-active-border: var(--sidebar-active-border);
+  --color-primary-hover: var(--primary-hover);
+  --color-teal: var(--teal);
+  --color-teal-hover: var(--teal-hover);
+  --color-soft-blue: var(--soft-blue);
+  --color-subtle-foreground: var(--subtle-foreground);
+  --color-border-strong: var(--border-strong);
+  --color-status-pass: var(--status-pass);
+  --color-status-fail: var(--status-fail);
+  --color-status-warn: var(--status-warn);
+  --color-status-info: var(--status-info);
+  --color-provenance-real: var(--provenance-real);
+  --color-provenance-replay: var(--provenance-replay);
+  --color-provenance-simulation: var(--provenance-simulation);
+  --color-ring-track: var(--ring-track);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-accent: var(--sidebar-accent);
   --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
@@ -51,6 +65,99 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+  /* ==========================================================================
+   * PayChaos AI — the product palette.
+   *
+   * ONE SOURCE, EVERY SURFACE. These are the shadcn semantic tokens the whole
+   * application already consumes, so setting them here re-skins every page,
+   * card, table and badge at once instead of each screen carrying its own
+   * colours. That is what keeps the product looking designed rather than
+   * assembled.
+   *
+   * Cool, near-white, low-chroma: an engineering console should recede and
+   * let evidence carry the screen. Saturation is reserved for status, where
+   * it means something.
+   * ====================================================================== */
+
+  /* --- Surfaces --------------------------------------------------------- */
+  --background: #f7fafc;
+  --foreground: #172033;
+  --card: rgb(255 255 255 / 0.88);
+  --card-foreground: #172033;
+  --popover: #ffffff;
+  --popover-foreground: #172033;
+
+  /* --- Brand ------------------------------------------------------------ */
+  --primary: #2563eb;
+  --primary-foreground: #ffffff;
+  --primary-hover: #1d4ed8;
+  --teal: #22819a;
+  --teal-hover: #1d7187;
+  --soft-blue: #90c2e7;
+
+  /* --- Neutrals --------------------------------------------------------- */
+  --secondary: #eff6fb;
+  --secondary-foreground: #172033;
+  --muted: #eff6fb;
+  --muted-foreground: #64748b;
+  --subtle-foreground: #94a3b8;
+  --accent: rgb(37 99 235 / 0.09);
+  --accent-foreground: #2563eb;
+  --destructive: #dc2626;
+  --border: rgb(148 163 184 / 0.22);
+  --border-strong: #cbd5e1;
+  --input: #cbd5e1;
+  --ring: #2563eb;
+
+  /* --- Status: colour is never the only signal (see components/ui/status) */
+  --status-pass: #16a34a;
+  --status-pass-bg: #f0fdf4;
+  --status-pass-border: #bbf7d0;
+  --status-fail: #dc2626;
+  --status-fail-bg: #fef2f2;
+  --status-fail-border: #fecaca;
+  --status-warn: #d97706;
+  --status-warn-bg: #fffbeb;
+  --status-warn-border: #fde68a;
+  --status-info: #2563eb;
+  --status-info-bg: #eff6ff;
+  --status-info-border: #bfdbfe;
+
+  /* --- Provenance: a truth-source is not a verdict, so it never shares a
+   * verdict's colour. Replay and simulation are deliberately violet, real
+   * Razorpay evidence deliberately its own blue. */
+  --provenance-real: #0284c7;
+  --provenance-replay: #7c3aed;
+  --provenance-replay-bg: #f5f3ff;
+  --provenance-simulation: #9333ea;
+
+  /* --- Chart / ring ----------------------------------------------------- */
+  --chart-1: #2563eb;
+  --chart-2: #22819a;
+  --chart-3: #90c2e7;
+  --chart-4: #64748b;
+  --chart-5: #cbd5e1;
+  --ring-track: #e2e8f0;
+
+  --radius: 0.875rem;
+
+  /* --- Sidebar: glass, and the only heavily glassed surface -------------- */
+  --sidebar: rgb(239 246 251 / 0.86);
+  --sidebar-foreground: #172033;
+  --sidebar-muted: #64748b;
+  --sidebar-primary: #2563eb;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: rgb(37 99 235 / 0.05);
+  --sidebar-accent-foreground: #2563eb;
+  --sidebar-border: rgb(148 163 184 / 0.22);
+  --sidebar-ring: #2563eb;
+  --sidebar-card: rgb(255 255 255 / 0.62);
+  --sidebar-card-border: rgb(148 163 184 / 0.24);
+  --sidebar-active: rgb(37 99 235 / 0.09);
+  --sidebar-active-border: rgb(37 99 235 / 0.22);
 }
 
 :root {
@@ -165,6 +272,32 @@
  * commonly copied from Inter are not Geist's, and declaring features a font
  * does not ship would be decoration that silently does nothing.
  * ------------------------------------------------------------------------ */
+
+/* ---------------------------------------------------------------------------
+ * The application ground.
+ *
+ * A barely-there cool wash from #F7FAFC toward #EFF6FB. It is fixed so it does
+ * not slide under long evidence pages, and it is deliberately almost invisible:
+ * a dashboard background that announces itself competes with the data on it.
+ * ------------------------------------------------------------------------ */
+body {
+  background-color: var(--background);
+  background-image: linear-gradient(180deg, #f7fafc 0%, #eff6fb 100%);
+  background-attachment: fixed;
+}
+
+/* No page may scroll sideways. Wide tables and code scroll INSIDE their own
+ * container instead — see the `.scroll-x` helper below. */
+html,
+body {
+  overflow-x: hidden;
+}
+
+/* The sanctioned local horizontal scroll, used by wide technical tables. */
+.scroll-x {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
 
 /* Any number the operator compares vertically. */
 .tabular-nums,

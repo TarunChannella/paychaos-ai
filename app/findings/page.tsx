@@ -105,59 +105,89 @@ export default async function FindingsPage() {
             }))}
           />
 
-          <div className="overflow-x-auto rounded-xl border border-border bg-card shadow-[0_1px_2px_0_rgb(0_0_0/0.03)]">
-            <table className="w-full min-w-[52rem] border-collapse text-sm">
-              <thead>
-                <tr className="border-b border-border bg-muted/50 text-left">
-                  {[
-                    "Severity",
-                    "Finding",
-                    "Scenario",
-                    "Invariant",
-                    "Status",
-                    "Regression",
-                  ].map((heading) => (
-                    <th
-                      key={heading}
-                      scope="col"
-                      className="px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground"
-                    >
-                      {heading}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr
-                    key={row.findingId}
-                    className="border-b border-border align-top last:border-0 hover:bg-accent/30"
-                    data-testid={`finding-row-${row.findingId}`}
-                  >
-                    <td className="px-4 py-3">
-                      <SeverityBadge severity={row.severity} />
-                    </td>
-                    <td className="px-4 py-3">
-                      <Link
-                        href={`/chaos/findings/invariant-results/${row.invariantResultId}`}
-                        className="text-sm font-medium text-card-foreground underline-offset-4 hover:underline"
-                      >
-                        {row.title}
-                      </Link>
-                      <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">
-                        Detected {row.detectedAt}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
-                      {row.scenarioId ?? "—"}
-                    </td>
-                    <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
-                      {row.invariantId}
-                    </td>
-                    <td className="px-4 py-3">
+          {/*
+            ONE LIST, TWO SHAPES. This is deliberately not a <table> with a
+            second card layout beside it: duplicating rows would put every
+            `finding-row-*` id in the DOM twice and squeeze a six-column table
+            into 375px. The same <li> is a stacked card on a phone and a
+            grid row on a laptop, so a finding is never unreadable and never
+            rendered twice.
+          */}
+          <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-[0_8px_30px_rgb(15_23_42/0.055)]">
+            {/* Column headings belong to the desktop grid only. */}
+            <div
+              aria-hidden="true"
+              className="hidden border-b border-border bg-muted/50 px-4 py-2.5 md:grid md:grid-cols-[7rem_minmax(0,1fr)_6rem_7rem_8rem_9rem] md:gap-4"
+            >
+              {[
+                "Severity",
+                "Finding",
+                "Scenario",
+                "Invariant",
+                "Status",
+                "Regression",
+              ].map((heading) => (
+                <span
+                  key={heading}
+                  className="text-[11px] font-semibold uppercase tracking-[0.09em] text-muted-foreground"
+                >
+                  {heading}
+                </span>
+              ))}
+            </div>
+
+            <ul className="divide-y divide-border">
+              {rows.map((row) => (
+                <li
+                  key={row.findingId}
+                  className="px-4 py-4 transition-colors hover:bg-accent/40 md:grid md:grid-cols-[7rem_minmax(0,1fr)_6rem_7rem_8rem_9rem] md:items-start md:gap-4 md:py-3"
+                  data-testid={`finding-row-${row.findingId}`}
+                >
+                  {/* On mobile the two badges sit together above the title,
+                      which is how someone triaging actually reads a list. */}
+                  <div className="flex flex-wrap items-center gap-2 md:block">
+                    <SeverityBadge severity={row.severity} />
+                    <span className="md:hidden">
                       <LifecycleBadge status={row.status} />
-                    </td>
-                    <td className="px-4 py-3">
+                    </span>
+                  </div>
+
+                  <div className="mt-2 min-w-0 md:mt-0">
+                    <Link
+                      href={`/chaos/findings/invariant-results/${row.invariantResultId}`}
+                      className="text-[14.5px] font-medium leading-5 text-card-foreground underline-offset-4 hover:underline"
+                    >
+                      {row.title}
+                    </Link>
+                    <div className="mt-1 font-mono text-[11px] text-subtle-foreground">
+                      Detected {row.detectedAt}
+                    </div>
+                  </div>
+
+                  {/* Below the title on mobile, these read as labelled facts
+                      rather than as orphaned table cells. */}
+                  <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 md:contents">
+                    <span className="font-mono text-xs text-muted-foreground">
+                      <span className="text-subtle-foreground md:hidden">
+                        Scenario{" "}
+                      </span>
+                      {row.scenarioId ?? "—"}
+                    </span>
+                    <span className="font-mono text-xs text-muted-foreground">
+                      <span className="text-subtle-foreground md:hidden">
+                        Invariant{" "}
+                      </span>
+                      {row.invariantId}
+                    </span>
+
+                    <span className="hidden md:block">
+                      <LifecycleBadge status={row.status} />
+                    </span>
+
+                    <span className="flex items-center gap-1.5">
+                      <span className="text-[11px] text-subtle-foreground md:hidden">
+                        Regression
+                      </span>
                       {row.regressionStatus === null ? (
                         <span className="text-xs text-muted-foreground">
                           Not re-tested
@@ -165,11 +195,11 @@ export default async function FindingsPage() {
                       ) : (
                         <LifecycleBadge status={row.regressionStatus} />
                       )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ul>
           </div>
         </>
       )}

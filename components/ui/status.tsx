@@ -29,10 +29,10 @@ type Tone = "pass" | "fail" | "warn" | "info" | "neutral";
 
 /** Semantic colour, applied identically wherever a tone appears. */
 const TONE: Record<Tone, string> = {
-  pass: "border-emerald-600/30 bg-emerald-50 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-950/40 dark:text-emerald-300",
-  fail: "border-red-600/30 bg-red-50 text-red-700 dark:border-red-400/30 dark:bg-red-950/40 dark:text-red-300",
-  warn: "border-amber-600/30 bg-amber-50 text-amber-800 dark:border-amber-400/30 dark:bg-amber-950/40 dark:text-amber-300",
-  info: "border-blue-600/30 bg-blue-50 text-blue-700 dark:border-blue-400/30 dark:bg-blue-950/40 dark:text-blue-300",
+  pass: "border-green-300 bg-green-50 text-green-700 dark:border-green-400/30 dark:bg-green-950/40 dark:text-green-300",
+  fail: "border-red-200 bg-red-50 text-red-700 dark:border-red-400/30 dark:bg-red-950/40 dark:text-red-300",
+  warn: "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-400/30 dark:bg-amber-950/40 dark:text-amber-300",
+  info: "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-400/30 dark:bg-blue-950/40 dark:text-blue-300",
   neutral: "border-border bg-muted text-muted-foreground dark:bg-muted/50",
 };
 

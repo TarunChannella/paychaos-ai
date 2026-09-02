@@ -25,8 +25,11 @@ export function PageShell({
   return (
     <div
       className={cn(
-        "mx-auto flex w-full flex-col gap-10 px-6 py-10 md:px-8",
-        wide ? "max-w-6xl" : "max-w-4xl",
+        // Gutters follow the spacing rhythm: 16 / 24 / 32 as the viewport
+        // grows. Content stops at 1440px so an ultra-wide monitor does not
+        // stretch a reading column to an unreadable line length.
+        "mx-auto flex w-full flex-col gap-8 px-4 py-8 sm:px-6 md:gap-10 md:py-10 xl:px-8",
+        wide ? "max-w-[1440px]" : "max-w-4xl",
         className,
       )}
     >
@@ -55,7 +58,7 @@ export function PageHeader({
             {eyebrow}
           </span>
         )}
-        <h1 className="text-[26px] font-semibold leading-9 tracking-[-0.02em] text-foreground">
+        <h1 className="text-[26px] font-semibold leading-9 tracking-[-0.02em] text-foreground sm:text-[30px] sm:leading-10">
           {title}
         </h1>
         {lede !== undefined && (
@@ -140,11 +143,13 @@ export function Card({
   return (
     <div
       className={cn(
-        "rounded-xl border p-5 shadow-[0_1px_2px_0_rgb(0_0_0/0.03)]",
+        // 16px radius and a soft, cool shadow — present enough to separate a
+        // card from the ground, far short of making every container float.
+        "rounded-2xl border p-5 shadow-[0_8px_30px_rgb(15_23_42/0.055)]",
         tone === "danger"
           ? "border-destructive/40 bg-card"
           : tone === "muted"
-            ? "border-border bg-muted/30 shadow-none"
+            ? "border-border bg-muted/40 shadow-none"
             : "border-border bg-card",
         className,
       )}
@@ -170,10 +175,12 @@ export function actionClassName(
   className?: string,
 ): string {
   return cn(
-    "inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
+    // 10px radius, not a pill: this is an engineering console, and a pill
+    // reads as marketing. Touch target stays comfortable on a phone.
+    "inline-flex min-h-[40px] items-center justify-center gap-2 rounded-[10px] px-4 py-2 text-sm font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50",
     variant === "primary"
-      ? "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90"
-      : "border border-border bg-background text-foreground hover:bg-accent hover:text-accent-foreground",
+      ? "bg-primary text-primary-foreground shadow-sm hover:bg-[var(--primary-hover)]"
+      : "border border-border bg-card text-foreground hover:border-border-strong hover:bg-accent hover:text-accent-foreground",
     className,
   );
 }
