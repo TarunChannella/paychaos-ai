@@ -21,9 +21,26 @@
  *
  * The fix distinguishes the two phases the operator is actually in:
  * "Verifying…" while the token is being checked, then "Signing in…" once it
- * has been ACCEPTED and navigation is under way. `router.replace` is used so
- * the browser Back button does not return to a login screen the operator has
- * already passed.
+ * has been ACCEPTED and navigation is under way.
+ *
+ * WHY A FULL DOCUMENT NAVIGATION, NOT `router.replace`. A soft App Router
+ * navigation can be served from the client Router Cache — and by the time an
+ * operator reaches this screen that cache usually already holds the MIDDLEWARE
+ * REDIRECT for the very path they are trying to reach, captured while they
+ * were still unauthenticated. Replaying that cached result after login sends
+ * them straight back through the access flow even though the session cookie
+ * was set correctly. Pairing it with an un-awaited `router.refresh()` made the
+ * outcome a race, which is why the failure was intermittent rather than total.
+ *
+ * `window.location.replace` forces a real HTTP request. The browser attaches
+ * the fresh `HttpOnly` cookie, middleware validates it server-side, and the
+ * whole client cache is rebuilt from an authenticated response. `replace`
+ * rather than `assign` keeps `/access` out of history, so Back does not return
+ * to a login screen the operator has already passed.
+ *
+ * The open-redirect guard in `resolveNextPath()` is what makes this safe: only
+ * an internal path is ever navigated to, so a full navigation cannot be
+ * pointed at another origin.
  *
  * DOUBLE SUBMIT IS STILL IMPOSSIBLE. The form is disabled from the first
  * submit until either an error is shown or navigation completes, and an
@@ -31,7 +48,6 @@
  * the disabled attribute.
  */
 import { type FormEvent, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 
 const GENERIC_ERROR_MESSAGE =
   "Could not verify the access token. Please try again.";
@@ -49,7 +65,6 @@ function resolveNextPath(): string {
 }
 
 export default function AccessLoginPage() {
-  const router = useRouter();
   const [token, setToken] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>("idle");
@@ -84,8 +99,11 @@ export default function AccessLoginPage() {
       // operator IS authenticated. Say so, rather than continuing to claim
       // we are still verifying them.
       setPhase("redirecting");
-      router.replace(resolveNextPath());
-      router.refresh();
+
+      // Full document navigation — see the note above. `inFlight` is
+      // deliberately NOT cleared: the page is being torn down, and releasing
+      // the guard here would only allow a second login during teardown.
+      window.location.replace(resolveNextPath());
     } catch {
       setError(GENERIC_ERROR_MESSAGE);
       setPhase("idle");
