@@ -36,6 +36,39 @@ import {
   verifyCheckoutAndPersistPayment,
 } from "@/lib/demo-merchant/service";
 import { logEvent } from "@/lib/security/logger";
+import {
+  checkInteractiveAccess,
+  INTERACTIVE_ACCESS_LOCKED_MESSAGE,
+  INTERACTIVE_ACCESS_UNAVAILABLE_MESSAGE,
+} from "@/lib/access/guard";
+
+/**
+ * Phase 5 — every action below is a STATE CHANGE, so every one of them is
+ * authorized here rather than by the page being hard to reach.
+ *
+ * The Demo Merchant page is now public so a reviewer can read persisted
+ * evidence without a code. Next.js routes a Server Action POST through that
+ * same public URL, so without this check opening the page would also have
+ * opened order creation, Razorpay order creation, Checkout preparation and
+ * Checkout verification to anyone who found it. Hiding a button is not a
+ * control; this is.
+ */
+async function denyIfLocked(): Promise<{ readonly error: string } | null> {
+  const decision = await checkInteractiveAccess();
+  if (decision === "granted") return null;
+
+  logEvent("demo_merchant_action_denied", {
+    outcome:
+      decision === "misconfigured" ? "MISCONFIGURED" : "NO_VALID_SESSION",
+  });
+
+  return {
+    error:
+      decision === "misconfigured"
+        ? INTERACTIVE_ACCESS_UNAVAILABLE_MESSAGE
+        : INTERACTIVE_ACCESS_LOCKED_MESSAGE,
+  };
+}
 
 export interface CreateDemoMerchantOrderActionResult {
   readonly ok: boolean;
@@ -46,6 +79,9 @@ const SAFE_CREATE_ERROR_MESSAGE =
   "Could not create the test order. Please try again.";
 
 export async function createDemoMerchantOrderAction(): Promise<CreateDemoMerchantOrderActionResult> {
+  const denied = await denyIfLocked();
+  if (denied !== null) return { ok: false, error: denied.error };
+
   try {
     await createDemoMerchantOrder();
     revalidatePath("/demo-merchant");
@@ -82,6 +118,9 @@ const SAFE_RAZORPAY_ORDER_ERROR_MESSAGE =
 export async function createRazorpayOrderAction(
   orderId: string,
 ): Promise<CreateRazorpayOrderActionResult> {
+  const denied = await denyIfLocked();
+  if (denied !== null) return { ok: false, error: denied.error };
+
   if (typeof orderId !== "string" || orderId.trim().length === 0) {
     return { ok: false, error: SAFE_RAZORPAY_ORDER_ERROR_MESSAGE };
   }
@@ -144,6 +183,9 @@ const SAFE_CHECKOUT_PREPARE_ERROR_MESSAGE =
 export async function prepareCheckoutAction(
   paymentAttemptId: string,
 ): Promise<PrepareCheckoutActionResult> {
+  const denied = await denyIfLocked();
+  if (denied !== null) return { ok: false, error: denied.error };
+
   if (
     typeof paymentAttemptId !== "string" ||
     paymentAttemptId.trim().length === 0
@@ -245,6 +287,9 @@ const SAFE_C07_INVALID_CONFIRMATION_MESSAGE =
 export async function verifyCheckoutAction(
   input: VerifyCheckoutActionInput,
 ): Promise<VerifyCheckoutActionResult> {
+  const denied = await denyIfLocked();
+  if (denied !== null) return { ok: false, error: denied.error };
+
   const suppression = await checkAndSuppressC07ClientConfirmation({
     paymentAttemptId: input.paymentAttemptId,
     razorpayPaymentId: input.razorpayPaymentId,

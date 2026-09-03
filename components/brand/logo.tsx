@@ -14,10 +14,16 @@ import { cn } from "@/lib/utils";
  * ORIGINAL AND NON-DERIVATIVE. No Razorpay glyph, colour or letterform is
  * referenced. It is a plain geometric line mark that belongs to this project.
  *
- * BUILT FOR SMALL SIZES. Two strokes, no gradient, no fill detail, generous
- * stroke weight — it stays legible at 16px in a browser tab and at 24px in
- * the sidebar. It inherits `currentColor`, so it works on any surface and in
- * either theme without a second asset.
+ * BUILT FOR SMALL SIZES. A squircle tile, one gradient, one sheen and two
+ * strokes — nothing that turns to mush at 16px in a browser tab. The
+ * dimensionality is a single soft highlight and a hairline inner edge rather
+ * than a bevel or a drop shadow, both of which smear when scaled down.
+ *
+ * IT CARRIES ITS OWN COLOUR. Unlike the first version this does not inherit
+ * `currentColor`: a product mark should look the same everywhere, and the
+ * blue-to-teal face is the identity. It is an inline SVG, so there is no
+ * asset to fetch, nothing to go stale on a CDN and nothing to break on
+ * Vercel.
  */
 export function LogoMark({
   className,
@@ -26,22 +32,73 @@ export function LogoMark({
   readonly className?: string;
   readonly title?: string;
 }) {
+  // Ids must be unique per instance if this ever renders twice on one page.
   return (
     <svg
-      viewBox="0 0 24 24"
+      viewBox="0 0 32 32"
       role="img"
       aria-label={title}
-      className={cn("h-6 w-6", className)}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
+      className={cn("h-8 w-8", className)}
     >
-      {/* The signal: steady, then the injected break. */}
-      <path d="M2 15h3l2.5-6 2 4" />
-      {/* Recovery, resolving upward into the verification tick. */}
-      <path d="M13 17l3.5 3.5L22 9" />
+      <defs>
+        <linearGradient id="pc-mark-face" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#3B82F6" />
+          <stop offset="55%" stopColor="#2563EB" />
+          <stop offset="100%" stopColor="#22819A" />
+        </linearGradient>
+        {/* The highlight is what gives the tile its slight dimensionality —
+            a single soft sheen across the top-left, not a glossy bevel. */}
+        <linearGradient id="pc-mark-sheen" x1="0" y1="0" x2="0.4" y2="1">
+          <stop offset="0%" stopColor="#ffffff" stopOpacity="0.42" />
+          <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+
+      {/* The tile. A squircle rather than a circle so the mark still reads as
+          a product icon at 16px in a browser tab. */}
+      <rect
+        x="0"
+        y="0"
+        width="32"
+        height="32"
+        rx="9"
+        fill="url(#pc-mark-face)"
+      />
+      <rect
+        x="0"
+        y="0"
+        width="32"
+        height="32"
+        rx="9"
+        fill="url(#pc-mark-sheen)"
+      />
+      {/* A hairline inner edge: reads as depth without a drop shadow, which
+          would smear at small sizes. */}
+      <rect
+        x="0.5"
+        y="0.5"
+        width="31"
+        height="31"
+        rx="8.5"
+        fill="none"
+        stroke="#ffffff"
+        strokeOpacity="0.22"
+      />
+
+      {/* THE IDEA, unchanged from the original mark: a payment signal that is
+          deliberately BROKEN, then recovers into a verification tick. The gap
+          is drawn, not implied — an unbroken line would describe monitoring,
+          not chaos engineering. */}
+      <g
+        fill="none"
+        stroke="#ffffff"
+        strokeWidth="2.1"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M6 19.5h2.6l2.2-5.2 1.7 3.4" />
+        <path d="M15.4 21l3 3 7.2-11" strokeOpacity="0.96" />
+      </g>
     </svg>
   );
 }
@@ -78,20 +135,15 @@ export function LogoLockup({
         className,
       )}
     >
-      <span
+      {/* The mark carries its own tile now, so it is rendered directly. A
+          wrapper with a background would draw a second tile behind it. The
+          soft shadow is the only dimensionality added here. */}
+      <LogoMark
         className={cn(
-          "flex shrink-0 items-center justify-center bg-foreground text-background",
-          large
-            ? "h-8 w-8 rounded-lg md:h-9 md:w-9 md:rounded-xl"
-            : "h-8 w-8 rounded-lg",
+          "shrink-0 rounded-[9px] shadow-[0_2px_8px_rgb(37_99_235/0.28)]",
+          large ? "h-8 w-8 md:h-[38px] md:w-[38px]" : "h-8 w-8",
         )}
-      >
-        <LogoMark
-          className={
-            large ? "h-[18px] w-[18px] md:h-5 md:w-5" : "h-[18px] w-[18px]"
-          }
-        />
-      </span>
+      />
       <span className="flex min-w-0 flex-col leading-none">
         <span
           className={cn(
@@ -99,7 +151,8 @@ export function LogoLockup({
             large ? "text-[15px] md:text-[17px]" : "text-[15px]",
           )}
         >
-          PayChaos<span className="text-muted-foreground"> AI</span>
+          PayChaos
+          <span className="ml-1 text-[var(--primary)]">AI</span>
         </span>
         {subtitle &&
           (large ? (

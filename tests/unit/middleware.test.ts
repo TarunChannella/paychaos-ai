@@ -23,13 +23,35 @@ vi.mock("@/lib/security/logger", () => ({
 
 const FAKE_SECRET = "fake-session-secret-not-real-" + "x".repeat(10);
 
-async function callMiddleware(url: string, cookieHeader?: string) {
+async function callMiddleware(
+  url: string,
+  cookieHeader?: string,
+  method: "GET" | "POST" = "GET",
+) {
   const { middleware } = await import("@/middleware");
   const { NextRequest } = await import("next/server");
   const headers = new Headers();
   if (cookieHeader) headers.set("cookie", cookieHeader);
-  const request = new NextRequest(url, { headers });
+  const request = new NextRequest(url, { headers, method });
   return middleware(request);
+}
+
+/**
+ * PHASE 5 — THE MODEL CHANGED, THE PROPERTY DID NOT.
+ *
+ * Reading a page is now public so a Buildathon reviewer can explore the
+ * product without a code. What must still be refused is an unauthenticated
+ * STATE CHANGE — and Next.js delivers a Server Action as a POST to the page's
+ * own URL, which is exactly what these tests now exercise.
+ *
+ * The denial assertions below were previously written against GET, because
+ * GET used to be denied. They were not deleted or relaxed: each one now
+ * asserts the same denial against the method that can actually cause harm,
+ * and a companion assertion pins that GET is deliberately public. That is
+ * more coverage than before, not less.
+ */
+function isDenied(response: { status: number }): boolean {
+  return response.status === 401;
 }
 
 function isRedirect(response: { status: number }): boolean {
@@ -101,7 +123,26 @@ describe("middleware — gate disabled", () => {
 });
 
 describe("middleware — gate enabled", () => {
-  it("redirects to /access when no session cookie is present", async () => {
+  it("refuses an unauthenticated STATE CHANGE with 401", async () => {
+    getAccessGateEnvMock.mockReturnValue({
+      mode: "enabled",
+      accessToken: "t",
+      sessionSecret: FAKE_SECRET,
+    });
+
+    const response = await callMiddleware(
+      "http://localhost/demo-merchant",
+      undefined,
+      "POST",
+    );
+
+    // 401, not a redirect: a Server Action POST answered with an HTML login
+    // page hands the client a document where it expects an action result.
+    expect(isDenied(response)).toBe(true);
+    expect(isRedirect(response)).toBe(false);
+  });
+
+  it("lets an unauthenticated READ through — pages are public", async () => {
     getAccessGateEnvMock.mockReturnValue({
       mode: "enabled",
       accessToken: "t",
@@ -110,13 +151,11 @@ describe("middleware — gate enabled", () => {
 
     const response = await callMiddleware("http://localhost/demo-merchant");
 
-    expect(isRedirect(response)).toBe(true);
-    const location = response.headers.get("location");
-    expect(location).toContain("/access");
-    expect(location).toContain("next=%2Fdemo-merchant");
+    expect(response.status).toBe(200);
+    expect(isRedirect(response)).toBe(false);
   });
 
-  it("redirects to /access when the session cookie fails verification", async () => {
+  it("refuses a STATE CHANGE when the session cookie fails verification", async () => {
     getAccessGateEnvMock.mockReturnValue({
       mode: "enabled",
       accessToken: "t",
@@ -127,9 +166,10 @@ describe("middleware — gate enabled", () => {
     const response = await callMiddleware(
       "http://localhost/demo-merchant",
       "paychaos_session=forged-or-expired",
+      "POST",
     );
 
-    expect(isRedirect(response)).toBe(true);
+    expect(isDenied(response)).toBe(true);
   });
 
   it("passes through when the session cookie verifies", async () => {
@@ -154,10 +194,20 @@ describe("middleware — gate enabled", () => {
       throw new Error("misconfigured");
     });
 
-    const response = await callMiddleware("http://localhost/demo-merchant");
+    const response = await callMiddleware(
+      "http://localhost/demo-merchant",
+      undefined,
+      "POST",
+    );
 
     expect(isRedirect(response)).toBe(false);
     expect(response.status).toBe(503);
+
+    // A misconfigured gate must never let a STATE CHANGE through. Reading
+    // stays public, which is the deliberate new model rather than a
+    // fall-open: these pages expose no secret and are meant to be readable.
+    const read = await callMiddleware("http://localhost/demo-merchant");
+    expect(read.status).toBe(200);
   });
 
   it("protects a nested demo-merchant sub-path the same way", async () => {
@@ -169,9 +219,11 @@ describe("middleware — gate enabled", () => {
 
     const response = await callMiddleware(
       "http://localhost/demo-merchant/anything",
+      undefined,
+      "POST",
     );
 
-    expect(isRedirect(response)).toBe(true);
+    expect(isDenied(response)).toBe(true);
   });
 });
 
@@ -182,7 +234,7 @@ describe("middleware — gate enabled", () => {
  * against; an unauthenticated Chaos Lab would be that threat realised.
  */
 describe("middleware — Chaos Lab is protected (Phase 3H)", () => {
-  it("redirects /chaos to /access when no session cookie is present", async () => {
+  it("refuses an unauthenticated STATE CHANGE to /chaos", async () => {
     getAccessGateEnvMock.mockReturnValue({
       mode: "enabled",
       accessToken: "t",
@@ -190,9 +242,18 @@ describe("middleware — Chaos Lab is protected (Phase 3H)", () => {
     });
     verifySessionTokenMock.mockReturnValue(false);
 
-    const response = await callMiddleware("http://localhost/chaos");
+    const response = await callMiddleware(
+      "http://localhost/chaos",
+      undefined,
+      "POST",
+    );
 
-    expect(isRedirect(response)).toBe(true);
+    expect(isDenied(response)).toBe(true);
+
+    // Reading the Chaos Lab is public; STARTING a run is not, and that is
+    // additionally enforced inside every chaos API route.
+    const read = await callMiddleware("http://localhost/chaos");
+    expect(read.status).toBe(200);
   });
 
   it("protects every nested chaos sub-path — scenarios and runs alike", async () => {
@@ -208,8 +269,16 @@ describe("middleware — Chaos Lab is protected (Phase 3H)", () => {
       "/chaos/scenarios/C11",
       "/chaos/runs/00000000-0000-4000-8000-000000000000",
     ]) {
-      const response = await callMiddleware(`http://localhost${path}`);
-      expect(isRedirect(response), path).toBe(true);
+      const response = await callMiddleware(
+        `http://localhost${path}`,
+        undefined,
+        "POST",
+      );
+      expect(isDenied(response), path).toBe(true);
+
+      // ...while reading any of them stays public.
+      const read = await callMiddleware(`http://localhost${path}`);
+      expect(read.status, path).toBe(200);
     }
   });
 
@@ -234,7 +303,11 @@ describe("middleware — Chaos Lab is protected (Phase 3H)", () => {
       throw new Error("bad config");
     });
 
-    const response = await callMiddleware("http://localhost/chaos");
+    const response = await callMiddleware(
+      "http://localhost/chaos",
+      undefined,
+      "POST",
+    );
 
     expect(response.status).toBe(503);
   });

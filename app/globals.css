@@ -145,19 +145,22 @@
   --radius: 0.875rem;
 
   /* --- Sidebar: glass, and the only heavily glassed surface -------------- */
-  --sidebar: rgb(239 246 251 / 0.86);
+  /* Phase 5: raised from 0.86. The rail was reading as part of the page
+   * rather than as its own surface. This is a deliberately small step —
+   * enough to separate it, far short of a boxed or heavy panel. */
+  --sidebar: rgb(235 243 250 / 0.94);
   --sidebar-foreground: #172033;
-  --sidebar-muted: #64748b;
+  --sidebar-muted: #5b6b80;
   --sidebar-primary: #2563eb;
   --sidebar-primary-foreground: #ffffff;
   --sidebar-accent: rgb(37 99 235 / 0.05);
   --sidebar-accent-foreground: #2563eb;
-  --sidebar-border: rgb(148 163 184 / 0.22);
+  --sidebar-border: rgb(148 163 184 / 0.34);
   --sidebar-ring: #2563eb;
   --sidebar-card: rgb(255 255 255 / 0.62);
   --sidebar-card-border: rgb(148 163 184 / 0.24);
-  --sidebar-active: rgb(37 99 235 / 0.09);
-  --sidebar-active-border: rgb(37 99 235 / 0.22);
+  --sidebar-active: rgb(37 99 235 / 0.12);
+  --sidebar-active-border: rgb(37 99 235 / 0.3);
 }
 
 :root {

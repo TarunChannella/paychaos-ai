@@ -3,7 +3,13 @@
  * enforcement (docs/SECURITY.md Section 17, docs/ARCHITECTURE.md ADR-A16,
  * docs/PHASE_PLAN.md Section 6.4 item 2/6.8 item 1).
  *
- * Protects the operator surfaces: the Demo Merchant (`/demo-merchant` and
+ * PHASE 5 UPDATE: this no longer blocks page VIEWING. Read-only exploration
+ * of every product surface is public so the deployed app can be understood
+ * without a code; authorization moved to the operations that change state.
+ * The paths below are still matched, but only unsafe HTTP methods to them are
+ * challenged — which is how a Next.js Server Action POST arrives.
+ *
+ * Historically this protected the operator surfaces: the Demo Merchant (`/demo-merchant` and
  * every server action it posts to, which Next.js routes through that same
  * page URL), the Chaos Lab (`/chaos`) added in Phase 3H, which can start a
  * chaos run, and the Reliability Score page (`/reliability`) added in Phase
@@ -89,10 +95,31 @@ const SAFE_MISCONFIGURED_BODY = {
   error: "Access gate is misconfigured.",
 } as const;
 
+/**
+ * Phase 5 — READING IS PUBLIC, CHANGING IS NOT.
+ *
+ * A Buildathon reviewer must be able to open the deployed URL and understand
+ * the product without a code, so safe navigation is no longer gated. What is
+ * gated is any UNSAFE method reaching one of these page paths — which is
+ * exactly how Next.js delivers a Server Action POST, since it routes those
+ * through the page's own URL.
+ *
+ * This is defence in depth, not the control itself: every mutating Server
+ * Action independently calls `checkInteractiveAccess()` and every mutating
+ * API route runs its own session check. If this file were deleted tomorrow,
+ * no state-changing operation would become public.
+ */
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
 export function middleware(request: NextRequest): NextResponse {
   const { pathname } = request.nextUrl;
 
   if (!isProtectedPath(pathname)) {
+    return NextResponse.next();
+  }
+
+  // Reading a page is public. Only a state-changing method is challenged.
+  if (SAFE_METHODS.has(request.method)) {
     return NextResponse.next();
   }
 
@@ -135,9 +162,10 @@ export function middleware(request: NextRequest): NextResponse {
     path: pathname,
   });
 
-  const loginUrl = new URL("/access", request.url);
-  loginUrl.searchParams.set("next", pathname);
-  return NextResponse.redirect(loginUrl);
+  // A Server Action POST is not a navigation, so redirecting it to a login
+  // page would hand the client an HTML document where it expects an action
+  // result. Refuse it outright; the UI opens the unlock dialog instead.
+  return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
 }
 
 export const config = {
