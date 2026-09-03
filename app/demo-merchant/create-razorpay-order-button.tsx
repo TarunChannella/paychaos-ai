@@ -10,6 +10,11 @@
 import { useState, useTransition } from "react";
 
 import {
+  LOCKED_MESSAGE,
+  useDemoUnlock,
+} from "@/components/access/use-demo-unlock";
+
+import {
   createRazorpayOrderAction,
   type CreateRazorpayOrderActionResult,
 } from "./actions";
@@ -20,6 +25,7 @@ const DEFAULT_ERROR_MESSAGE =
 export function CreateRazorpayOrderButton({ orderId }: { orderId: string }) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const { requestUnlock, unlockDialog } = useDemoUnlock();
   const [lastResult, setLastResult] =
     useState<CreateRazorpayOrderActionResult | null>(null);
 
@@ -29,6 +35,12 @@ export function CreateRazorpayOrderButton({ orderId }: { orderId: string }) {
       const result = await createRazorpayOrderAction(orderId);
       setLastResult(result);
       if (!result.ok) {
+        // Only the server's own locked signal offers the code. A genuine
+        // failure after authorization still shows as itself.
+        if (result.error === LOCKED_MESSAGE) {
+          requestUnlock(handleClick);
+          return;
+        }
         setError(result.error ?? DEFAULT_ERROR_MESSAGE);
       }
     });
@@ -47,6 +59,7 @@ export function CreateRazorpayOrderButton({ orderId }: { orderId: string }) {
           ? "Creating Razorpay Test Order…"
           : "Create Razorpay Test Order"}
       </button>
+      {unlockDialog}
       {error && (
         <p role="alert" className="text-xs text-destructive">
           {error}

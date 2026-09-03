@@ -35,6 +35,11 @@ import { formatCheckoutWebhookConfirmationMessageFromConfirmedFlag } from "@/lib
 
 import { prepareCheckoutAction, verifyCheckoutAction } from "./actions";
 
+import {
+  LOCKED_MESSAGE,
+  useDemoUnlock,
+} from "@/components/access/use-demo-unlock";
+
 const CHECKOUT_SCRIPT_SRC = "https://checkout.razorpay.com/v1/checkout.js";
 const CHECKOUT_SCRIPT_ID = "razorpay-checkout-script";
 
@@ -131,6 +136,7 @@ export function PayWithRazorpayButton({
 }) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const { requestUnlock, unlockDialog } = useDemoUnlock();
   const [verified, setVerified] = useState<VerifiedEvidence | null>(null);
   /**
    * Phase 3D-B correction round (Blocker 2) — set only for a genuine C07
@@ -149,6 +155,12 @@ export function PayWithRazorpayButton({
     startTransition(async () => {
       const prepared = await prepareCheckoutAction(paymentAttemptId);
       if (!prepared.ok || !prepared.checkout) {
+        // Checkout preparation mutates state, so it is gated like the rest.
+        // Only the server's own locked signal offers the code.
+        if (prepared.error === LOCKED_MESSAGE) {
+          requestUnlock(handleClick);
+          return;
+        }
         setError(prepared.error ?? DEFAULT_ERROR_MESSAGE);
         return;
       }
@@ -212,6 +224,7 @@ export function PayWithRazorpayButton({
 
   return (
     <div className="mt-2 flex flex-col items-start gap-1">
+      {unlockDialog}
       <button
         type="button"
         onClick={handleClick}

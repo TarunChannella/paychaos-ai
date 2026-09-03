@@ -7,26 +7,20 @@
  */
 import { useState, useTransition } from "react";
 
-import { DemoUnlockDialog } from "@/components/access/demo-unlock-dialog";
+import {
+  LOCKED_MESSAGE,
+  useDemoUnlock,
+} from "@/components/access/use-demo-unlock";
 
 import { createDemoMerchantOrderAction } from "./actions";
 
 const DEFAULT_ERROR_MESSAGE =
   "Could not create the test order. Please try again.";
 
-/**
- * The stable message the SERVER returns when the session is not authorized.
- *
- * Matched here only to decide whether to OFFER the unlock dialog. The refusal
- * itself already happened server-side — this component cannot grant anything,
- * and a visitor who dismisses the dialog is exactly as unauthorized as before.
- */
-const LOCKED_MESSAGE = "Interactive actions require the Demo Access Code.";
-
 export function CreateOrderButton() {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const [unlockOpen, setUnlockOpen] = useState(false);
+  const { requestUnlock, unlockDialog } = useDemoUnlock();
 
   function run() {
     setError(null);
@@ -37,7 +31,7 @@ export function CreateOrderButton() {
       // The server refused because there is no authorized session. Offer the
       // code instead of leaving the visitor with an unexplained failure.
       if (result.error === LOCKED_MESSAGE) {
-        setUnlockOpen(true);
+        requestUnlock(run);
         return;
       }
       setError(result.error ?? DEFAULT_ERROR_MESSAGE);
@@ -60,16 +54,7 @@ export function CreateOrderButton() {
         </p>
       )}
 
-      {/* Unlocking continues the action the visitor originally asked for, so
-          they are not made to find the button again. */}
-      <DemoUnlockDialog
-        open={unlockOpen}
-        onClose={() => setUnlockOpen(false)}
-        onUnlocked={() => {
-          setUnlockOpen(false);
-          run();
-        }}
-      />
+      {unlockDialog}
     </div>
   );
 }

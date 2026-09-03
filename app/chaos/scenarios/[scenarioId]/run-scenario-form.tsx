@@ -17,6 +17,13 @@ import { useState, useTransition } from "react";
 
 import type { EligibilityResult } from "@/lib/chaos/eligibility-service";
 
+import {
+  isLockedStatus,
+  isUnavailableStatus,
+  UNAVAILABLE_MESSAGE,
+  useDemoUnlock,
+} from "@/components/access/use-demo-unlock";
+
 const DEFAULT_ERROR =
   "Could not start the chaos run. Please re-check prerequisites and try again.";
 
@@ -44,6 +51,7 @@ export function RunScenarioForm({
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const { requestUnlock, unlockDialog } = useDemoUnlock();
   const [selected, setSelected] = useState<string | null>(null);
 
   const needsSubject = eligibility.kind !== "NO_SOURCE_REQUIRED";
@@ -94,6 +102,18 @@ export function RunScenarioForm({
           reason?: string;
         };
 
+        // Offer the code and resume this exact run request. Checked before
+        // the BLOCKED branch because an unauthorized call never persisted a
+        // run to navigate to.
+        if (isLockedStatus(response.status)) {
+          requestUnlock(handleRun);
+          return;
+        }
+        if (isUnavailableStatus(response.status)) {
+          setError(UNAVAILABLE_MESSAGE);
+          return;
+        }
+
         // A BLOCKED run that was still persisted is a real, inspectable audit
         // record — navigate to it rather than reporting a failure.
         if (result.chaosRunId) {
@@ -112,6 +132,7 @@ export function RunScenarioForm({
       className="rounded-lg border border-border bg-card p-5"
       data-testid={`run-form-${scenarioId}${mechanism ?? ""}`}
     >
+      {unlockDialog}
       <h2 className="text-sm font-semibold text-card-foreground">
         {mechanismHeading(mechanism)}
       </h2>

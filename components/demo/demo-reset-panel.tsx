@@ -3,6 +3,13 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import {
+  isLockedStatus,
+  isUnavailableStatus,
+  UNAVAILABLE_MESSAGE,
+  useDemoUnlock,
+} from "@/components/access/use-demo-unlock";
+
 /**
  * Phase 5B — the operator control for the documented Demo Reset.
  *
@@ -39,6 +46,7 @@ export function DemoResetPanel() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [message, setMessage] = useState<string | null>(null);
   const inFlight = useRef(false);
+  const { requestUnlock, unlockDialog } = useDemoUnlock();
 
   const isArmed = confirmation.trim().toUpperCase() === CONFIRM_WORD;
   const isBusy = phase === "running";
@@ -55,6 +63,24 @@ export function DemoResetPanel() {
       // `response.ok` carries everything the operator needs, and parsing a
       // payload would only invite re-introducing per-table copy.
 
+      // Offer the code and resume the reset the operator asked for. The
+      // in-flight guard is released first, or the retry is rejected as a
+      // duplicate submit.
+      if (isLockedStatus(response.status)) {
+        inFlight.current = false;
+        setPhase("idle");
+        requestUnlock(() => void handleReset());
+        return;
+      }
+      // A misconfigured gate is not a failed reset, and must not be reported
+      // as one: nothing was attempted, so the database is untouched for a
+      // different reason than the message below describes.
+      if (isUnavailableStatus(response.status)) {
+        setPhase("error");
+        setMessage(UNAVAILABLE_MESSAGE);
+        inFlight.current = false;
+        return;
+      }
       if (!response.ok) {
         setPhase("error");
         setMessage(
@@ -87,6 +113,7 @@ export function DemoResetPanel() {
       className="flex flex-col gap-4 rounded-lg border border-destructive/40 bg-card p-5"
       data-testid="demo-reset-panel"
     >
+      {unlockDialog}
       <div>
         <h2 className="text-sm font-semibold text-card-foreground">
           Demo Reset

@@ -3,6 +3,13 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import {
+  isLockedStatus,
+  isUnavailableStatus,
+  UNAVAILABLE_MESSAGE,
+  useDemoUnlock,
+} from "@/components/access/use-demo-unlock";
+
 /**
  * Phase 4H-0 — the Diagnose Finding control.
  *
@@ -50,6 +57,7 @@ export function DiagnoseAction({
   const [message, setMessage] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const inFlight = useRef(false);
+  const { requestUnlock, unlockDialog } = useDemoUnlock();
 
   const isBusy = phase === "running";
 
@@ -70,6 +78,19 @@ export function DiagnoseAction({
           ? (body as Record<string, unknown>)
           : {};
 
+      // Offer the code and resume this exact diagnosis. The in-flight guard
+      // is released first, or the retry would be rejected as a duplicate.
+      if (isLockedStatus(response.status)) {
+        inFlight.current = false;
+        setPhase("idle");
+        requestUnlock(() => void handleDiagnose());
+        return;
+      }
+      if (isUnavailableStatus(response.status)) {
+        setFailed(true);
+        setMessage(UNAVAILABLE_MESSAGE);
+        return;
+      }
       if (!response.ok) {
         const code =
           typeof record["code"] === "string"
@@ -100,6 +121,7 @@ export function DiagnoseAction({
 
   return (
     <div className="flex flex-col gap-2" data-testid="diagnose-action">
+      {unlockDialog}
       <div className="flex flex-wrap items-center gap-3">
         <button
           type="button"

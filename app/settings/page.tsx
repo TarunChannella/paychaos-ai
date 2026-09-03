@@ -2,6 +2,7 @@ import { DemoResetPanel } from "@/components/demo/demo-reset-panel";
 import { Badge } from "@/components/ui/badge";
 import { Card, PageHeader, PageShell, Section } from "@/components/ui/page";
 import { getRazorpayEnv } from "@/lib/config/razorpay-env";
+import { checkInteractiveAccess } from "@/lib/access/guard";
 
 /**
  * Phase 5B — Settings: real configuration status and the Demo Reset control.
@@ -28,8 +29,18 @@ function readTestModeStatus(): "ENFORCED" | "UNAVAILABLE" {
   }
 }
 
-export default function SettingsPage() {
+export default async function SettingsPage() {
   const testMode = readTestModeStatus();
+
+  /**
+   * Whether THIS request already holds an authorized session.
+   *
+   * Derived server-side. The HttpOnly cookie is never read by client code —
+   * that is the whole point of it being HttpOnly — so this page resolves a
+   * single safe boolean instead. Nothing about the code, the secret or the
+   * configuration crosses the boundary.
+   */
+  const interactive = await checkInteractiveAccess();
 
   return (
     <PageShell>
@@ -50,7 +61,32 @@ export default function SettingsPage() {
           <h2 className="text-sm font-semibold text-card-foreground">
             Payment environment
           </h2>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-sm text-muted-foreground">
+              Read-only exploration
+            </span>
+            <Badge variant="default" data-testid="settings-readonly-status">
+              AVAILABLE
+            </Badge>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-sm text-muted-foreground">
+              Interactive demo
+            </span>
+            <Badge
+              variant={interactive === "granted" ? "default" : "outline"}
+              data-testid="settings-interactive-status"
+            >
+              {interactive === "granted"
+                ? "UNLOCKED"
+                : interactive === "misconfigured"
+                  ? "UNAVAILABLE"
+                  : "LOCKED"}
+            </Badge>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="text-sm text-muted-foreground">
               Razorpay Test Mode
             </span>

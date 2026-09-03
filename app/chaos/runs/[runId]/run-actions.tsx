@@ -4,6 +4,13 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 
+import {
+  isLockedStatus,
+  isUnavailableStatus,
+  UNAVAILABLE_MESSAGE,
+  useDemoUnlock,
+} from "@/components/access/use-demo-unlock";
+
 /**
  * Phase 3H Round 2B — the operator's run controls.
  *
@@ -242,6 +249,7 @@ export function RunActions(props: RunActionsProps) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const { requestUnlock, unlockDialog } = useDemoUnlock();
   const [busy, setBusy] = useState<ActionPath | null>(null);
 
   const actions = availableActions(props);
@@ -258,6 +266,16 @@ export function RunActions(props: RunActionsProps) {
       });
 
       if (!response.ok) {
+        // A 401 means no authorized session — offer the code and resume the
+        // exact action. Anything else is a real failure and says so.
+        if (isLockedStatus(response.status)) {
+          requestUnlock(() => void run(path));
+          return;
+        }
+        if (isUnavailableStatus(response.status)) {
+          setError(UNAVAILABLE_MESSAGE);
+          return;
+        }
         setError(
           response.status === 409
             ? "This run is no longer in a state that allows that action. Refresh to see its current state."
@@ -282,6 +300,7 @@ export function RunActions(props: RunActionsProps) {
       className="rounded-lg border border-border bg-card p-5"
       data-testid="run-actions"
     >
+      {unlockDialog}
       <h2 className="text-sm font-semibold text-card-foreground">
         Controlled actions
       </h2>

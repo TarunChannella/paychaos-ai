@@ -205,3 +205,67 @@ describe("interactive gate — the access code never reaches the client", () => 
     expect(GUARD).not.toContain("accessToken");
   });
 });
+
+describe("interactive gate — every visible control offers the unlock", () => {
+  /**
+   * The eight user-visible controls that change state. Each is already
+   * refused server-side; this asserts the UI also OFFERS the code rather than
+   * leaving a reviewer with an unexplained error.
+   *
+   * Listed explicitly rather than discovered, so ADDING a ninth control is a
+   * deliberate decision that fails this test until it is wired — the failure
+   * mode otherwise is silent and only shows up in a live demo.
+   */
+  const CONTROLS = [
+    "app/demo-merchant/create-order-button.tsx",
+    "app/demo-merchant/create-razorpay-order-button.tsx",
+    "app/demo-merchant/pay-with-razorpay-button.tsx",
+    "app/chaos/runs/[runId]/run-actions.tsx",
+    "app/chaos/scenarios/[scenarioId]/run-scenario-form.tsx",
+    "components/findings/regression-action.tsx",
+    "components/findings/diagnose-action.tsx",
+    "components/demo/demo-reset-panel.tsx",
+  ] as const;
+
+  it("13: each control uses the shared hook and renders its dialog", () => {
+    for (const control of CONTROLS) {
+      const source = code(control);
+      expect(source, `${control} must use the shared unlock hook`).toContain(
+        "useDemoUnlock",
+      );
+      expect(source, `${control} must render the dialog`).toContain(
+        "{unlockDialog}",
+      );
+    }
+  });
+
+  it("14: each control detects the locked signal before reporting a failure", () => {
+    for (const control of CONTROLS) {
+      const source = code(control);
+      // Either family: a 401 from an API, or the Server Action's own message.
+      const detects =
+        source.includes("isLockedStatus") || source.includes("LOCKED_MESSAGE");
+      expect(detects, `${control} must detect the locked signal`).toBe(true);
+      expect(source, `${control} must resume the action`).toContain(
+        "requestUnlock(",
+      );
+    }
+  });
+
+  it("15: no control implements its own dialog", () => {
+    // Eight copies of this flow would be eight chances to get the "lock vs
+    // real failure" decision subtly wrong.
+    for (const control of CONTROLS) {
+      expect(code(control), control).not.toContain("DemoUnlockDialog");
+    }
+  });
+
+  it("16: the hook never treats an ordinary failure as a lock", () => {
+    const hook = code("components/access/use-demo-unlock.tsx");
+    // 401 is the lock. 503 is explicitly NOT, because asking for a code that
+    // cannot be verified sends a reviewer round a loop they cannot exit.
+    expect(hook).toContain("status === 401");
+    expect(hook).toContain("status === 503");
+    expect(hook).not.toContain("!response.ok");
+  });
+});

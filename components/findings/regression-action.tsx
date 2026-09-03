@@ -3,6 +3,13 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import {
+  isLockedStatus,
+  isUnavailableStatus,
+  UNAVAILABLE_MESSAGE,
+  useDemoUnlock,
+} from "@/components/access/use-demo-unlock";
+
 /**
  * Phase 5B correction — the regression control (P4-AC-06).
  *
@@ -60,6 +67,7 @@ export function RegressionAction({
   const [reason, setReason] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const inFlight = useRef(false);
+  const { requestUnlock, unlockDialog } = useDemoUnlock();
 
   const isBusy = phase === "running";
 
@@ -86,6 +94,19 @@ export function RegressionAction({
           ? (record["reason"] as string)
           : null;
 
+      // The in-flight guard is released before offering the code, or the
+      // resumed request would be rejected as a duplicate submit.
+      if (isLockedStatus(response.status)) {
+        inFlight.current = false;
+        setPhase("idle");
+        requestUnlock(() => void post(url));
+        return;
+      }
+      if (isUnavailableStatus(response.status)) {
+        setFailed(true);
+        setReason(UNAVAILABLE_MESSAGE);
+        return;
+      }
       if (!response.ok) {
         // A 409 carries a real domain refusal (NOT_STARTED / ORPHAN_START);
         // anything else is reported as a plain failure. Neither is success.
@@ -121,6 +142,7 @@ export function RegressionAction({
       className="flex flex-col gap-3 border-t border-border pt-4"
       data-testid="regression-action"
     >
+      {unlockDialog}
       <div className="flex flex-wrap items-center gap-3">
         {hasActive ? (
           <button
