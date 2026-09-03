@@ -29,6 +29,8 @@ import "server-only";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import type { Database } from "@/lib/supabase/types";
 
+import { logSupabaseReadFailure } from "@/lib/supabase/read-diagnostics";
+
 export type WebhookEventRow =
   Database["public"]["Tables"]["webhook_events"]["Row"];
 
@@ -192,6 +194,13 @@ export async function listLatestWebhookEventsForPaymentIds(
     .order("received_at", { ascending: false });
 
   if (error) {
+    // Sanitized, server-side only. The throw below is unchanged, so the
+    // error boundary and the browser see exactly what they saw before.
+    logSupabaseReadFailure(
+      "WEBHOOK_EVENT_LOOKUP_FAILED",
+      "webhook_events",
+      error,
+    );
     throw new WebhookRepositoryError(
       "WEBHOOK_EVENT_LOOKUP_FAILED",
       "Failed to load webhook events for these payments.",

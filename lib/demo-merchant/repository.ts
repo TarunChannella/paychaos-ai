@@ -18,6 +18,8 @@ import "server-only";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import type { Database } from "@/lib/supabase/types";
 
+import { logSupabaseReadFailure } from "@/lib/supabase/read-diagnostics";
+
 export type OrderRow = Database["public"]["Tables"]["orders"]["Row"];
 
 /** Deterministic domain error for this repository's I/O failures. */
@@ -93,6 +95,8 @@ export async function getOrderById(orderId: string): Promise<OrderRow | null> {
     .maybeSingle();
 
   if (error) {
+    // Sanitized, server-side only. The throw below is unchanged.
+    logSupabaseReadFailure("ORDER_LOOKUP_FAILED", "orders", error);
     throw new DemoMerchantRepositoryError(
       "ORDER_LOOKUP_FAILED",
       "Failed to load the Demo Merchant order.",
@@ -113,6 +117,8 @@ export async function listRecentOrders(limit: number): Promise<OrderRow[]> {
     .limit(limit);
 
   if (error) {
+    // Sanitized, server-side only. The throw below is unchanged.
+    logSupabaseReadFailure("ORDER_LIST_FAILED", "orders", error);
     throw new DemoMerchantRepositoryError(
       "ORDER_LIST_FAILED",
       "Failed to load Demo Merchant orders.",
@@ -145,6 +151,8 @@ export async function countFulfilmentsForOrderIds(
     .in("order_id", [...orderIds]);
 
   if (error) {
+    // Sanitized, server-side only. The throw below is unchanged.
+    logSupabaseReadFailure("FULFILMENT_COUNT_FAILED", "fulfilments", error);
     throw new DemoMerchantRepositoryError(
       "FULFILMENT_COUNT_FAILED",
       "Failed to load fulfilment counts.",
@@ -182,6 +190,12 @@ export async function getLatestPaymentAttemptForOrder(
     .maybeSingle();
 
   if (error) {
+    // Sanitized, server-side only. The throw below is unchanged.
+    logSupabaseReadFailure(
+      "PAYMENT_ATTEMPT_LOOKUP_FAILED",
+      "payment_attempts",
+      error,
+    );
     throw new DemoMerchantRepositoryError(
       "PAYMENT_ATTEMPT_LOOKUP_FAILED",
       "Failed to load payment attempts for this order.",
@@ -211,6 +225,12 @@ export async function listLatestPaymentAttemptsForOrderIds(
     .order("attempt_no", { ascending: false });
 
   if (error) {
+    // Sanitized, server-side only. The throw below is unchanged.
+    logSupabaseReadFailure(
+      "PAYMENT_ATTEMPT_LOOKUP_FAILED",
+      "payment_attempts",
+      error,
+    );
     throw new DemoMerchantRepositoryError(
       "PAYMENT_ATTEMPT_LOOKUP_FAILED",
       "Failed to load payment attempts for these orders.",
@@ -355,6 +375,12 @@ export async function getPaymentAttemptById(
     .maybeSingle();
 
   if (error) {
+    // Sanitized, server-side only. The throw below is unchanged.
+    logSupabaseReadFailure(
+      "PAYMENT_ATTEMPT_LOOKUP_FAILED",
+      "payment_attempts",
+      error,
+    );
     throw new DemoMerchantRepositoryError(
       "PAYMENT_ATTEMPT_LOOKUP_FAILED",
       "Failed to load the payment attempt.",
@@ -413,6 +439,12 @@ export async function getPaymentAttemptByRazorpayOrderId(
     .maybeSingle();
 
   if (error) {
+    // Sanitized, server-side only. The throw below is unchanged.
+    logSupabaseReadFailure(
+      "PAYMENT_ATTEMPT_LOOKUP_FAILED",
+      "payment_attempts",
+      error,
+    );
     throw new DemoMerchantRepositoryError(
       "PAYMENT_ATTEMPT_LOOKUP_FAILED",
       "Failed to load the payment attempt by Razorpay Order ID.",
@@ -437,6 +469,8 @@ export async function getPaymentByRazorpayPaymentId(
     .maybeSingle();
 
   if (error) {
+    // Sanitized, server-side only. The throw below is unchanged.
+    logSupabaseReadFailure("PAYMENT_LOOKUP_FAILED", "payments", error);
     throw new DemoMerchantRepositoryError(
       "PAYMENT_LOOKUP_FAILED",
       "Failed to load the payment.",
@@ -466,6 +500,8 @@ export async function listLatestPaymentsForAttemptIds(
     .order("created_at", { ascending: false });
 
   if (error) {
+    // Sanitized, server-side only. The throw below is unchanged.
+    logSupabaseReadFailure("PAYMENT_LOOKUP_FAILED", "payments", error);
     throw new DemoMerchantRepositoryError(
       "PAYMENT_LOOKUP_FAILED",
       "Failed to load payments for these payment attempts.",
