@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { Badge } from "@/components/ui/badge";
 import { PageHeader, PageShell } from "@/components/ui/page";
+import { SignalLine, type SignalStep } from "@/components/ui/signal-line";
 import { ProvenanceTag } from "@/components/ui/status";
 import { DEMO_MERCHANT_PRODUCT } from "@/lib/demo-merchant/product";
 import { listDemoMerchantOrders } from "@/lib/demo-merchant/service";
@@ -44,6 +45,96 @@ export const dynamic = "force-dynamic";
 export default async function DemoMerchantPage() {
   const orders = await listDemoMerchantOrders(10);
 
+  /**
+   * The lifecycle chain for the most recent order.
+   *
+   * PROVENANCE IS ONLY CLAIMED WHERE IT IS KNOWN. The webhook step is tagged
+   * `verified` solely because the view model's `sourceKind` is literally
+   * REAL_RAZORPAY_WEBHOOK and the row records its own signature check — this
+   * page genuinely holds that evidence. Every other stage is `recorded`,
+   * because "a payment row exists" is not the same claim as "Razorpay
+   * confirmed it".
+   *
+   * Nothing is invented: a stage with no record renders as pending.
+   */
+  const latest = orders[0] ?? null;
+
+  const lifecycleSteps: SignalStep[] =
+    latest === null
+      ? []
+      : [
+          {
+            label: "Merchant order created",
+            detail: `${formatConceptualState(latest.conceptualState)} · ${formatAmountForDisplay(latest.amountSubunits, latest.currency)}`,
+            tone: "recorded",
+          },
+          latest.latestPaymentAttempt === null
+            ? {
+                label: "Payment attempt",
+                detail: "No payment has been attempted for this order yet.",
+                tone: "pending",
+              }
+            : {
+                label: "Payment attempt",
+                detail: latest.latestPaymentAttempt.status,
+                tone: "recorded",
+              },
+          latest.latestWebhookEvent === null
+            ? {
+                label: "Razorpay webhook",
+                detail:
+                  "No real Razorpay webhook has been correlated to this order yet.",
+                tone: "pending",
+              }
+            : {
+                label: `Razorpay webhook — ${latest.latestWebhookEvent.eventType}`,
+                detail: latest.latestWebhookEvent.signatureVerified
+                  ? "Signature verified server-side."
+                  : "Signature NOT verified.",
+                // Only here is the truth source actually established.
+                tone: latest.latestWebhookEvent.signatureVerified
+                  ? "verified"
+                  : "fail",
+              },
+          latest.latestPayment === null
+            ? {
+                label: "Payment record",
+                detail:
+                  "No verified payment has been persisted for this order.",
+                tone: "pending",
+              }
+            : {
+                label: "Payment record",
+                // The provider's own status where recorded, plus whether the
+                // Checkout signature was verified server-side — the two facts
+                // that decide whether this row may be treated as
+                // authoritative.
+                detail: [
+                  latest.latestPayment.razorpayPaymentStatus ??
+                    "status not recorded",
+                  latest.latestPayment.checkoutSignatureVerified
+                    ? "Checkout signature verified"
+                    : "Checkout signature NOT verified",
+                ].join(" · "),
+                tone: latest.latestPayment.checkoutSignatureVerified
+                  ? "recorded"
+                  : "fail",
+              },
+          latest.fulfilmentCount === 0
+            ? {
+                label: "Fulfilment",
+                detail: "No fulfilment has been executed.",
+                tone: "pending",
+              }
+            : {
+                label: "Fulfilment",
+                detail: `${latest.fulfilmentCount} executed`,
+                // More than one fulfilment for one payment is a money-invariant
+                // violation, so it is never shown as an ordinary success.
+                tone: latest.fulfilmentCount > 1 ? "fail" : "pass",
+              },
+        ];
+
   return (
     <PageShell>
       <PageHeader
@@ -52,45 +143,83 @@ export default async function DemoMerchantPage() {
         lede="The single controlled merchant PayChaos is allowed to break. Every order, payment attempt and fulfilment below is internal Test Mode state — this is a reliability harness, not a storefront."
       />
 
-      <section className="rounded-xl border border-border bg-card p-5 shadow-[0_1px_2px_0_rgb(0_0_0/0.03)]">
-        <div className="flex flex-wrap items-baseline justify-between gap-3">
-          <div>
-            <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              Fixed test product
-            </span>
-            <h2 className="mt-0.5 text-base font-semibold text-card-foreground">
-              {DEMO_MERCHANT_PRODUCT.name}
-            </h2>
+      {/* ---- SECTION B — PRODUCT + PAYMENT LIFECYCLE -------------------- */}
+      <div className="grid gap-5 lg:grid-cols-12">
+        <section className="rounded-2xl border border-border bg-card p-5 shadow-[0_8px_30px_rgb(15_23_42/0.055)] lg:col-span-5">
+          <div className="flex flex-wrap items-baseline justify-between gap-3">
+            <div>
+              <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                Fixed test product
+              </span>
+              <h2 className="mt-0.5 text-base font-semibold text-card-foreground">
+                {DEMO_MERCHANT_PRODUCT.name}
+              </h2>
+            </div>
+            <ProvenanceTag label="Razorpay Test Mode" />
           </div>
-          <ProvenanceTag label="Razorpay Test Mode" />
-        </div>
-        <p
-          className="mt-3 text-3xl font-semibold tabular-nums text-card-foreground"
-          data-testid="fixed-product-price"
-        >
-          {formatAmountForDisplay(
-            DEMO_MERCHANT_PRODUCT.amountSubunits,
-            DEMO_MERCHANT_PRODUCT.currency,
-          )}{" "}
-          <span className="text-sm font-normal text-muted-foreground">
-            {DEMO_MERCHANT_PRODUCT.currency}
-          </span>
-        </p>
-        <p className="mt-3 text-sm leading-6 text-muted-foreground">
-          The amount and currency are fixed server-side. Creating an order
-          creates an INTERNAL PayChaos order only — it does not contact
-          Razorpay.
-        </p>
-
-        <div className="mt-5 flex flex-col items-start gap-2 border-t border-border pt-4">
-          <CreateOrderButton />
-          <p className="max-w-xl text-xs leading-5 text-muted-foreground">
-            Razorpay Checkout is not connected in Phase 1. This screen creates
-            the merchant-side internal order used by the later Test Mode payment
-            flow.
+          <p
+            className="mt-3 text-3xl font-semibold tabular-nums text-card-foreground"
+            data-testid="fixed-product-price"
+          >
+            {formatAmountForDisplay(
+              DEMO_MERCHANT_PRODUCT.amountSubunits,
+              DEMO_MERCHANT_PRODUCT.currency,
+            )}{" "}
+            <span className="text-sm font-normal text-muted-foreground">
+              {DEMO_MERCHANT_PRODUCT.currency}
+            </span>
           </p>
-        </div>
-      </section>
+          <p className="mt-3 text-sm leading-6 text-muted-foreground">
+            The amount and currency are fixed server-side. Creating an order
+            creates an INTERNAL PayChaos order only — it does not contact
+            Razorpay.
+          </p>
+
+          <div className="mt-5 flex flex-col items-start gap-2 border-t border-border pt-4">
+            <CreateOrderButton />
+            <p className="max-w-xl text-xs leading-5 text-muted-foreground">
+              Razorpay Checkout is not connected in Phase 1. This screen creates
+              the merchant-side internal order used by the later Test Mode
+              payment flow.
+            </p>
+          </div>
+        </section>
+
+        {/* The payment lifecycle for the most recent order, as a chain.
+            Every tone below is derived from PERSISTED state — never from what
+            a button was clicked a moment ago. A stage with no record yet says
+            so rather than being omitted, because an incomplete lifecycle is
+            the honest picture when the payment has not happened. */}
+        <section
+          className="rounded-2xl border border-border bg-card p-5 shadow-[0_8px_30px_rgb(15_23_42/0.055)] lg:col-span-7"
+          data-testid="payment-lifecycle"
+        >
+          <h2 className="text-[15px] font-semibold tracking-tight text-foreground">
+            Payment lifecycle
+          </h2>
+          <p className="mt-1 max-w-[65ch] text-[13px] leading-6 text-muted-foreground">
+            {latest === null
+              ? "No payment evidence yet."
+              : "The most recent order, from merchant record through to fulfilment."}
+          </p>
+
+          {latest === null ? (
+            <div className="mt-4" data-testid="lifecycle-empty">
+              <p className="text-sm leading-6 text-muted-foreground">
+                Create a Test Mode order and complete the demo payment to
+                generate real Razorpay evidence. Nothing here implies the
+                integration is healthy — it implies nothing has been paid yet.
+              </p>
+            </div>
+          ) : (
+            <SignalLine
+              className="mt-4"
+              steps={lifecycleSteps}
+              data-testid="lifecycle-signal-line"
+            />
+          )}
+        </section>
+      </div>
 
       <section className="flex flex-col gap-3">
         <div className="flex flex-col gap-1">

@@ -8,6 +8,7 @@ import {
   Card,
   PageHeader,
   PageShell,
+  Section,
 } from "@/components/ui/page";
 import { getCurrentGoLiveReadiness } from "@/lib/readiness/service";
 
@@ -85,6 +86,79 @@ export default async function ReliabilityPage() {
           <div id="readiness-gates">
             <ReadinessOverview readiness={model.readiness} />
           </div>
+
+          {/* ---- WHAT TO DO NEXT ---------------------------------------- */}
+          {/* Rendered STRICTLY from the readiness engine's own reasons, in the
+              engine's own precedence: blocking first, then attention. The UI
+              derives no blocker of its own and invents no recommendation —
+              a screen that reasoned independently about readiness would be a
+              second, unreviewed evaluator. */}
+          <Section
+            title="What to do next"
+            description="Taken directly from the deterministic readiness assessment. Blocking reasons come first, because that is the precedence the engine applies."
+            data-testid="reliability-next-actions"
+          >
+            {model.readiness.blockingReasons.length === 0 &&
+            model.readiness.attentionReasons.length === 0 ? (
+              <Card>
+                <p className="text-sm leading-6 text-muted-foreground">
+                  The readiness assessment reported no blocking or attention
+                  reasons on current evidence. The assessment&apos;s own
+                  disclaimer, rendered above, states exactly what that does and
+                  does not mean.
+                </p>
+              </Card>
+            ) : (
+              <ol className="flex flex-col gap-2">
+                {[
+                  ...model.readiness.blockingReasons.map((reason) => ({
+                    reason,
+                    blocking: true,
+                  })),
+                  ...model.readiness.attentionReasons.map((reason) => ({
+                    reason,
+                    blocking: false,
+                  })),
+                ].map(({ reason, blocking }, index) => (
+                  <li
+                    key={`${reason.subject ?? "reason"}-${index}`}
+                    className="flex flex-col gap-1 rounded-xl border border-border bg-card px-4 py-3"
+                  >
+                    <span
+                      className={
+                        blocking
+                          ? "text-[10.5px] font-semibold uppercase tracking-[0.1em] text-[var(--status-fail)]"
+                          : "text-[10.5px] font-semibold uppercase tracking-[0.1em] text-[var(--status-warn)]"
+                      }
+                    >
+                      {blocking ? "Blocking" : "Needs attention"}
+                    </span>
+                    <span className="text-sm leading-6 text-card-foreground">
+                      {reason.subject === null
+                        ? reason.text
+                        : `${reason.subject} — ${reason.text}`}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </Section>
+
+          {/* ---- SCORE HISTORY ------------------------------------------ */}
+          {/* Deliberately not a chart. No score is ever persisted (the
+              algorithm derives it on every request), so there is no history
+              to draw. A trend line here would be fabricated data, which is
+              worse than no section at all — so the absence is stated. */}
+          <Card tone="muted" data-testid="reliability-no-history">
+            <p className="text-sm leading-6 text-muted-foreground">
+              <span className="font-medium text-card-foreground">
+                No score history is shown.
+              </span>{" "}
+              The Reliability Score is recalculated from persisted evidence on
+              every request and is never stored, so no genuine historical series
+              exists. A trend drawn here would be invented.
+            </p>
+          </Card>
 
           <p
             className="border-t border-border pt-4 font-mono text-[11px] uppercase tracking-wider text-muted-foreground"

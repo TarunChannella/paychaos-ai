@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { EvidenceRail } from "@/components/chaos/evidence-rail";
 import { ProvenanceBadge } from "@/components/chaos/provenance-badge";
 import { Card, FieldLabel } from "@/components/ui/page";
+import { SignalLine, type SignalStep } from "@/components/ui/signal-line";
 import { getScenarioDto } from "@/lib/chaos/scenario-dto";
 import { Badge } from "@/components/ui/badge";
 import { getChaosRunDetail } from "@/lib/chaos/run-read-model";
@@ -72,6 +73,73 @@ export default async function ChaosRunPage({
 
   const scenario = getScenarioDto(detail.scenarioId);
 
+  /**
+   * The run's evidence chain.
+   *
+   * PROVENANCE COMES FROM `dataClassification`, THE STORED FIELD — never from
+   * the presence of a webhook row. RECORDED_TEST_EVIDENCE means the run
+   * reasoned over captured real Test Mode evidence, which PayChaos then
+   * REPLAYS; SYNTHETIC_DEMO means the whole scenario was simulated. Those are
+   * different claims and are rendered as different tones, because a
+   * simulation shown in the colour of a real Razorpay delivery is precisely
+   * the misrepresentation this product exists to avoid.
+   *
+   * Note the source step is `recorded`, not `verified`: the run's own record
+   * establishes that the evidence was captured from Test Mode, and the
+   * signature verification that would justify "verified" belongs to the
+   * webhook row, not to this run.
+   */
+  const isSynthetic = detail.dataClassification === "SYNTHETIC_DEMO";
+  const failed = detail.invariantResults.some((r) => r.result === "FAIL");
+  const unknown = detail.invariantResults.some((r) => r.result === "UNKNOWN");
+
+  const runSignalSteps: SignalStep[] = [
+    {
+      label: "Source event",
+      detail: isSynthetic
+        ? "A PayChaos-authored scenario fixture. Not a Razorpay delivery."
+        : "Evidence captured from Razorpay Test Mode and stored for replay.",
+      tone: isSynthetic ? "simulation" : "recorded",
+    },
+    {
+      label: "Chaos injected",
+      detail: detail.faultType ?? "Fault type not recorded",
+      tone: isSynthetic ? "simulation" : "replay",
+    },
+    {
+      label: "Merchant processing",
+      detail:
+        detail.correlations.orderId === null
+          ? "No order was correlated to this run."
+          : "The Demo Merchant processed the injected evidence.",
+      tone: detail.correlations.orderId === null ? "pending" : "recorded",
+    },
+    detail.invariantResults.length === 0
+      ? {
+          label: "Invariant evaluation",
+          detail: "No invariant has been evaluated for this run yet.",
+          tone: "pending" as const,
+        }
+      : {
+          label: `Invariant evaluation — ${detail.invariantResults.length} evaluated`,
+          detail: failed
+            ? "At least one money invariant failed."
+            : unknown
+              ? "At least one invariant could not be decided. UNKNOWN is never a pass."
+              : "Every evaluated invariant held.",
+          tone: failed
+            ? ("fail" as const)
+            : unknown
+              ? ("pending" as const)
+              : ("pass" as const),
+        },
+    {
+      label: "Outcome",
+      detail: detail.outcome ?? "Not yet determined",
+      tone: failed ? "fail" : detail.outcome === null ? "pending" : "pass",
+    },
+  ];
+
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-8 px-6 py-16">
       <Link
@@ -132,6 +200,23 @@ export default async function ChaosRunPage({
           </p>
         </Card>
       </div>
+
+      {/* ---- SECTION C — THE EVIDENCE CHAIN ----------------------------- */}
+      <Card>
+        <h2 className="text-[15px] font-semibold tracking-tight text-foreground">
+          Evidence chain
+        </h2>
+        <p className="mt-1 max-w-[70ch] text-[13px] leading-6 text-muted-foreground">
+          How this run reached its result. The source and the injection are
+          shown as separate steps so a replay is never mistaken for another
+          Razorpay delivery.
+        </p>
+        <SignalLine
+          className="mt-4"
+          steps={runSignalSteps}
+          data-testid="run-signal-line"
+        />
+      </Card>
 
       {/* Controls are derived from the persisted row only — never from what
           the operator clicked a moment ago. C11's mechanism comes from the
