@@ -4,6 +4,7 @@ import { ProvenanceBadge } from "@/components/chaos/provenance-badge";
 import { Card, PageHeader, PageShell, Section } from "@/components/ui/page";
 import { ProvenanceTag, VerdictBadge } from "@/components/ui/status";
 import { listRecentChaosRuns } from "@/lib/chaos/run-read-model";
+import { getRazorpayEnv } from "@/lib/config/razorpay-env";
 import { listScenarioDtos } from "@/lib/chaos/scenario-dto";
 
 /**
@@ -62,9 +63,37 @@ const RUN_COLUMNS = [
   "Inspect",
 ];
 
+/**
+ * The safety boundary, stated from facts this page can actually establish.
+ *
+ * Nothing here is a fabricated health check. Test Mode is read from the same
+ * fail-closed configuration accessor the rest of the product uses; the target
+ * is a structural property of the chaos engine; reaching this page at all
+ * means the operator passed the access gate; and the run list having been
+ * read is itself the evidence that the database is reachable. A green tick
+ * that measured nothing would be exactly the decoration this product refuses.
+ */
+function readTestModeStatus(): "ENFORCED" | "UNAVAILABLE" {
+  try {
+    getRazorpayEnv();
+    return "ENFORCED";
+  } catch {
+    return "UNAVAILABLE";
+  }
+}
+
 export default async function ChaosLabPage() {
   const scenarios = listScenarioDtos();
-  const runs = await listRecentChaosRuns(20);
+
+  // A read failure must not render as "no runs" — it is reported below.
+  let runs: Awaited<ReturnType<typeof listRecentChaosRuns>> | null = null;
+  try {
+    runs = await listRecentChaosRuns(20);
+  } catch {
+    runs = null;
+  }
+
+  const testMode = readTestModeStatus();
 
   return (
     <PageShell wide>
@@ -73,6 +102,51 @@ export default async function ChaosLabPage() {
         title="Chaos Lab"
         lede="PayChaos deliberately stresses payment assumptions against the internal Demo Merchant only. It never sends chaos traffic to an external target and never touches Live Mode."
       />
+
+      {/* ---- SAFETY STATUS BAR ------------------------------------------ */}
+      <ul
+        className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"
+        data-testid="chaos-safety-bar"
+      >
+        {(
+          [
+            [
+              "Payment mode",
+              testMode === "ENFORCED" ? "Razorpay Test Mode" : "Unavailable",
+              testMode === "ENFORCED",
+            ],
+            ["Target", "Demo Merchant only", true],
+            [
+              "Evidence store",
+              runs === null ? "Unreadable" : "Reachable",
+              runs !== null,
+            ],
+            ["Operator", "Authorized session", true],
+          ] as const
+        ).map(([label, value, ok]) => (
+          <li
+            key={label}
+            className="flex items-center gap-2.5 rounded-xl border border-border bg-card px-3.5 py-3"
+          >
+            <span
+              aria-hidden="true"
+              className={
+                ok
+                  ? "h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--status-pass)]"
+                  : "h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--status-fail)]"
+              }
+            />
+            <span className="min-w-0">
+              <span className="block text-[10.5px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+                {label}
+              </span>
+              <span className="block truncate text-[13px] font-medium text-foreground">
+                {value}
+              </span>
+            </span>
+          </li>
+        ))}
+      </ul>
 
       <Section
         title="Reliability test suite"
@@ -135,10 +209,29 @@ export default async function ChaosLabPage() {
         title="Recent runs"
         description="Operational history, exactly as persisted. A run that never executed is reported as such, never as a failure."
       >
-        {runs.length === 0 ? (
+        {runs === null ? (
+          // A read failure is not an empty history. Saying "no runs" because
+          // a SELECT failed is a false statement about someone's evidence.
+          <Card tone="danger" data-testid="runs-unavailable">
+            <p className="text-sm font-medium text-card-foreground">
+              Run history unavailable.
+            </p>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              The chaos run history could not be read. This is a read failure,
+              not an absence of runs — nothing is shown rather than something
+              misleading. Reload to retry.
+            </p>
+          </Card>
+        ) : runs.length === 0 ? (
           <Card data-testid="no-runs">
-            <p className="text-sm leading-6 text-muted-foreground">
-              No chaos run has been recorded yet.
+            <p className="text-sm font-medium text-card-foreground">
+              No chaos runs yet.
+            </p>
+            <p className="mt-2 max-w-[60ch] text-sm leading-6 text-muted-foreground">
+              Run one of the four mandatory P0 scenarios above to test the Demo
+              Merchant under controlled payment failure conditions. Nothing here
+              implies the integration is healthy — it implies nothing has been
+              tested.
             </p>
           </Card>
         ) : (

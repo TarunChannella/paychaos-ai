@@ -21,7 +21,22 @@ import { cn } from "@/lib/utils";
  */
 
 export type SignalTone =
-  "verified" | "replay" | "simulation" | "fail" | "pass" | "pending";
+  | "verified"
+  | "replay"
+  | "simulation"
+  /**
+   * Persisted evidence whose TRUTH SOURCE this caller cannot establish.
+   *
+   * Deliberately distinct from `verified`. A screen that only knows a record
+   * exists must not imply the record is a real Razorpay delivery — that is
+   * the one claim this product must never make loosely. Callers that DO hold
+   * provenance (a chaos run knows its own `source_kind`) use `verified` or
+   * `replay` instead.
+   */
+  | "recorded"
+  | "fail"
+  | "pass"
+  | "pending";
 
 export interface SignalStep {
   /** Human meaning first — this is what a reader actually needs. */
@@ -36,6 +51,7 @@ const DOT: Record<SignalTone, string> = {
   replay: "border-[var(--provenance-replay)] bg-[var(--provenance-replay)]",
   simulation:
     "border-[var(--provenance-simulation)] bg-[var(--provenance-simulation)]",
+  recorded: "border-[var(--primary)] bg-[var(--primary)]",
   fail: "border-[var(--status-fail)] bg-[var(--status-fail)]",
   pass: "border-[var(--status-pass)] bg-[var(--status-pass)]",
   pending: "border-border-strong bg-background",
@@ -46,6 +62,7 @@ const CONNECTOR: Record<SignalTone, string> = {
   verified: "bg-[var(--provenance-real)]/35",
   replay: "bg-[var(--provenance-replay)]/35",
   simulation: "bg-[var(--provenance-simulation)]/35",
+  recorded: "bg-[var(--primary)]/30",
   fail: "bg-[var(--status-fail)]/35",
   pass: "bg-[var(--status-pass)]/35",
   pending: "bg-border-strong/50",
@@ -56,6 +73,7 @@ const TONE_LABEL: Record<SignalTone, string> = {
   verified: "Verified Razorpay evidence",
   replay: "PayChaos replay",
   simulation: "PayChaos simulation",
+  recorded: "Recorded evidence",
   fail: "Failure",
   pass: "Passed",
   pending: "Not yet recorded",

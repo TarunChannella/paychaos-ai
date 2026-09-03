@@ -1,3 +1,5 @@
+"use client";
+
 import Link from "next/link";
 
 import { LogoLockup } from "@/components/brand/logo";
@@ -24,15 +26,35 @@ import { AppNav } from "@/components/shell/app-nav";
  * no axis, no scale and no value, because a decorative line that looks like a
  * metric is a fabricated metric.
  */
-export function AppSidebar() {
+export function AppSidebar({
+  open = false,
+  onNavigate,
+}: {
+  /** Mobile only: whether the off-canvas drawer is showing. */
+  readonly open?: boolean;
+  /** Called when a navigation link is followed, so the drawer can close. */
+  readonly onNavigate?: () => void;
+}) {
   return (
     <aside
+      id="app-sidebar"
       data-testid="app-sidebar"
+      // `inert` is not used: the panel is translated off-screen rather than
+      // removed, so the SAME nav serves both breakpoints. Rendering a second
+      // drawer copy would duplicate every testid and the primary landmark —
+      // the defect this shell has already shipped once.
+      aria-hidden={undefined}
       className={[
-        "flex shrink-0 flex-col border-b border-sidebar-border bg-sidebar text-sidebar-foreground",
-        "supports-[backdrop-filter]:bg-sidebar/85 supports-[backdrop-filter]:backdrop-blur-xl",
-        // Desktop: a sticky, full-height rail that never scrolls away.
-        "md:sticky md:top-0 md:h-screen md:w-[248px] md:border-b-0 md:border-r",
+        "flex flex-col border-sidebar-border bg-sidebar text-sidebar-foreground",
+        "supports-[backdrop-filter]:bg-sidebar/95 supports-[backdrop-filter]:backdrop-blur-xl",
+        // Mobile: an off-canvas drawer. It reserves NO width when closed, so
+        // a phone gives its whole viewport to content.
+        "fixed inset-y-0 left-0 z-50 w-[276px] max-w-[85vw] overflow-y-auto border-r",
+        "transition-transform duration-200 ease-out",
+        open ? "translate-x-0 shadow-2xl" : "-translate-x-full",
+        // Desktop: the persistent sticky rail, always in place.
+        "md:sticky md:top-0 md:z-auto md:h-screen md:w-[248px] md:max-w-none",
+        "md:translate-x-0 md:shadow-none",
       ].join(" ")}
     >
       {/* ---- BRAND ------------------------------------------------------ */}
@@ -42,6 +64,7 @@ export function AppSidebar() {
           className="inline-flex rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
           aria-label="PayChaos AI — Overview"
           data-testid="app-brand"
+          onClick={onNavigate}
         >
           {/* Exactly one lockup. The `lg` variant reflows itself across
               breakpoints rather than shipping a second hidden copy. */}
@@ -50,7 +73,9 @@ export function AppSidebar() {
       </div>
 
       {/* ---- NAVIGATION ------------------------------------------------- */}
-      <div className="px-3 pb-3 md:px-3.5 md:pb-2">
+      {/* Following any destination closes the drawer. Without this the panel
+          stays over the page the operator just asked for. */}
+      <div className="px-3 pb-3 md:px-3.5 md:pb-2" onClick={onNavigate}>
         <p className="mb-2 hidden px-2.5 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-sidebar-muted md:block">
           Console
         </p>
@@ -61,7 +86,7 @@ export function AppSidebar() {
       {/* Complementary to the Test Mode badge pinned in the top bar, not a
           second copy of it: that badge is the standing safety flag, this
           states what the deployment is actually bound to. */}
-      <div className="hidden px-3.5 pt-1 md:block">
+      <div className="px-3.5 pt-1 md:block">
         <div
           className="rounded-[14px] border border-sidebar-card-border bg-sidebar-card px-3.5 py-3"
           data-testid="sidebar-environment"
@@ -87,10 +112,10 @@ export function AppSidebar() {
       </div>
 
       {/* ---- BREATHING ROOM --------------------------------------------- */}
-      <div className="hidden md:block md:flex-1" />
+      <div className="flex-1" />
 
       {/* ---- AUTONOMOUS BY DESIGN --------------------------------------- */}
-      <div className="hidden px-3.5 pb-4 md:block">
+      <div className="px-3.5 pb-4 md:block">
         <div className="overflow-hidden rounded-[14px] border border-sidebar-card-border bg-sidebar-card px-3.5 pb-3 pt-3">
           <p className="text-[12.5px] font-semibold tracking-tight text-sidebar-foreground">
             Autonomous by Design

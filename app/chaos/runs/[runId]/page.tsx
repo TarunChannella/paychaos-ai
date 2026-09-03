@@ -3,6 +3,8 @@ import { notFound } from "next/navigation";
 
 import { EvidenceRail } from "@/components/chaos/evidence-rail";
 import { ProvenanceBadge } from "@/components/chaos/provenance-badge";
+import { Card, FieldLabel } from "@/components/ui/page";
+import { getScenarioDto } from "@/lib/chaos/scenario-dto";
 import { Badge } from "@/components/ui/badge";
 import { getChaosRunDetail } from "@/lib/chaos/run-read-model";
 import { assembleChaosRunEvidence } from "@/lib/evidence/chaos-evidence-service";
@@ -68,6 +70,8 @@ export default async function ChaosRunPage({
       ? null
       : buildEvidenceTimeline(bundle, detail.invariantResults, findings);
 
+  const scenario = getScenarioDto(detail.scenarioId);
+
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-8 px-6 py-16">
       <Link
@@ -77,19 +81,57 @@ export default async function ChaosRunPage({
         ← Back to Chaos Lab
       </Link>
 
+      {/* ---- SECTION A — WHAT WAS TESTED -------------------------------- */}
+      {/* The scenario's human name leads. "Chaos run" told a reader nothing
+          they could not already see from the URL. */}
       <header className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="font-mono text-lg font-semibold text-foreground">
-            {detail.scenarioId}
-          </span>
           <Badge variant="outline">{detail.status}</Badge>
           <ProvenanceBadge storedValue={detail.dataClassification} />
         </div>
-        <h1 className="text-2xl font-semibold tracking-tight text-foreground">
-          Chaos run
+        <h1 className="text-[26px] font-semibold leading-9 tracking-[-0.02em] text-foreground sm:text-[30px] sm:leading-10">
+          <span className="font-mono">{detail.scenarioId}</span>
+          {scenario !== null && (
+            <span className="font-sans"> — {scenario.name}</span>
+          )}
         </h1>
-        <p className="font-mono text-xs text-muted-foreground">{detail.id}</p>
+        <p className="font-mono text-xs text-subtle-foreground">{detail.id}</p>
       </header>
+
+      {/* ---- SECTION B — THREE SEPARATE CONCEPTS ------------------------ */}
+      {/* Source, mechanism and outcome are three different claims and are
+          deliberately never merged into one badge: conflating "where this
+          evidence came from" with "what PayChaos did to it" is how a replay
+          starts looking like a real Razorpay delivery. */}
+      <div className="grid gap-4 md:grid-cols-3" data-testid="run-summary">
+        <Card className="flex flex-col gap-2">
+          <FieldLabel>Source</FieldLabel>
+          <ProvenanceBadge storedValue={detail.dataClassification} />
+          <p className="text-[12px] leading-5 text-muted-foreground">
+            Where the evidence this run reasoned over actually came from.
+          </p>
+        </Card>
+
+        <Card className="flex flex-col gap-2">
+          <FieldLabel>Chaos mechanism</FieldLabel>
+          <p className="font-mono text-[13px] font-semibold text-foreground">
+            {detail.faultType ?? "Not recorded"}
+          </p>
+          <p className="text-[12px] leading-5 text-muted-foreground">
+            The controlled fault PayChaos injected against the Demo Merchant.
+          </p>
+        </Card>
+
+        <Card className="flex flex-col gap-2">
+          <FieldLabel>Outcome</FieldLabel>
+          <p className="text-[13px] font-semibold text-foreground">
+            {detail.outcome ?? "Not yet determined"}
+          </p>
+          <p className="text-[12px] leading-5 text-muted-foreground">
+            The deterministic result of evaluating this run&apos;s evidence.
+          </p>
+        </Card>
+      </div>
 
       {/* Controls are derived from the persisted row only — never from what
           the operator clicked a moment ago. C11's mechanism comes from the

@@ -1,6 +1,7 @@
 "use client";
 
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 
 import { AppSidebar } from "@/components/shell/app-sidebar";
 
@@ -42,16 +43,72 @@ import { AppSidebar } from "@/components/shell/app-sidebar";
  */
 export function AppShell({ children }: { readonly children: React.ReactNode }) {
   const pathname = usePathname() ?? "/";
+  const [navOpen, setNavOpen] = useState(false);
+
+  // Closing on navigation is handled where the navigation happens — the rail
+  // calls `onNavigate` — rather than by reacting to a pathname change with
+  // setState inside an effect, which renders twice and fights React.
+
+  // Escape closes it, which is the behaviour anyone who has met a drawer
+  // expects, and the only keyboard exit when focus is inside the panel.
+  useEffect(() => {
+    if (!navOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setNavOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [navOpen]);
+
   if (pathname.startsWith("/access")) return <>{children}</>;
 
   return (
     <div className="flex min-h-screen flex-col bg-muted/20 md:flex-row">
-      <AppSidebar />
+      {/* Scrim: mobile only, and only while the drawer is open. */}
+      {navOpen && (
+        <button
+          type="button"
+          aria-label="Close navigation"
+          onClick={() => setNavOpen(false)}
+          className="fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-[2px] md:hidden"
+        />
+      )}
+
+      <AppSidebar open={navOpen} onNavigate={() => setNavOpen(false)} />
 
       {/* ---- CONTENT ---------------------------------------------------- */}
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/75 md:px-6">
-          <span className="hidden text-sm text-muted-foreground sm:inline">
+          {/* Mobile: the drawer trigger plus a text wordmark. Deliberately
+              text, not a second lockup — the logo mark and its home link stay
+              unique to the rail, so no testid or landmark is duplicated. */}
+          <button
+            type="button"
+            onClick={() => setNavOpen(true)}
+            aria-label="Open navigation"
+            aria-expanded={navOpen}
+            aria-controls="app-sidebar"
+            className="-ml-1 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] border border-border bg-card text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:hidden"
+            data-testid="nav-trigger"
+          >
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              className="h-[18px] w-[18px]"
+            >
+              <path d="M4 7h16M4 12h16M4 17h16" />
+            </svg>
+          </button>
+
+          <span className="text-sm font-semibold text-foreground md:hidden">
+            PayChaos<span className="text-muted-foreground"> AI</span>
+          </span>
+
+          <span className="hidden text-sm text-muted-foreground sm:max-md:hidden md:inline">
             Payment Reliability Console
           </span>
 

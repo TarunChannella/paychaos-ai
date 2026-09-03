@@ -1,4 +1,4 @@
-import { test, expect, devices } from "@playwright/test";
+import { test, expect } from "@playwright/test";
 
 /**
  * Phase 5 UI — responsive verification.
@@ -41,4 +41,77 @@ test.describe("responsive — no horizontal page overflow", () => {
       }
     });
   }
+});
+
+test.describe("responsive — mobile navigation is a drawer, not a strip", () => {
+  test.slow();
+
+  test("the rail is off-canvas on a phone and opens on demand", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.goto("/");
+
+    const trigger = page.getByTestId("nav-trigger");
+    await expect(trigger).toBeVisible();
+
+    // Closed: the panel must reserve NO usable width, or a phone loses a
+    // quarter of its viewport to navigation that is not being used.
+    const sidebar = page.getByTestId("app-sidebar");
+    const closed = await sidebar.boundingBox();
+    expect(closed, "the rail must exist even when closed").not.toBeNull();
+    expect(closed!.x + closed!.width).toBeLessThanOrEqual(1);
+
+    // Open: it slides fully into view and the nav becomes reachable.
+    // Polled, because the panel animates for 200ms and a link is visible
+    // before the transform settles — measuring instantly would assert on a
+    // mid-slide frame rather than on the open state.
+    await trigger.click();
+    await expect(page.getByTestId("nav-findings")).toBeVisible();
+    await expect
+      .poll(async () => (await sidebar.boundingBox())?.x ?? -999)
+      .toBeGreaterThanOrEqual(-1);
+
+    // Escape closes it again, fully.
+    await page.keyboard.press("Escape");
+    await expect
+      .poll(async () => {
+        const box = await sidebar.boundingBox();
+        return box === null ? 0 : box.x + box.width;
+      })
+      .toBeLessThanOrEqual(1);
+  });
+
+  test("following a link closes the drawer", async ({ page }) => {
+    // REGRESSION GUARD. The close-on-navigate handler was wired to a prop
+    // that silently never reached the markup, so the panel stayed open over
+    // the page the operator had just asked for. Escape still worked, which is
+    // exactly why the first version of this suite did not catch it.
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.goto("/");
+
+    await page.getByTestId("nav-trigger").click();
+    const findings = page.getByTestId("nav-findings");
+    await expect(findings).toBeVisible();
+
+    await findings.click();
+    await page.waitForURL(/\/findings$/, { timeout: 120_000 });
+
+    const sidebar = page.getByTestId("app-sidebar");
+    await expect
+      .poll(async () => {
+        const box = await sidebar.boundingBox();
+        return box === null ? 0 : box.x + box.width;
+      })
+      .toBeLessThanOrEqual(1);
+  });
+
+  test("the rail is persistent on a desktop viewport", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto("/");
+
+    // No trigger, and navigation is visible without any interaction.
+    await expect(page.getByTestId("nav-trigger")).toBeHidden();
+    await expect(page.getByTestId("nav-findings")).toBeVisible();
+  });
 });

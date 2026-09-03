@@ -4,12 +4,14 @@ import { notFound } from "next/navigation";
 import { FindingCasefilePanel } from "@/components/findings/finding-casefile";
 import { InvariantVerdict } from "@/components/findings/invariant-verdict";
 import {
+  actionClassName,
   Card,
   FieldLabel,
   Identifier,
   PageShell,
   Section,
 } from "@/components/ui/page";
+import { SignalLine, type SignalStep } from "@/components/ui/signal-line";
 import { LifecycleBadge, SeverityBadge } from "@/components/ui/status";
 import {
   getFindingCasefile,
@@ -129,9 +131,85 @@ export default async function FindingDetailPage({
     comparison = null;
   }
 
+  /**
+   * SECTION C — the evidence chain, built ONLY from what this page holds.
+   *
+   * Every step is a record that genuinely exists in the read model. Steps are
+   * tagged `recorded` rather than `verified` on purpose: this screen knows a
+   * webhook event or payment row EXISTS, but not whether it arrived as a real
+   * Razorpay delivery or a PayChaos replay — that provenance lives on the
+   * chaos run. Claiming "verified Razorpay evidence" here would be exactly
+   * the kind of loose truth-source claim this product refuses to make.
+   *
+   * Nothing is invented to make the chain look complete.
+   */
+  const REF_ORDER = [
+    "WEBHOOK_EVENT",
+    "EVENT_PROCESSING_ATTEMPT",
+    "ORDER",
+    "PAYMENT_ATTEMPT",
+    "PAYMENT",
+    "FULFILMENT",
+  ] as const;
+
+  const evidenceSteps: SignalStep[] = REF_ORDER.flatMap((kind) => {
+    const refs = detail.invariant.evidenceRefs.filter((r) => r.kind === kind);
+    return refs.map((ref, index) => ({
+      label:
+        refs.length > 1
+          ? `${REF_LABELS[kind] ?? kind} #${index + 1}`
+          : (REF_LABELS[kind] ?? kind),
+      detail: ref.id,
+      tone: "recorded" as const,
+    }));
+  });
+
+  const signalSteps: SignalStep[] = [
+    ...(detail.correlations.chaosRunId === null
+      ? []
+      : [
+          {
+            label: "Chaos run executed",
+            detail: detail.correlations.chaosRunId,
+            tone: "recorded" as const,
+          },
+        ]),
+    ...evidenceSteps,
+    {
+      label: `${detail.invariant.invariantId} evaluated`,
+      detail: detail.invariant.reason ?? undefined,
+      tone: "fail" as const,
+    },
+    {
+      label: "Finding raised",
+      detail: detail.title,
+      tone: "fail" as const,
+    },
+    // The regression step is honest about not having happened yet.
+    casefile !== null && casefile.regressionRuns.length > 0
+      ? {
+          label: "Regression re-tested this scenario",
+          detail:
+            casefile.status === "RESOLVED"
+              ? "The original failure no longer reproduces."
+              : "Re-test recorded; the finding is not yet resolved.",
+          tone:
+            casefile.status === "RESOLVED"
+              ? ("pass" as const)
+              : ("pending" as const),
+        }
+      : {
+          label: "Regression",
+          detail: "No regression has been run for this finding yet.",
+          tone: "pending" as const,
+        },
+  ];
+
   return (
     <PageShell wide>
-      {/* ---- HEADER ----------------------------------------------------- */}
+      {/* ---- SECTION A — WHAT FAILED ------------------------------------ */}
+      {/* Human meaning leads. A reader should know what broke before they
+          meet a single identifier; the UUIDs move to Section G. */}
       <div className="flex flex-col gap-3">
         <Link
           href={
@@ -157,12 +235,40 @@ export default async function FindingDetailPage({
           {detail.title}
         </h1>
 
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-          <span>
-            Finding <Identifier value={detail.findingId} />
+        {/* The invariant's own words for what went wrong — the shortest
+            honest statement of the failure available on this page. */}
+        <p className="max-w-[70ch] text-[15px] leading-7 text-muted-foreground">
+          {detail.invariant.observedSummary}
+        </p>
+
+        {/* Secondary metadata: what it maps to, not what it is. */}
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-xs">
+          <span className="rounded-md border border-border bg-muted/50 px-2 py-1 font-mono text-[11px] font-semibold text-muted-foreground">
+            {detail.invariant.invariantId}
           </span>
-          <span>Detected {detail.createdAt}</span>
+          {detail.correlations.chaosRunId !== null && (
+            <Link
+              href={`/chaos/runs/${detail.correlations.chaosRunId}`}
+              className="rounded-md border border-border bg-muted/50 px-2 py-1 font-mono text-[11px] font-semibold text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground"
+            >
+              View chaos run →
+            </Link>
+          )}
+          <span className="text-subtle-foreground">
+            Detected {detail.createdAt}
+          </span>
         </div>
+
+        {/* CTA is an anchor, not a second control: the regression button
+            lives in its own section, and shipping two identical controls is
+            a defect this shell has already made once. */}
+        <a
+          href="#regression"
+          className={actionClassName("primary", "mt-1 w-fit")}
+          data-testid="finding-hero-cta"
+        >
+          Go to regression proof ↓
+        </a>
       </div>
 
       {/* ---- 01. WHAT BROKE --------------------------------------------- */}
@@ -183,14 +289,42 @@ export default async function FindingDetailPage({
         />
       </Section>
 
-      {/* ---- 02. VERIFIED EVIDENCE -------------------------------------- */}
+      {/* ---- SECTION C — THE EVIDENCE CHAIN ----------------------------- */}
       <Section
         step={2}
-        title="Verified evidence"
-        description="References to records that already exist. No payload, signature or customer data is stored or shown here."
-        data-testid="finding-evidence-refs"
+        title="Evidence chain"
+        description="Every record below already exists. Provenance — whether an event was a real Razorpay delivery or a PayChaos replay — is stated on the chaos run, so it is never asserted here."
+        data-testid="finding-evidence"
       >
         <Card>
+          <SignalLine steps={signalSteps} data-testid="finding-signal-line" />
+        </Card>
+      </Section>
+
+      {/* ---- SECTION G — TECHNICAL REFERENCES --------------------------- */}
+      {/* Collapsed by default. These identifiers are what PROVES the finding,
+          so they are never removed — but leading a reader with UUIDs buries
+          the failure they are meant to support. */}
+      <details
+        className="group rounded-2xl border border-border bg-card shadow-[0_8px_30px_rgb(15_23_42/0.055)]"
+        data-testid="finding-evidence-refs"
+      >
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-2xl px-5 py-4 text-sm font-semibold text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          <span>
+            Technical references
+            <span className="ml-2 font-normal text-muted-foreground">
+              identifiers, correlations and timestamps
+            </span>
+          </span>
+          <span
+            aria-hidden="true"
+            className="shrink-0 text-muted-foreground transition-transform group-open:rotate-90"
+          >
+            →
+          </span>
+        </summary>
+
+        <div className="border-t border-border px-5 py-4">
           {detail.invariant.evidenceRefs.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               No evidence references were recorded for this evaluation.
@@ -245,10 +379,12 @@ export default async function FindingDetailPage({
               </Link>
             )}
           </div>
-        </Card>
-      </Section>
+        </div>
+      </details>
 
       {/* ---- 03 / 04 / 05 ----------------------------------------------- */}
+      <div id="regression" className="scroll-mt-20" />
+
       {casefile !== null && (
         <FindingCasefilePanel
           casefile={casefile}
