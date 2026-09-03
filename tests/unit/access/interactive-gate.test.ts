@@ -120,17 +120,25 @@ describe("interactive gate — every mutating API route still self-gates", () =>
 });
 
 describe("interactive gate — middleware reads public, writes gated", () => {
-  it("5: safe methods pass, unsafe methods are challenged", () => {
-    expect(MIDDLEWARE).toContain("SAFE_METHODS");
-    expect(MIDDLEWARE).toContain('"GET"');
-    expect(MIDDLEWARE).toContain("SAFE_METHODS.has(request.method)");
+  it("5: middleware NEVER answers a page request itself", () => {
+    // CORRECTED after a confirmed production defect. Middleware used to
+    // challenge unsafe methods with a 401 JSON body, which broke every
+    // Server Action: React's action client cannot parse a JSON 401 any more
+    // than an HTML redirect, so the click threw and the error boundary
+    // rendered. Any response constructed here re-creates that bug.
+    expect(MIDDLEWARE).not.toContain("status: 401");
+    expect(MIDDLEWARE).not.toContain("status: 503");
+    expect(MIDDLEWARE).not.toContain("NextResponse.redirect");
+    expect(MIDDLEWARE).not.toContain("NextResponse.json");
   });
 
-  it("6: a refused action gets a 401, not an HTML redirect", () => {
-    // Redirecting a Server Action POST hands the client an HTML document
-    // where it expects an action result.
-    expect(MIDDLEWARE).toContain("status: 401");
-    expect(MIDDLEWARE).not.toContain("NextResponse.redirect");
+  it("6: middleware holds no authorization logic to drift from the guards", () => {
+    // With the challenge gone, a session check here would be dead code that
+    // looks authoritative — the worst kind, because a later reader may wire
+    // it back in and reintroduce the defect.
+    expect(MIDDLEWARE).not.toContain("verifySessionToken");
+    expect(MIDDLEWARE).not.toContain("getAccessGateEnv");
+    expect(MIDDLEWARE).toContain("NextResponse.next()");
   });
 
   it("7: the matcher still covers the page paths", () => {

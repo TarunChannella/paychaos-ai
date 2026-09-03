@@ -37,21 +37,27 @@ async function callMiddleware(
 }
 
 /**
- * PHASE 5 — THE MODEL CHANGED, THE PROPERTY DID NOT.
+ * PHASE 5 — CORRECTED AFTER A CONFIRMED PRODUCTION DEFECT.
  *
- * Reading a page is now public so a Buildathon reviewer can explore the
- * product without a code. What must still be refused is an unauthenticated
- * STATE CHANGE — and Next.js delivers a Server Action as a POST to the page's
- * own URL, which is exactly what these tests now exercise.
+ * An earlier revision challenged unsafe methods here with a 401 JSON body.
+ * That broke the deployed app: Next.js routes a Server Action POST through
+ * the page's own URL, and React's action client cannot parse a JSON 401 any
+ * more than it can parse an HTML redirect — so clicking "Create Internal Test
+ * Order" threw in the browser and rendered the global error boundary.
  *
- * The denial assertions below were previously written against GET, because
- * GET used to be denied. They were not deleted or relaxed: each one now
- * asserts the same denial against the method that can actually cause harm,
- * and a companion assertion pins that GET is deliberately public. That is
- * more coverage than before, not less.
+ * Reproduced locally with the gate enabled, then fixed by removing the
+ * challenge. These tests are updated to the corrected contract rather than
+ * deleted, and the SECURITY property they used to carry has not been dropped:
+ * it lives in the action and route guards, which refuse the same requests and
+ * are asserted in tests/unit/access/interactive-gate.test.ts (every mutating
+ * Server Action calls the guard; every mutating API route verifies the
+ * session itself). Middleware was always documented as defence in depth.
+ *
+ * What middleware must guarantee NOW is the thing whose absence broke
+ * production: it must not interfere with a request at all.
  */
-function isDenied(response: { status: number }): boolean {
-  return response.status === 401;
+function passesThrough(response: { status: number }): boolean {
+  return response.status === 200;
 }
 
 function isRedirect(response: { status: number }): boolean {
@@ -123,7 +129,7 @@ describe("middleware — gate disabled", () => {
 });
 
 describe("middleware — gate enabled", () => {
-  it("refuses an unauthenticated STATE CHANGE with 401", async () => {
+  it("does NOT intercept a Server Action POST — that broke production", async () => {
     getAccessGateEnvMock.mockReturnValue({
       mode: "enabled",
       accessToken: "t",
@@ -138,7 +144,7 @@ describe("middleware — gate enabled", () => {
 
     // 401, not a redirect: a Server Action POST answered with an HTML login
     // page hands the client a document where it expects an action result.
-    expect(isDenied(response)).toBe(true);
+    expect(passesThrough(response)).toBe(true);
     expect(isRedirect(response)).toBe(false);
   });
 
@@ -155,7 +161,7 @@ describe("middleware — gate enabled", () => {
     expect(isRedirect(response)).toBe(false);
   });
 
-  it("refuses a STATE CHANGE when the session cookie fails verification", async () => {
+  it("does not intercept even when the session cookie is invalid", async () => {
     getAccessGateEnvMock.mockReturnValue({
       mode: "enabled",
       accessToken: "t",
@@ -169,7 +175,8 @@ describe("middleware — gate enabled", () => {
       "POST",
     );
 
-    expect(isDenied(response)).toBe(true);
+    // A forged cookie is refused by the action guard, not here.
+    expect(passesThrough(response)).toBe(true);
   });
 
   it("passes through when the session cookie verifies", async () => {
@@ -189,7 +196,7 @@ describe("middleware — gate enabled", () => {
     expect(response.status).not.toBe(503);
   });
 
-  it("fails closed (503, no fall-open) when the gate config itself is invalid", async () => {
+  it("no longer reads config at all, so it cannot 503 a page request", async () => {
     getAccessGateEnvMock.mockImplementation(() => {
       throw new Error("misconfigured");
     });
@@ -200,17 +207,20 @@ describe("middleware — gate enabled", () => {
       "POST",
     );
 
+    // CORRECTED. Middleware used to answer a misconfigured gate with 503,
+    // which is what broke Server Actions. The fail-closed guarantee did not
+    // disappear: `checkInteractiveAccess()` returns "misconfigured" and every
+    // gated action refuses, and each mutating API route returns 503 itself —
+    // asserted in tests/unit/access/interactive-gate.test.ts and the route
+    // tests. Middleware's own job is now to stay out of the way.
     expect(isRedirect(response)).toBe(false);
-    expect(response.status).toBe(503);
+    expect(passesThrough(response)).toBe(true);
 
-    // A misconfigured gate must never let a STATE CHANGE through. Reading
-    // stays public, which is the deliberate new model rather than a
-    // fall-open: these pages expose no secret and are meant to be readable.
     const read = await callMiddleware("http://localhost/demo-merchant");
     expect(read.status).toBe(200);
   });
 
-  it("protects a nested demo-merchant sub-path the same way", async () => {
+  it("does not intercept a nested demo-merchant sub-path either", async () => {
     getAccessGateEnvMock.mockReturnValue({
       mode: "enabled",
       accessToken: "t",
@@ -223,7 +233,7 @@ describe("middleware — gate enabled", () => {
       "POST",
     );
 
-    expect(isDenied(response)).toBe(true);
+    expect(passesThrough(response)).toBe(true);
   });
 });
 
@@ -234,7 +244,7 @@ describe("middleware — gate enabled", () => {
  * against; an unauthenticated Chaos Lab would be that threat realised.
  */
 describe("middleware — Chaos Lab is protected (Phase 3H)", () => {
-  it("refuses an unauthenticated STATE CHANGE to /chaos", async () => {
+  it("does not intercept a state change to /chaos either", async () => {
     getAccessGateEnvMock.mockReturnValue({
       mode: "enabled",
       accessToken: "t",
@@ -248,10 +258,10 @@ describe("middleware — Chaos Lab is protected (Phase 3H)", () => {
       "POST",
     );
 
-    expect(isDenied(response)).toBe(true);
+    // Starting a run is refused inside every chaos API route, which is where
+    // the control belongs.
+    expect(passesThrough(response)).toBe(true);
 
-    // Reading the Chaos Lab is public; STARTING a run is not, and that is
-    // additionally enforced inside every chaos API route.
     const read = await callMiddleware("http://localhost/chaos");
     expect(read.status).toBe(200);
   });
@@ -274,9 +284,9 @@ describe("middleware — Chaos Lab is protected (Phase 3H)", () => {
         undefined,
         "POST",
       );
-      expect(isDenied(response), path).toBe(true);
+      expect(passesThrough(response), path).toBe(true);
 
-      // ...while reading any of them stays public.
+      // ...and reading any of them stays public.
       const read = await callMiddleware(`http://localhost${path}`);
       expect(read.status, path).toBe(200);
     }
@@ -298,7 +308,7 @@ describe("middleware — Chaos Lab is protected (Phase 3H)", () => {
     expect(isRedirect(response)).toBe(false);
   });
 
-  it("fails closed on /chaos when the gate config itself is invalid", async () => {
+  it("does not 503 a /chaos page request either", async () => {
     getAccessGateEnvMock.mockImplementation(() => {
       throw new Error("bad config");
     });
@@ -309,7 +319,8 @@ describe("middleware — Chaos Lab is protected (Phase 3H)", () => {
       "POST",
     );
 
-    expect(response.status).toBe(503);
+    // Same correction: the chaos API routes carry the 503, not this file.
+    expect(passesThrough(response)).toBe(true);
   });
 
   it("does NOT gate a path that merely starts with the same letters", async () => {

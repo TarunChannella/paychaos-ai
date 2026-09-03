@@ -49,13 +49,6 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 
-import { getAccessGateEnv } from "@/lib/config/access-env";
-import {
-  ACCESS_SESSION_COOKIE_NAME,
-  verifySessionToken,
-} from "@/lib/access/session";
-import { logEvent } from "@/lib/security/logger";
-
 export const runtime = "nodejs";
 
 /**
@@ -91,26 +84,40 @@ function isProtectedPath(pathname: string): boolean {
   );
 }
 
-const SAFE_MISCONFIGURED_BODY = {
-  error: "Access gate is misconfigured.",
-} as const;
-
 /**
- * Phase 5 — READING IS PUBLIC, CHANGING IS NOT.
+ * Phase 5 — THIS MIDDLEWARE NO LONGER GATES PAGE REQUESTS. Authorization for
+ * state changes lives in the operations themselves.
  *
- * A Buildathon reviewer must be able to open the deployed URL and understand
- * the product without a code, so safe navigation is no longer gated. What is
- * gated is any UNSAFE method reaching one of these page paths — which is
- * exactly how Next.js delivers a Server Action POST, since it routes those
- * through the page's own URL.
+ * WHY IT WAS REMOVED (a confirmed production defect). The previous revision
+ * challenged any UNSAFE method reaching a page path with a 401 JSON body,
+ * reasoning that a Server Action POST is not a navigation and so must not be
+ * redirected to a login page. That reasoning was right and the remedy was
+ * wrong: Next.js routes a Server Action POST through the page's own URL, and
+ * React's action client expects the RSC action-result protocol. A plain JSON
+ * 401 is no more parseable than an HTML redirect, so the call threw in the
+ * browser and the global error boundary rendered "This screen could not be
+ * loaded." on the deployed Preview.
  *
- * This is defence in depth, not the control itself: every mutating Server
- * Action independently calls `checkInteractiveAccess()` and every mutating
- * API route runs its own session check. If this file were deleted tomorrow,
- * no state-changing operation would become public.
+ * Reproduced locally with the gate enabled: clicking "Create Internal Test
+ * Order" logged `access_gate_check ACCESS_DENIED path=/demo-merchant` and
+ * produced that exact screen, while the action's own guard never ran and no
+ * Supabase call was ever made — the middleware refused the request before the
+ * action existed.
+ *
+ * The security property is unaffected, and this was already true when the
+ * challenge was added: every mutating Server Action calls
+ * `checkInteractiveAccess()` before it touches anything, and every mutating
+ * API route verifies the session itself. Both are asserted by test, and the
+ * previous commit message said so outright — "delete it and nothing becomes
+ * public". So the challenge was redundant as well as harmful.
+ *
+ * Detecting the Server Action header and letting only those through was
+ * considered and rejected: it depends on a framework-internal header, so a
+ * future Next.js rename would silently reintroduce exactly this bug.
+ *
+ * The matcher is kept so this file stays the single, obvious place a
+ * page-level control would be reinstated if one is ever genuinely needed.
  */
-const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
-
 export function middleware(request: NextRequest): NextResponse {
   const { pathname } = request.nextUrl;
 
@@ -118,54 +125,9 @@ export function middleware(request: NextRequest): NextResponse {
     return NextResponse.next();
   }
 
-  // Reading a page is public. Only a state-changing method is challenged.
-  if (SAFE_METHODS.has(request.method)) {
-    return NextResponse.next();
-  }
-
-  let env;
-  try {
-    env = getAccessGateEnv();
-  } catch {
-    // Fail closed: an enabled-but-invalid access gate must never fall open
-    // for a protected path (docs/SECURITY.md ENV-006/ENV-007 philosophy
-    // applied to this config module too).
-    logEvent("access_gate_check", {
-      outcome: "ACCESS_DENIED",
-      reason: "MISCONFIGURED",
-      path: pathname,
-    });
-    return NextResponse.json(SAFE_MISCONFIGURED_BODY, { status: 503 });
-  }
-
-  if (env.mode === "disabled") {
-    return NextResponse.next();
-  }
-
-  const cookie = request.cookies.get(ACCESS_SESSION_COOKIE_NAME)?.value;
-  // `env.sessionSecret` is guaranteed non-null when `env.mode === "enabled"`
-  // (see `lib/config/access-env.ts`'s `AccessGateEnv` contract).
-  if (
-    cookie !== undefined &&
-    verifySessionToken(env.sessionSecret as string, cookie)
-  ) {
-    logEvent("access_gate_check", {
-      outcome: "ACCESS_GRANTED",
-      path: pathname,
-    });
-    return NextResponse.next();
-  }
-
-  logEvent("access_gate_check", {
-    outcome: "ACCESS_DENIED",
-    reason: "NO_VALID_SESSION",
-    path: pathname,
-  });
-
-  // A Server Action POST is not a navigation, so redirecting it to a login
-  // page would hand the client an HTML document where it expects an action
-  // result. Refuse it outright; the UI opens the unlock dialog instead.
-  return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+  // Reading a page is public, and a state change must reach the operation
+  // that knows how to refuse it properly.
+  return NextResponse.next();
 }
 
 export const config = {

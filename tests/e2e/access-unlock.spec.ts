@@ -74,8 +74,14 @@ test.describe("interactive demo unlock", () => {
     // 4. A wrong code is refused, and says nothing about the real one.
     await page.getByTestId("demo-unlock-input").fill("definitely-not-the-code");
     await page.getByTestId("demo-unlock-submit").click();
+    // Extended budget, not a relaxed assertion: the wording below is
+    // unchanged. This is the first-ever POST to /api/access/login in the
+    // dev-server process, so Next compiles the route on demand — observed at
+    // 5.0s, just past the default 5s. The product returned the correct 401
+    // throughout; only the wait was too short.
     await expect(page.getByTestId("demo-unlock-error")).toHaveText(
       "Invalid Demo Access Code.",
+      { timeout: 60_000 },
     );
     // Still locked: the dialog is still up.
     await expect(dialog).toBeVisible();
