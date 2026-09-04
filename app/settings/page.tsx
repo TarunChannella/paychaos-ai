@@ -1,8 +1,10 @@
+import { C01ProfilePanel } from "@/components/demo/c01-profile-panel";
 import { DemoResetPanel } from "@/components/demo/demo-reset-panel";
 import { Badge } from "@/components/ui/badge";
 import { Card, PageHeader, PageShell, Section } from "@/components/ui/page";
 import { getRazorpayEnv } from "@/lib/config/razorpay-env";
 import { checkInteractiveAccess } from "@/lib/access/guard";
+import { readC01IdempotencyProfile } from "@/lib/demo-profile/service";
 
 /**
  * Phase 5B — Settings: real configuration status and the Demo Reset control.
@@ -41,6 +43,15 @@ export default async function SettingsPage() {
    * configuration crosses the boundary.
    */
   const interactive = await checkInteractiveAccess();
+
+  /**
+   * The controlled C01 test-behaviour profile, read server-side.
+   *
+   * A failed read is passed through as unavailable rather than defaulted to
+   * SAFE: reporting a safe merchant on no evidence is exactly the kind of
+   * unearned reassurance this product exists to remove.
+   */
+  const c01Profile = await readC01IdempotencyProfile();
 
   return (
     <PageShell>
@@ -128,6 +139,21 @@ export default async function SettingsPage() {
             ))}
           </dl>
         </Card>
+      </Section>
+
+      {/* ---- DEMO / TEST BEHAVIOR --------------------------------------- */}
+      {/* Its own section, deliberately NOT inside the danger zone. Enabling a
+          controlled test profile is reversible, is restored by a reset, and
+          is a normal part of running the demonstration — filing it beside an
+          irreversible action would misrepresent what it costs to click. */}
+      <Section
+        title="Demo / test behavior"
+        description="Controlled PayChaos Demo Merchant test behavior used to demonstrate duplicate-delivery resilience. Razorpay Test Mode only."
+      >
+        <C01ProfilePanel
+          initialProfile={c01Profile.profile}
+          initialUnavailable={!c01Profile.ok}
+        />
       </Section>
 
       {/* ---- DANGER ZONE ------------------------------------------------ */}

@@ -16,6 +16,11 @@ import { captureMerchantStateSnapshotForProcessingAttempt } from "@/lib/evidence
 import { createFindingFromInvariantResult } from "@/lib/findings/service";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
+import {
+  certifiedFulfilmentPresent,
+  CERTIFIED_FULFILMENT_ABSENT,
+} from "./certified-baseline";
+
 /**
  * Phase 4B-R2 — proves the REAL server-side diagnostic signal path against the
  * live Supabase project:
@@ -438,7 +443,11 @@ describe("Phase 4B-R2 — real Supabase diagnostic signal extraction", () => {
  * certified data costs nothing and fabricates nothing.
  */
 describe("Phase 4B-R1 — real fulfilment idempotency-key projection", () => {
-  it("15: the approved snapshot path projects the exact persisted idempotency key", async () => {
+  it("15: the approved snapshot path projects the exact persisted idempotency key", async (ctx) => {
+    // Probed inline rather than at module scope: this is the only test in
+    // the file with this precondition, so one query beats one per file.
+    if (!(await certifiedFulfilmentPresent()))
+      ctx.skip(CERTIFIED_FULFILMENT_ABSENT);
     const before = await census();
 
     const { data: rows, error } = await client

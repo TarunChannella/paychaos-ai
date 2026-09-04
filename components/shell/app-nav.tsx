@@ -98,7 +98,21 @@ export function AppNav() {
   return (
     <nav
       aria-label="Primary"
-      className="flex gap-1 overflow-x-auto md:flex-col md:gap-0.5 md:overflow-visible"
+      // VERTICAL AT EVERY WIDTH. This was `flex gap-1 overflow-x-auto` below
+      // `md:`, which was correct for the shell's ORIGINAL mobile design — a
+      // horizontal strip of links above the content. That shell is gone: the
+      // rail is now a 276px off-canvas drawer at every width, and a
+      // horizontal row inside a 276px column pushes most of the destinations
+      // off the right edge. Measured on a 390px viewport, `nav-reliability`
+      // sat at x=497 — outside the viewport entirely, reachable only by
+      // horizontally scrolling a menu that gives no sign it scrolls.
+      //
+      // It survived because `toBeVisible()` passes for an element outside the
+      // viewport and `.click()` scrolls one into view first, so the existing
+      // coverage exercised links a human could not have found. The sticky
+      // sidebar spec asserts `toBeInViewport()` instead, which is what caught
+      // it.
+      className="flex flex-col gap-1 md:gap-0.5"
     >
       {NAV_ITEMS.map((item) => {
         const active = isActive(pathname, item.href);

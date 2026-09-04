@@ -3127,6 +3127,49 @@ Disable database constraints globally
 
 Do not weaken the entire database just to manufacture a failure.
 
+## Phase 5 — the C01 profile, as implemented
+
+The good example above is now the implementation, verbatim.
+
+```text
+SAFE (default)
+  idempotency key = 'FULFIL_ORDER:' || order_id
+
+VULNERABLE_IDEMPOTENCY
+  idempotency key = 'FULFIL_ORDER:' || order_id
+                    || ':ATTEMPT:' || processing_attempt_id
+```
+
+Because every controlled replay allocates a new processing attempt, the
+vulnerable key differs on each run, `fulfilments`'
+`UNIQUE(idempotency_key)` finds nothing to match, and a second
+`FULFIL_ORDER` row is inserted for the same payment.
+
+**No constraint is disabled.** The unique index stays enabled and behaves
+exactly as before — it simply has nothing to catch, which is how this defect
+presents in a real integration and why the demonstration is honest.
+
+The resulting evidence — two `FULFIL_ORDER` fulfilments for one correlated
+payment, carrying two different idempotency keys — is what the existing
+deterministic engine already recognises:
+
+```text
+INV-002  expected: FULFIL_ORDER fulfilments per correlated payment <= 1
+         observed: 2
+         result:   FAIL
+             ↓
+         Finding (created only by a FAIL)
+             ↓
+         RC-002 MISSING_BUSINESS_IDEMPOTENCY
+```
+
+RC-002 already listed `DIFFERENT_FULFILMENT_IDEMPOTENCY_KEYS` among its
+supporting signals before this profile existed, so no diagnosis rule, no
+recommendation and no invariant was added or altered for the demonstration.
+
+Enable/disable it at Settings → **Demo / test behavior**. Demo Reset always
+restores `SAFE`.
+
 ---
 
 # 44. Recommended Final Demo Scenario

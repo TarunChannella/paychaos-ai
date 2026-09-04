@@ -468,6 +468,87 @@ Do not test money using floating point.
 
 # 5. Integration Testing
 
+## 5.0 Certified-baseline skips (Phase 5 correction)
+
+Some Supabase integration suites assert against **certified historical
+evidence** — specific `chaos_runs` rows pinned by exact UUID, and the invariant
+results and fulfilments correlated to them. Pinning real rows is deliberate:
+it is what makes those suites *certification checks* rather than fixture
+theatre.
+
+They cannot self-seed. Seeding would require inserting a `webhook_events` row,
+and the schema permits only one shape there:
+
+```sql
+check (source_kind = 'REAL_RAZORPAY_WEBHOOK')
+check (signature_verified = true)
+```
+
+Every such row therefore asserts a genuine, HMAC-authenticated Razorpay
+delivery. **Fabricating that is forbidden**, so these suites read certified
+evidence and never manufacture it.
+
+**The conflict.** Demo Reset clears all ten runtime tables by design, which
+permanently destroys the pinned rows — and evidence created afterwards carries
+new UUIDs, so the pinned ids can never return. Before this correction the
+suites failed permanently after any reset, which read as *"the projection is
+broken"* when the truth was *"there is nothing certified left to project."*
+
+**The rule now:**
+
+| Certified baseline | Result |
+|---|---|
+| Present | Every original assertion executes, unchanged |
+| Absent | **SKIPPED**, with a reason naming Demo Reset as the cause |
+| Absent | **Never PASSED** — an absent certification must never look satisfied |
+
+Implemented by `tests/integration/supabase/certified-baseline.ts`, which probes
+once per file and supplies the skip reason. Guards use Vitest's
+`ctx.skip(reason)` — a real skip that appears in the report — never an early
+`return`, which would be recorded as a pass.
+
+Affected suites: `065-phase3g-findings` (test 22),
+`066-phase3h-read-models` (12 tests), `068-phase4b-diagnostic-signals`
+(test 15).
+
+**To exercise them again:** create fresh certified evidence with a real
+Razorpay Test Mode payment and chaos run, then update the pinned ids.
+
+## 5.1 What integration tests must never fabricate
+
+A comment saying "synthetic" does not make a persisted row synthetic. Because
+this suite runs against the **real** Supabase project and a failed cleanup can
+leave rows behind, no integration test may set
+`source_kind = REAL_RAZORPAY_WEBHOOK` on a fixture it invented in order to make
+an automated path possible.
+
+Where the production processor legitimately requires authentic provider
+evidence and no honest synthetic equivalent exists, **split the verification**
+instead:
+
+- **Automated, structural:** schema, constraints, defaults, RLS, grants, state
+  transitions, RPC reachability — everything provable without provider
+  evidence.
+- **Manual acceptance:** the behaviour that genuinely needs a real Razorpay
+  Test Mode payment.
+
+`078-phase5-c01-vulnerable-profile` follows this split. Its manual half is
+recorded below under "Phase 5 — C01 controlled vulnerability".
+
+## 5.2 Destructive opt-in
+
+Destructive integration tests are gated on exactly one convention:
+
+```text
+PAYCHAOS_ALLOW_DESTRUCTIVE_RESET_TEST=1
+```
+
+Used by `052-demo-reset-atomic` and `078-phase5-c01-vulnerable-profile`. They
+`skipIf` when it is unset — never return early, which would report a green tick
+for a destructive proof that never ran.
+
+---
+
 Integration tests prove that multiple real application modules cooperate correctly.
 
 Examples:
@@ -3745,3 +3826,44 @@ The governing rule is:
 
 **Do not prove PayChaos by counting tests.  
 Prove it by showing that dangerous payment states are prevented, deliberate vulnerabilities are detected, fixes are verified, evidence is trustworthy, and the complete Razorpay Test Mode demo can be repeated reliably.**
+---
+
+# Phase 5 — C01 controlled vulnerability: manual acceptance
+
+The automated half lives in
+`tests/integration/supabase/078-phase5-c01-vulnerable-profile.integration.test.ts`
+(structural only) and
+`tests/unit/demo-profile/vulnerable-profile-sql.test.ts` (the guard's
+structure, proven by diffing the processor against its Phase 3C original).
+
+The half below **cannot** be automated without fabricating provider evidence,
+so it is performed by hand against Razorpay Test Mode.
+
+**Prerequisite:** migration
+`20260907000000_phase5_c01_controlled_vulnerable_profile.sql` applied via the
+Supabase SQL Editor.
+
+1. Settings → **Danger zone** → type `RESET` → **Reset demo data**.
+   Expect: score 40, all scenarios NOT RUN, profile `SAFE`.
+2. Settings → **Demo / test behavior** → **Enable C01 Vulnerable Profile**.
+   Expect: mode reads `VULNERABLE_IDEMPOTENCY`, scoped notice visible.
+3. Demo Merchant → **Create Internal Test Order** →
+   **Create Razorpay Test Order** → **Pay with Razorpay** → complete a
+   **successful** Test Mode payment.
+4. Reload. Expect: payment captured, **fulfilment count = 1**.
+5. Chaos Runs → **C01** → **Start chaos run** → **Run Duplicate Replay**.
+6. Expect: **fulfilment count = 2**, two fulfilments whose idempotency keys
+   differ only by an `:ATTEMPT:` suffix.
+7. **Evaluate Money Invariants**. Expect: **INV-002 FAIL**, observed = 2,
+   expected `<= 1`.
+8. Findings. Expect: **exactly one** new OPEN Finding.
+9. Open it → **Re-run diagnosis**. Expect: `RC-002
+   MISSING_BUSINESS_IDEMPOTENCY` with a recommendation.
+10. Re-evaluate the same run. Expect: **no second Finding**.
+11. Settings → **Use Safe Idempotency Profile**.
+12. Finding → **Run Regression Test**. Expect: new evidence, INV-002 **PASS**,
+    the original FAIL still visible, Finding RESOLVED by the existing rules.
+13. Reliability. Expect: score/readiness recalculated by the existing engine.
+
+Record the result in the phase handoff. Steps 4, 6, 7, 8 and 12 are the ones
+no automated test can prove.

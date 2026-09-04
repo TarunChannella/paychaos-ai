@@ -350,18 +350,24 @@ describe("Phase 3G surface — static safety guard", () => {
     // its own, and the earlier migrations stay exactly where they were.
     // Advanced again for the safeupdate fix, which legitimately adds one
     // additive migration (CREATE OR REPLACE of the reset function; no table
-    // change). THIS phase still contributes no migration of its own.
-    expect(migrations).toHaveLength(15);
+    // change), and once more for the Phase 5 controlled C01 vulnerable
+    // profile (docs/DEMO_PLAN.md Section 9), which adds the one non-domain
+    // configuration table. THIS phase still contributes no migration of its
+    // own, and every position below is still an exact-name assertion.
+    expect(migrations).toHaveLength(16);
     expect(migrations[migrations.length - 1]).toBe(
-      "20260906000000_phase5_demo_reset_safeupdate.sql",
+      "20260907000000_phase5_c01_controlled_vulnerable_profile.sql",
     );
     expect(migrations[migrations.length - 2]).toBe(
-      "20260905000000_phase5_demo_reset_atomic.sql",
+      "20260906000000_phase5_demo_reset_safeupdate.sql",
     );
     expect(migrations[migrations.length - 3]).toBe(
-      "20260904000000_phase4e_regression_runs.sql",
+      "20260905000000_phase5_demo_reset_atomic.sql",
     );
     expect(migrations[migrations.length - 4]).toBe(
+      "20260904000000_phase4e_regression_runs.sql",
+    );
+    expect(migrations[migrations.length - 5]).toBe(
       "20260903000000_phase3g_findings.sql",
     );
     // Phase 3F still owns exactly one migration of its own — advanced, not

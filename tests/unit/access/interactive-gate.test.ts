@@ -216,13 +216,17 @@ describe("interactive gate — the access code never reaches the client", () => 
 
 describe("interactive gate — every visible control offers the unlock", () => {
   /**
-   * The eight user-visible controls that change state. Each is already
+   * The nine user-visible controls that change state. Each is already
    * refused server-side; this asserts the UI also OFFERS the code rather than
    * leaving a reviewer with an unexplained error.
    *
-   * Listed explicitly rather than discovered, so ADDING a ninth control is a
+   * Listed explicitly rather than discovered, so ADDING a tenth control is a
    * deliberate decision that fails this test until it is wired — the failure
    * mode otherwise is silent and only shows up in a live demo.
+   *
+   * The ninth arrived with Phase 5's controlled C01 vulnerable profile.
+   * Enabling a deliberate defect is a state change like any other, so it is
+   * gated by the same Demo Access Code and offers the same dialog.
    */
   const CONTROLS = [
     "app/demo-merchant/create-order-button.tsx",
@@ -233,6 +237,7 @@ describe("interactive gate — every visible control offers the unlock", () => {
     "components/findings/regression-action.tsx",
     "components/findings/diagnose-action.tsx",
     "components/demo/demo-reset-panel.tsx",
+    "components/demo/c01-profile-panel.tsx",
   ] as const;
 
   it("13: each control uses the shared hook and renders its dialog", () => {

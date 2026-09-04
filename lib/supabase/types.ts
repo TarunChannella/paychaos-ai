@@ -99,6 +99,15 @@
  * itself a migration and does not create/alter anything.
  */
 
+/**
+ * Phase 5 — the controlled C01 Demo Merchant test-behaviour profile. Mirrors
+ * the `demo_merchant_profile_c01_valid` CHECK constraint. The runtime
+ * constant and its type guard live in `lib/demo-profile/service.ts`; this is
+ * the database-shape mirror, kept here so the Supabase client types stay
+ * self-contained (this file imports nothing).
+ */
+export type C01IdempotencyProfileValue = "SAFE" | "VULNERABLE_IDEMPOTENCY";
+
 export type OrderPaymentStatus =
   "UNPAID" | "PENDING" | "FAILED_OBSERVED" | "PAID";
 export type OrderBusinessStatus = "OPEN" | "FULFILLED";
@@ -244,6 +253,31 @@ export interface InvariantResultEvidenceRef {
 export interface Database {
   public: {
     Tables: {
+      /**
+       * Phase 5 — the operator-controlled Demo Merchant test-behaviour
+       * profile (docs/DEMO_PLAN.md Section 9). A singleton: `id` is a
+       * boolean primary key pinned to `true` by a CHECK constraint, so
+       * there is exactly one row and "the current profile" is never
+       * ambiguous. Holds no secret and no payment data.
+       */
+      demo_merchant_profile: {
+        Row: {
+          id: boolean;
+          c01_idempotency_profile: C01IdempotencyProfileValue;
+          updated_at: string;
+        };
+        Insert: {
+          id?: boolean;
+          c01_idempotency_profile?: C01IdempotencyProfileValue;
+          updated_at?: string;
+        };
+        Update: {
+          id?: boolean;
+          c01_idempotency_profile?: C01IdempotencyProfileValue;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
       orders: {
         Row: {
           id: string;

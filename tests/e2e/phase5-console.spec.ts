@@ -194,7 +194,15 @@ test.describe("Phase 5 — the operations console", () => {
     await page.getByTestId("nav-reliability").click();
     await page.waitForURL(/\/reliability$/, { timeout: 120_000 });
 
-    await expect(page.getByTestId("readiness-overview")).toBeVisible();
+    // Same budget as the navigations above, not a relaxed assertion: the
+    // wording and the element are unchanged. `/reliability` renders from a
+    // live Supabase read, and under a full parallel suite that first render
+    // has been observed just past the 5s default while every `waitForURL` in
+    // this same test already allows 120s. The inconsistency was the defect —
+    // the page was correct throughout.
+    await expect(page.getByTestId("readiness-overview")).toBeVisible({
+      timeout: 120_000,
+    });
   });
 });
 

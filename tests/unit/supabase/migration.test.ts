@@ -72,6 +72,7 @@ describe("Migration set creates exactly the approved Phase 1 + Phase 2B + Phase 
   it("creates orders, payment_attempts, payments, fulfilments, webhook_events, event_processing_attempts, chaos_runs, invariant_results, findings and nothing else", () => {
     expect([...tableNames].sort()).toEqual([
       "chaos_runs",
+      "demo_merchant_profile",
       "event_processing_attempts",
       "findings",
       "fulfilments",
@@ -109,12 +110,44 @@ describe("Migration set creates exactly the approved Phase 1 + Phase 2B + Phase 
     }
   });
 
-  // The approved P0 schema is exactly ten tables (docs/DATABASE.md Section
-  // "Tables Requiring RLS"). Phase 4E adds `regression_runs`, the tenth and
-  // last of them, so the set is now COMPLETE. Advanced, not loosened: the
-  // count is still exact, and it cannot grow again without failing here.
-  it("the cumulative table count is exactly ten, completing the approved P0 schema", () => {
-    expect(tableNames).toHaveLength(10);
+  // The approved P0 PAYMENT AND EVIDENCE schema is exactly ten tables
+  // (docs/DATABASE.md Section 4). That set is COMPLETE and must never grow:
+  // a new payment or evidence table would be a schema redesign.
+  //
+  // Phase 5 adds ONE table outside that domain — `demo_merchant_profile`,
+  // the operator-controlled test-behaviour flag required by
+  // docs/DEMO_PLAN.md Section 9. It is deliberately excluded from the count
+  // below rather than folded into it, because the two categories carry
+  // different guarantees: the ten hold payment truth and evidence and are
+  // cleared by Demo Reset; the profile holds one enum, no payment data and
+  // no evidence, and is RESTORED by Demo Reset rather than deleted.
+  //
+  // Asserting the domain set explicitly keeps the guard's real teeth: an
+  // eleventh payment/evidence table still fails here, and a twelfth
+  // configuration table would fail the total.
+  const DOMAIN_TABLES = [
+    "chaos_runs",
+    "event_processing_attempts",
+    "findings",
+    "fulfilments",
+    "invariant_results",
+    "orders",
+    "payment_attempts",
+    "payments",
+    "regression_runs",
+    "webhook_events",
+  ];
+
+  it("the payment and evidence schema is still exactly ten tables", () => {
+    expect(tableNames.filter((t) => t !== "demo_merchant_profile").sort()).toEqual(
+      DOMAIN_TABLES,
+    );
+  });
+
+  it("exactly one non-domain configuration table exists, and it is the profile", () => {
+    expect(tableNames.filter((t) => !DOMAIN_TABLES.includes(t))).toEqual([
+      "demo_merchant_profile",
+    ]);
   });
 });
 
@@ -295,14 +328,20 @@ describe("Phase 1C-A no permissive anon/authenticated policy (#14)", () => {
     }
   });
 
-  it("every TABLE GRANT targets only the 10 approved tables", () => {
+  it("every TABLE GRANT targets only the 10 approved tables, plus the one configuration table", () => {
+    // Advanced for Phase 5's `demo_merchant_profile` (docs/DATABASE.md
+    // "Phase 5 addendum"). The ten domain tables remain a closed set — a
+    // grant on an eleventh PAYMENT/EVIDENCE table still fails here. The
+    // configuration table is named explicitly rather than folded into a
+    // loosened pattern, so it cannot become a hole a future table slips
+    // through unnoticed.
     const tableGrantLines = combinedSql
       .split("\n")
       .filter((line) => /^\s*grant\s.*\bon\s+(?!function\b)/i.test(line));
     expect(tableGrantLines.length).toBeGreaterThan(0);
     for (const line of tableGrantLines) {
       expect(line).toMatch(
-        /public\.(orders|payment_attempts|payments|fulfilments|webhook_events|event_processing_attempts|chaos_runs|invariant_results|findings|regression_runs)\b/i,
+        /public\.(orders|payment_attempts|payments|fulfilments|webhook_events|event_processing_attempts|chaos_runs|invariant_results|findings|regression_runs|demo_merchant_profile)\b/i,
       );
     }
   });
@@ -757,9 +796,29 @@ describe("Phase 1C-A correction — explicit browser-role revocation", () => {
   // seven mutable tables must still each carry full CRUD, and
   // invariant_results must carry SELECT/INSERT/DELETE and never UPDATE.
   it("service_role retains explicit CRUD grants on exactly the nine mutable tables, plus an append-only grant on invariant_results", () => {
-    const tableGrantLines = combinedSql
+    const allTableGrantLines = combinedSql
       .split("\n")
       .filter((line) => /^\s*grant\s.*\bon\s+(?!function\b)/i.test(line));
+    expect(allTableGrantLines.length).toBe(11);
+
+    // The Phase 5 configuration table is separated out FIRST, so every count
+    // below still refers to the payment/evidence domain exactly as before.
+    const profileGrants = allTableGrantLines.filter((line) =>
+      /public\.demo_merchant_profile\b/i.test(line),
+    );
+    expect(profileGrants.length).toBe(1);
+    // Strictly NARROWER than any domain table: the singleton row is seeded by
+    // its own migration and RESTORED (never deleted) by the reset, so the
+    // server needs neither INSERT nor DELETE. Granting either would be
+    // privilege the feature cannot justify, and this is what keeps it out.
+    expect(profileGrants[0]!).toMatch(/select,\s*update/i);
+    expect(profileGrants[0]!).not.toMatch(/\binsert\b/i);
+    expect(profileGrants[0]!).not.toMatch(/\bdelete\b/i);
+    expect(profileGrants[0]!).toMatch(/to service_role/i);
+
+    const tableGrantLines = allTableGrantLines.filter(
+      (line) => !/public\.demo_merchant_profile\b/i.test(line),
+    );
     expect(tableGrantLines.length).toBe(10);
 
     const invariantGrants = tableGrantLines.filter((line) =>
@@ -1385,6 +1444,7 @@ describe("Phase 3C migration — controlled replay compatibility (architect-appr
     const tableNames = extractCreateTableNames(combinedSql);
     expect([...tableNames].sort()).toEqual([
       "chaos_runs",
+      "demo_merchant_profile",
       "event_processing_attempts",
       "findings",
       "fulfilments",
@@ -1536,6 +1596,7 @@ describe("Phase 3D-0 migration — execution-block audit + C07 concurrency schem
     const tableNames = extractCreateTableNames(combinedSql);
     expect([...tableNames].sort()).toEqual([
       "chaos_runs",
+      "demo_merchant_profile",
       "event_processing_attempts",
       "findings",
       "fulfilments",
@@ -1590,6 +1651,8 @@ describe("Phase 3E-A migration — event_processing_attempts evidence snapshots"
       // Phase 5 Demo Reset fix — additive, and still an exact-name list.
       "20260905000000_phase5_demo_reset_atomic.sql",
       "20260906000000_phase5_demo_reset_safeupdate.sql",
+      // Phase 5 controlled C01 vulnerable profile — additive, exact name.
+      "20260907000000_phase5_c01_controlled_vulnerable_profile.sql",
     ]);
     expect(phase3eMigration!.name).toMatch(
       /^\d{14}_phase3e_evidence_snapshots\.sql$/,
@@ -1769,6 +1832,7 @@ describe("Phase 3E-A migration — event_processing_attempts evidence snapshots"
     const tableNames = extractCreateTableNames(combinedSql);
     expect([...tableNames].sort()).toEqual([
       "chaos_runs",
+      "demo_merchant_profile",
       "event_processing_attempts",
       "findings",
       "fulfilments",
@@ -1792,28 +1856,32 @@ describe("Phase 3F-A migration — invariant_results (the first Money Invariant 
       .join("\n");
   }
 
-  it("1: exists, is the expected filename and sorts exactly four places before the last migration (Phase 3G, Phase 4E, then the two Phase 5 reset-function migrations follow it)", () => {
+  it("1: exists, is the expected filename and sorts exactly five places before the last migration (Phase 3G, Phase 4E, the two Phase 5 reset-function migrations, then the C01 profile follow it)", () => {
     expect(phase3fMigration).toBeDefined();
     expect(phase3fMigration!.name).toBe(
       "20260902000000_phase3f_invariant_results.sql",
     );
-    // Advanced, not loosened, three times: Phase 4E shifted these once, the
-    // atomic Demo Reset function again, and the safeupdate replacement once
-    // more. Every position is still an exact-name assertion — only the
-    // offsets moved, by exactly the number of legitimately added migrations.
+    // Advanced, not loosened, four times: Phase 4E shifted these once, the
+    // atomic Demo Reset function again, the safeupdate replacement once more,
+    // and now the C01 controlled-vulnerable-profile migration. Every position
+    // is still an exact-name assertion — only the offsets moved, by exactly
+    // the number of legitimately added migrations.
     expect(migrations[migrations.length - 1]!.name).toBe(
-      "20260906000000_phase5_demo_reset_safeupdate.sql",
+      "20260907000000_phase5_c01_controlled_vulnerable_profile.sql",
     );
     expect(migrations[migrations.length - 2]!.name).toBe(
-      "20260905000000_phase5_demo_reset_atomic.sql",
+      "20260906000000_phase5_demo_reset_safeupdate.sql",
     );
     expect(migrations[migrations.length - 3]!.name).toBe(
-      "20260904000000_phase4e_regression_runs.sql",
+      "20260905000000_phase5_demo_reset_atomic.sql",
     );
     expect(migrations[migrations.length - 4]!.name).toBe(
-      "20260903000000_phase3g_findings.sql",
+      "20260904000000_phase4e_regression_runs.sql",
     );
     expect(migrations[migrations.length - 5]!.name).toBe(
+      "20260903000000_phase3g_findings.sql",
+    );
+    expect(migrations[migrations.length - 6]!.name).toBe(
       phase3fMigration!.name,
     );
   });

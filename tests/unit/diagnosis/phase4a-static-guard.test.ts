@@ -355,6 +355,7 @@ describe("Phase 4A-R1 evidence pack — static guard", () => {
       // reset function). Phase 4A still contributes none of its own.
       "20260905000000_phase5_demo_reset_atomic.sql",
       "20260906000000_phase5_demo_reset_safeupdate.sql",
+      "20260907000000_phase5_c01_controlled_vulnerable_profile.sql",
     ]);
   });
 

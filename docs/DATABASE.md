@@ -218,6 +218,44 @@ The final P0 schema contains these **10 tables**:
 
 This is the complete approved P0 table set.
 
+## Phase 5 addendum — one non-domain configuration table
+
+The ten tables above are the **payment and evidence domain**, and that set is
+closed. A new payment or evidence table would be a schema redesign and is not
+permitted without an approved scope change.
+
+Phase 5 adds exactly one table **outside** that domain:
+
+```text
+11. demo_merchant_profile
+```
+
+It exists because `docs/DEMO_PLAN.md` Section 9 and
+`docs/CHAOS_SCENARIOS.md` Section 43 require an operator-controlled vulnerable
+Demo Merchant profile, and that profile must be **server-authoritative** — a
+client-side flag could not gate behaviour that lives inside
+`process_webhook_payment_event`. No existing table could carry it: all ten are
+per-event or per-record evidence, and none is a configuration surface.
+
+It is deliberately a different kind of table, and the difference is the reason
+it does not extend the domain count:
+
+| | The ten domain tables | `demo_merchant_profile` |
+|---|---|---|
+| Holds | payment truth and evidence | one enum value |
+| Rows | many, per event/record | exactly one (singleton CHECK) |
+| Demo Reset | **deleted** | **restored to `SAFE`** |
+| Payment data | yes | none |
+
+Migration: `20260907000000_phase5_c01_controlled_vulnerable_profile.sql`.
+Default `SAFE`; `CHECK` restricts the column to `SAFE` /
+`VULNERABLE_IDEMPOTENCY`; RLS enabled with no policy, so only the server's
+`service_role` can read or write it.
+
+Enforced by `tests/unit/supabase/migration.test.ts`, which asserts the domain
+set is still exactly those ten AND that this remains the only non-domain
+table.
+
 ---
 
 # 5. Candidate Entities Deliberately Removed or Combined
@@ -3535,6 +3573,26 @@ payments
 payment_attempts
 orders
 ```
+
+### Phase 5 — one restore, no eleventh deletion
+
+`demo_merchant_profile` is **not** in the deletion scope above and never will
+be. In the same transaction, after the ten deletes, the reset performs exactly
+one UPDATE:
+
+```text
+demo_merchant_profile.c01_idempotency_profile -> 'SAFE'
+```
+
+`docs/DEMO_PLAN.md` Section 9 requires a controlled vulnerable profile to be
+"reset or switched off after the run". Restoring it inside the same
+transaction means a reset either fully applies — data cleared **and** profile
+safe — or does not apply at all, so a vulnerable profile can never survive a
+reset and silently poison the next demonstration.
+
+It is a restore rather than a delete because the singleton row must continue
+to exist: an absent profile is not a safe one, and every later read would
+fail.
 
 ---
 

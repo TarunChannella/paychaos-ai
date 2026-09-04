@@ -316,9 +316,15 @@ describe("061-phase3e-chaos-evidence-assembly.integration.test.ts — provenance
     expect(integrationFiles.filter((name) => name.startsWith("077-"))).toEqual([
       "077-phase4g-readiness.integration.test.ts",
     ]);
+    // 078 is the Phase 5 controlled C01 vulnerable-profile proof, added
+    // after this file, and is pinned by exact name for the same reason every
+    // number above it is.
+    expect(integrationFiles.filter((name) => name.startsWith("078-"))).toEqual([
+      "078-phase5-c01-vulnerable-profile.integration.test.ts",
+    ]);
     expect(
-      integrationFiles.filter((name) => name.startsWith("078-")),
-      "a 078- integration suite appeared without this guard being advanced",
+      integrationFiles.filter((name) => name.startsWith("079-")),
+      "a 079- integration suite appeared without this guard being advanced",
     ).toEqual([]);
     expect(functionalSource).not.toMatch(/create\s+table/i);
     expect(functionalSource).not.toMatch(/alter\s+table/i);

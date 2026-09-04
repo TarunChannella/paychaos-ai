@@ -171,8 +171,22 @@ describe("demo reset — the migration is narrow and safe", () => {
    */
   function functionBody(): string {
     const sql = resetMigration?.sql ?? "";
-    const start = sql.indexOf("as $$");
-    const end = sql.lastIndexOf("$$;");
+
+    // NARROWED to this function's own dollar-quoted body. The previous
+    // version sliced from the FIRST `as $$` to the LAST `$$;` in the file,
+    // which was correct only while the migration defining the reset held
+    // nothing else. The Phase 5 C01 profile migration also replaces
+    // `process_webhook_payment_event`, so that slice silently grew to span
+    // BOTH functions — and the structural bans below then reported the
+    // merchant processor's `raise exception` handlers as if they were the
+    // reset's. Anchoring on the declaration keeps every assertion pointed at
+    // the function it names.
+    const declaration = `create or replace function public.${DEMO_RESET_RPC}()`;
+    const declaredAt = sql.indexOf(declaration);
+    expect(declaredAt, "the reset function must be declared").toBeGreaterThan(-1);
+
+    const start = sql.indexOf("as $$", declaredAt);
+    const end = sql.indexOf("$$;", start);
     expect(start, "the function body must be locatable").toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     return sql.slice(start, end).toLowerCase();
@@ -316,17 +330,33 @@ describe("demo reset — the migration is narrow and safe", () => {
       "alter ",
       "create ",
       "grant ",
-      "update ",
       "insert ",
     ]) {
       expect(body, banned).not.toContain(banned);
     }
 
-    // Whatever else it does, the body's only data statements are DELETEs,
-    // one per approved table and nothing else.
-    const dataStatements = body.match(/(delete|update|insert|merge) from/g);
-    expect(dataStatements ?? []).toHaveLength(10);
-    expect(new Set(dataStatements ?? [])).toEqual(new Set(["delete from"]));
+    // NARROWED, NOT DROPPED. `update ` was banned outright until Phase 5,
+    // when docs/DEMO_PLAN.md Section 9's requirement that a reset switch the
+    // controlled vulnerable profile back off made exactly one UPDATE
+    // necessary — a vulnerable profile surviving a reset would silently
+    // poison the next demonstration.
+    //
+    // The safety property being protected was never "no UPDATE"; it was "no
+    // unexpected mutation". So the ban becomes an allow-list of one: the
+    // reset may update the profile row to SAFE, and nothing else. Any second
+    // UPDATE, or this one pointed at another table or another value, still
+    // fails here.
+    const updates = [...body.matchAll(/update\s+public\.(\w+)/g)].map(
+      (m) => m[1],
+    );
+    expect(updates).toEqual(["demo_merchant_profile"]);
+    expect(body).toContain("c01_idempotency_profile = 'safe'");
+
+    // The DELETEs remain exactly ten, one per approved runtime table, and
+    // remain the only deletions.
+    const deletes = body.match(/(delete|insert|merge) from/g);
+    expect(deletes ?? []).toHaveLength(10);
+    expect(new Set(deletes ?? [])).toEqual(new Set(["delete from"]));
   });
 
   it("11b: ATOMICITY — the body has no exception handler", () => {
@@ -373,9 +403,15 @@ describe("demo reset — the migration is narrow and safe", () => {
 
   it("13: service_role is the only granted executor", () => {
     const sql = resetMigration?.sql.toLowerCase() ?? "";
-    const grants = [...sql.matchAll(/grant execute on function [^;]+;/g)].map(
-      (m) => m[0],
-    );
+
+    // SCOPED TO THIS FUNCTION'S OWN GRANTS. The migration that now defines
+    // the reset also replaces `process_webhook_payment_event` and carries its
+    // grant, so counting every GRANT in the file would report a privilege
+    // this test was never about. The property is that THE RESET is executable
+    // by service_role alone.
+    const grants = [...sql.matchAll(/grant execute on function [^;]+;/g)]
+      .map((m) => m[0])
+      .filter((g) => g.includes(DEMO_RESET_RPC));
 
     expect(grants).toHaveLength(1);
 
@@ -390,7 +426,14 @@ describe("demo reset — the migration is narrow and safe", () => {
   });
 
   it("14: it touches no schema, auth, storage or configuration surface", () => {
-    const sql = resetMigration?.sql.toLowerCase() ?? "";
+    // SCOPED TO THE FUNCTION BODY, not the whole file. The Phase 5 C01
+    // profile migration legitimately enables RLS on the NEW
+    // `demo_merchant_profile` table — that is the migration hardening a table
+    // it just created, not the reset function touching a policy. Asserting
+    // against the file conflated the two and would have forced the new table
+    // to ship WITHOUT row-level security to keep a green tick, which is the
+    // exact inversion a test must never create.
+    const body = functionBody();
 
     for (const forbidden of [
       "auth.",
@@ -399,8 +442,22 @@ describe("demo reset — the migration is narrow and safe", () => {
       "pg_policies",
       "row level security",
       "create policy",
+      "security definer",
     ]) {
-      expect(sql, forbidden).not.toContain(forbidden);
+      expect(body, forbidden).not.toContain(forbidden);
+    }
+
+    // And the reset's own statements never alter a policy or a role.
+    const sql = resetMigration?.sql.toLowerCase() ?? "";
+    const ownStatements = [...sql.matchAll(/[^;]*reset_paychaos_demo_runtime[^;]*;/g)]
+      .map((m) => m[0])
+      .filter((statement) => !statement.includes("as $$"));
+
+    expect(ownStatements.length).toBeGreaterThan(0);
+    for (const statement of ownStatements) {
+      for (const forbidden of ["create policy", "alter role", "auth.", "storage."]) {
+        expect(statement, forbidden).not.toContain(forbidden);
+      }
     }
   });
 

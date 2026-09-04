@@ -76,16 +76,19 @@ describe("Phase 4F-R1 — the approved surface", () => {
     // its own, and the earlier migrations stay exactly where they were.
     // Advanced again for the safeupdate fix, which legitimately adds one
     // additive migration (CREATE OR REPLACE of the reset function; no table
-    // change). THIS phase still contributes no migration of its own.
-    expect(migrations).toHaveLength(15);
+    // change), and once more for the Phase 5 controlled C01 vulnerable
+    // profile (docs/DEMO_PLAN.md Section 9), which adds the one non-domain
+    // configuration table. THIS phase still contributes no migration of its
+    // own, and every position below is still an exact-name assertion.
+    expect(migrations).toHaveLength(16);
     expect(migrations.at(-1)).toBe(
-      "20260906000000_phase5_demo_reset_safeupdate.sql",
+      "20260907000000_phase5_c01_controlled_vulnerable_profile.sql",
     );
     expect(migrations.at(-2)).toBe(
-      "20260905000000_phase5_demo_reset_atomic.sql",
+      "20260906000000_phase5_demo_reset_safeupdate.sql",
     );
     expect(migrations.at(-3)).toBe(
-      "20260904000000_phase4e_regression_runs.sql",
+      "20260905000000_phase5_demo_reset_atomic.sql",
     );
   });
 
@@ -105,9 +108,15 @@ describe("Phase 4F-R1 — the approved surface", () => {
     expect(integration.filter((name) => name.startsWith("077-"))).toEqual([
       "077-phase4g-readiness.integration.test.ts",
     ]);
+    // 078 is the Phase 5 controlled C01 vulnerable-profile proof, added after
+    // this file and pinned by exact name for the same reason every number
+    // above it is.
+    expect(integration.filter((name) => name.startsWith("078-"))).toEqual([
+      "078-phase5-c01-vulnerable-profile.integration.test.ts",
+    ]);
     expect(
-      integration.filter((name) => name.startsWith("078-")),
-      "a 078- integration suite appeared without this guard being advanced",
+      integration.filter((name) => name.startsWith("079-")),
+      "a 079- integration suite appeared without this guard being advanced",
     ).toEqual([]);
   });
 });

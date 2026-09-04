@@ -290,10 +290,26 @@ body {
 }
 
 /* No page may scroll sideways. Wide tables and code scroll INSIDE their own
- * container instead — see the `.scroll-x` helper below. */
+ * container instead — see the `.scroll-x` helper below.
+ *
+ * `clip`, NOT `hidden`, AND THE DIFFERENCE IS LOAD-BEARING. Per the CSS
+ * overflow spec, when one axis is `hidden` the other computes from `visible`
+ * to `auto` — so `overflow-x: hidden` here silently made `<body>` a scroll
+ * container. `position: sticky` resolves against its nearest scrolling
+ * ancestor, so the desktop sidebar was sticking to a container that grows
+ * with its content instead of to the viewport, and it scrolled away with the
+ * page: measured at 760px of movement for a 760px scroll, i.e. no stickiness
+ * whatsoever, despite `md:sticky md:top-0 md:h-screen` being present and
+ * correct on the element the whole time.
+ *
+ * `overflow-x: clip` blocks sideways scrolling exactly as before but creates
+ * no scroll container, so `overflow-y` stays `visible` and sticky resolves
+ * against the viewport. Covered by tests/e2e/sidebar-sticky.spec.ts, which
+ * measures a real viewport position after a real scroll — an assertion about
+ * the element's class list would have passed against the broken product. */
 html,
 body {
-  overflow-x: hidden;
+  overflow-x: clip;
 }
 
 /* The sanctioned local horizontal scroll, used by wide technical tables. */

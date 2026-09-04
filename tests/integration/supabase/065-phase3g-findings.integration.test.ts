@@ -10,6 +10,11 @@ import {
 import { findFindingByInvariantResultId } from "@/lib/findings/repository";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
+import {
+  approvedChaosRunsPresent,
+  CERTIFIED_BASELINE_ABSENT,
+} from "./certified-baseline";
+
 import { getAnonClientForTest } from "./helpers";
 
 /**
@@ -77,6 +82,14 @@ const APPROVED_PHASE_3F_RUN_IDS = [
   "5090e423-daa5-4122-99de-4c27d728957c", // historical C11-B
   "b49d344a-f5cf-42ae-a078-819b26bfbffe", // historical C11-A
 ] as const;
+
+/**
+ * The certified baseline, probed ONCE. Test 22 is pinned to these approved
+ * runs and is skipped — never passed — when Demo Reset has cleared them.
+ */
+const CERTIFIED_BASELINE_PRESENT = await approvedChaosRunsPresent(
+  APPROVED_PHASE_3F_RUN_IDS,
+);
 
 type Row = Record<string, unknown>;
 
@@ -456,7 +469,8 @@ describe("Phase 3G — nothing outside this file's own rows was touched", () => 
     }
   });
 
-  it("22: the eleven authoritative Phase 3F results still have no finding", async () => {
+  it("22: the eleven authoritative Phase 3F results still have no finding", async (ctx) => {
+    if (!CERTIFIED_BASELINE_PRESENT) ctx.skip(CERTIFIED_BASELINE_ABSENT);
     // Scoped to the five APPROVED run IDs, never to "every row that is not
     // mine". The negative form would silently break the moment a Phase 4
     // regression, a manual verification chain or another test legitimately

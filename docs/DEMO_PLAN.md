@@ -404,6 +404,38 @@ If an approved vulnerable Demo Merchant profile is used:
 - it must be clearly labelled;
 - it must be reset or switched off after the run.
 
+## Phase 5 — as implemented
+
+The profile required above now exists. How each rule above is satisfied:
+
+| Rule | How it is met |
+|---|---|
+| Test Mode only | The app refuses to boot without `RAZORPAY_MODE=test` and an `rzp_test_` key, and `setC01IdempotencyProfile` re-checks Test Mode before writing |
+| Operator-controlled | Settings → **Demo / test behavior**, gated by the existing Demo Access Code session |
+| Not publicly exploitable | `POST /api/demo/profile` requires the signed HttpOnly session; RLS with no policy keeps the table unreachable from a browser |
+| Does not target Razorpay | The defect is entirely inside the PayChaos Demo Merchant's own fulfilment logic |
+| Disables no security control | No constraint, trigger or index is disabled; webhook signature verification is untouched |
+| Clearly labelled | The panel states the current mode, and shows a scoped notice while vulnerable |
+| Reset/switched off | Demo Reset restores `SAFE` in the same transaction as the deletes |
+
+**Where it lives**
+
+- Storage: `demo_merchant_profile.c01_idempotency_profile`, default `SAFE`
+- Behaviour: `process_webhook_payment_event`, guarded by four ANDed conditions
+- Control: `components/demo/c01-profile-panel.tsx` on `/settings`
+- Migration: `20260907000000_phase5_c01_controlled_vulnerable_profile.sql`
+
+**The defect itself** is the one Section 43 of `docs/CHAOS_SCENARIOS.md`
+prescribes: the fulfilment idempotency key incorrectly includes the processing
+attempt id. Every replay allocates a new attempt, so the key changes, the
+`UNIQUE(idempotency_key)` constraint never matches, and a second fulfilment is
+inserted — a real merchant bug reached without weakening the database.
+
+**Reachable only** when the attempt is `PAYCHAOS_REPLAY`, belongs to a chaos
+run, that run is `C01`, and an operator has persisted
+`VULNERABLE_IDEMPOTENCY`. A real `REAL_RAZORPAY_WEBHOOK` delivery, and C03,
+C07 and C11, cannot enter that branch.
+
 ---
 
 # 10. Fix Demonstration Rule

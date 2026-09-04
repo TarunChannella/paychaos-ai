@@ -11,6 +11,11 @@ import { buildEvidenceTimeline } from "@/lib/evidence/timeline-model";
 import { listFindingSummariesForInvariantResults } from "@/lib/findings/run-findings-read";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
+import {
+  approvedChaosRunsPresent,
+  CERTIFIED_BASELINE_ABSENT,
+} from "./certified-baseline";
+
 /**
  * Phase 3H — the Round 1 read models, against the live Supabase project.
  *
@@ -40,6 +45,15 @@ const APPROVED_PHASE_3F_RUN_IDS = [
   "5090e423-daa5-4122-99de-4c27d728957c", // historical C11-B
   "b49d344a-f5cf-42ae-a078-819b26bfbffe", // historical C11-A
 ] as const;
+
+/**
+ * The certified baseline, probed ONCE. Every test pinned to the approved
+ * Phase 3F runs is skipped — never passed — when that evidence is absent,
+ * because Demo Reset cleared it. See `certified-baseline.ts` for why.
+ */
+const CERTIFIED_BASELINE_PRESENT = await approvedChaosRunsPresent(
+  APPROVED_PHASE_3F_RUN_IDS,
+);
 
 const FRESH_C03_RUN_ID = "c406dafd-d48f-4e1e-b092-030acbb5e32b";
 const HISTORICAL_C07_RUN_ID = "68878716-ed49-40ec-85de-f962a4f6b21c";
@@ -122,7 +136,8 @@ describe("066 — scenario DTO against the real deployment", () => {
 });
 
 describe("066 — recent runs read model", () => {
-  it("4: returns safe summary rows for real persisted runs", async () => {
+  it("4: returns safe summary rows for real persisted runs", async (ctx) => {
+    if (!CERTIFIED_BASELINE_PRESENT) ctx.skip(CERTIFIED_BASELINE_ABSENT);
     const runs = await listRecentChaosRuns(10);
 
     expect(runs.length).toBeGreaterThan(0);
@@ -164,7 +179,8 @@ describe("066 — recent runs read model", () => {
 });
 
 describe("066 — run detail read model against approved runs", () => {
-  it("7: the fresh C03 run reads back with its persisted PASS outcome", async () => {
+  it("7: the fresh C03 run reads back with its persisted PASS outcome", async (ctx) => {
+    if (!CERTIFIED_BASELINE_PRESENT) ctx.skip(CERTIFIED_BASELINE_ABSENT);
     const detail = (await getChaosRunDetail(FRESH_C03_RUN_ID))!;
 
     expect(detail).not.toBeNull();
@@ -176,7 +192,8 @@ describe("066 — run detail read model against approved runs", () => {
     expect(detail.isBlocked).toBe(false);
   });
 
-  it("8: its single persisted invariant result is projected faithfully", async () => {
+  it("8: its single persisted invariant result is projected faithfully", async (ctx) => {
+    if (!CERTIFIED_BASELINE_PRESENT) ctx.skip(CERTIFIED_BASELINE_ABSENT);
     const detail = (await getChaosRunDetail(FRESH_C03_RUN_ID))!;
 
     expect(detail.invariantResults).toHaveLength(1);
@@ -195,7 +212,8 @@ describe("066 — run detail read model against approved runs", () => {
     );
   });
 
-  it("9: the historical C07 run's three UNKNOWN results stay UNKNOWN", async () => {
+  it("9: the historical C07 run's three UNKNOWN results stay UNKNOWN", async (ctx) => {
+    if (!CERTIFIED_BASELINE_PRESENT) ctx.skip(CERTIFIED_BASELINE_ABSENT);
     const detail = (await getChaosRunDetail(HISTORICAL_C07_RUN_ID))!;
 
     expect(detail.outcome).toBe("UNKNOWN");
@@ -210,7 +228,8 @@ describe("066 — run detail read model against approved runs", () => {
     ]);
   });
 
-  it("10: run detail matches the raw row field-for-field, minus the unsafe columns", async () => {
+  it("10: run detail matches the raw row field-for-field, minus the unsafe columns", async (ctx) => {
+    if (!CERTIFIED_BASELINE_PRESENT) ctx.skip(CERTIFIED_BASELINE_ABSENT);
     const { data } = await client
       .from("chaos_runs")
       .select(
@@ -284,7 +303,8 @@ describe("066 — run detail read model against approved runs", () => {
 });
 
 describe("066 — Finding summary read", () => {
-  it("13: the approved eleven results have NO Finding — none is a FAIL", async () => {
+  it("13: the approved eleven results have NO Finding — none is a FAIL", async (ctx) => {
+    if (!CERTIFIED_BASELINE_PRESENT) ctx.skip(CERTIFIED_BASELINE_ABSENT);
     const { data } = await client
       .from("invariant_results")
       .select("id, result")
@@ -304,7 +324,8 @@ describe("066 — Finding summary read", () => {
     expect((await listFindingSummariesForInvariantResults([])).size).toBe(0);
   });
 
-  it("15: every run-detail result reports finding = null today", async () => {
+  it("15: every run-detail result reports finding = null today", async (ctx) => {
+    if (!CERTIFIED_BASELINE_PRESENT) ctx.skip(CERTIFIED_BASELINE_ABSENT);
     for (const runId of APPROVED_PHASE_3F_RUN_IDS) {
       const detail = (await getChaosRunDetail(runId))!;
       for (const result of detail.invariantResults) {
@@ -315,7 +336,8 @@ describe("066 — Finding summary read", () => {
 });
 
 describe("066 — evidence timeline over real evidence", () => {
-  it("16: the timeline references only persisted evidence", async () => {
+  it("16: the timeline references only persisted evidence", async (ctx) => {
+    if (!CERTIFIED_BASELINE_PRESENT) ctx.skip(CERTIFIED_BASELINE_ABSENT);
     const bundle = (await assembleChaosRunEvidence(HISTORICAL_C07_RUN_ID))!;
     const detail = (await getChaosRunDetail(HISTORICAL_C07_RUN_ID))!;
     const timeline = buildEvidenceTimeline(bundle, detail.invariantResults);
@@ -338,7 +360,8 @@ describe("066 — evidence timeline over real evidence", () => {
     }
   });
 
-  it("17: provenance values are factual and never PAYCHAOS_SIMULATION", async () => {
+  it("17: provenance values are factual and never PAYCHAOS_SIMULATION", async (ctx) => {
+    if (!CERTIFIED_BASELINE_PRESENT) ctx.skip(CERTIFIED_BASELINE_ABSENT);
     for (const runId of APPROVED_PHASE_3F_RUN_IDS) {
       const bundle = (await assembleChaosRunEvidence(runId))!;
       const detail = (await getChaosRunDetail(runId))!;
@@ -361,7 +384,8 @@ describe("066 — evidence timeline over real evidence", () => {
     }
   });
 
-  it("18: historical NOT_CAPTURED snapshots surface as gaps, not as state items", async () => {
+  it("18: historical NOT_CAPTURED snapshots surface as gaps, not as state items", async (ctx) => {
+    if (!CERTIFIED_BASELINE_PRESENT) ctx.skip(CERTIFIED_BASELINE_ABSENT);
     const bundle = (await assembleChaosRunEvidence(HISTORICAL_C07_RUN_ID))!;
     const detail = (await getChaosRunDetail(HISTORICAL_C07_RUN_ID))!;
     const timeline = buildEvidenceTimeline(bundle, detail.invariantResults);
@@ -372,7 +396,8 @@ describe("066 — evidence timeline over real evidence", () => {
     expect(timeline.gaps.some((g) => g.kind === "NOT_CAPTURED")).toBe(true);
   });
 
-  it("19: no timeline item carries an invented timestamp", async () => {
+  it("19: no timeline item carries an invented timestamp", async (ctx) => {
+    if (!CERTIFIED_BASELINE_PRESENT) ctx.skip(CERTIFIED_BASELINE_ABSENT);
     const bundle = (await assembleChaosRunEvidence(FRESH_C03_RUN_ID))!;
     const detail = (await getChaosRunDetail(FRESH_C03_RUN_ID))!;
     const timeline = buildEvidenceTimeline(bundle, detail.invariantResults);
@@ -476,7 +501,8 @@ describe("066 — eligibility against the real database", () => {
 });
 
 describe("066 — nothing was written", () => {
-  it("23: the approved baseline is byte-identical after every read above", async () => {
+  it("23: the approved baseline is byte-identical after every read above", async (ctx) => {
+    if (!CERTIFIED_BASELINE_PRESENT) ctx.skip(CERTIFIED_BASELINE_ABSENT);
     const { data: results } = await client
       .from("invariant_results")
       .select("id, chaos_run_id, result")

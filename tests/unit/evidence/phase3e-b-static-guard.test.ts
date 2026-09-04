@@ -674,6 +674,7 @@ describe("Phase 3E-B does not modify frozen Phase 3A-3E-A mechanics", () => {
       // contributes none of its own, which is what this guard protects.
       "20260905000000_phase5_demo_reset_atomic.sql",
       "20260906000000_phase5_demo_reset_safeupdate.sql",
+      "20260907000000_phase5_c01_controlled_vulnerable_profile.sql",
     ]);
 
     const migrationSql = migrations.map((migration) =>

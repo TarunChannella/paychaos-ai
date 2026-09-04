@@ -180,8 +180,9 @@ next — taken directly from the readiness engine's own reasons.
 ### Settings (`/settings`)
 
 Environment status (read-only exploration, interactive demo locked/unlocked,
-Razorpay Test Mode), application information, and a clearly separated **Danger
-zone** holding Demo Reset.
+Razorpay Test Mode), application information, a **Demo / test behavior**
+section holding the controlled C01 vulnerability toggle, and a clearly
+separated **Danger zone** holding Demo Reset.
 
 ### Access (`/access`)
 
@@ -216,6 +217,7 @@ state, it requires an unlocked session (see Section 11).
 | **Re-run diagnosis** / **Diagnose finding** | Finding Detail | Yes | Yes | Runs deterministic root-cause rules. Reads "Diagnosing…". No model is involved. |
 | **Run Regression Test** | Finding Detail | Yes | Yes | Starts a regression. Reads "Starting regression…". |
 | **Advance regression** | Finding Detail | Yes | Yes | Moves a multi-step regression forward. Reads "Advancing…". |
+| **Enable C01 Vulnerable Profile** / **Use Safe Idempotency Profile** | Settings → Demo / test behavior | Yes | Yes | Switches the controlled Demo Merchant test behavior between `SAFE` and `VULNERABLE_IDEMPOTENCY`. Affects the C01 replay path only. Reads "Applying…". |
 | **Reset demo data** | Settings → Danger zone | Yes | Yes | Clears all ten runtime tables in one transaction. Requires typing `RESET`. Reads "Resetting…". |
 | **See why →** | Overview | No | No | Opens Reliability. |
 | **Open Chaos Lab** | Overview | No | No | Opens Chaos Runs. |
@@ -403,7 +405,9 @@ orders.
 **Not touched:** database schema, migration history, RLS policies, environment
 configuration, Razorpay configuration.
 
-**Afterwards:** the score returns to **40** and all four scenarios read NOT RUN.
+**Afterwards:** the score returns to **40**, all four scenarios read NOT RUN,
+and the controlled C01 profile is restored to **SAFE** in the same
+transaction — a vulnerable profile can never survive a reset.
 
 Reset before a demo so the story starts from a known state. Requires typing
 `RESET` and an unlocked session.
@@ -436,6 +440,49 @@ secret.
 
 **The dialog is a courtesy, not the security boundary.** Every state-changing
 operation is refused server-side regardless of what the browser does.
+
+---
+
+## Section 11b — The controlled C01 vulnerability
+
+**What it is.** A deliberate bug in the PayChaos Demo Merchant, which an
+operator can switch on to prove that PayChaos detects a real duplicate-delivery
+failure rather than only describing one.
+
+**It is not a Razorpay defect.** Razorpay delivering the same webhook twice is
+normal, correct provider behaviour that every merchant must tolerate. The
+defect being demonstrated is the *merchant's* — PayChaos's own Demo Merchant —
+and the UI says so.
+
+**The two modes**
+
+| Mode | The merchant's fulfilment idempotency key | Duplicate replay result |
+|---|---|---|
+| `SAFE` (default) | stable, derived from the order id | stays at 1 fulfilment |
+| `VULNERABLE_IDEMPOTENCY` | wrongly includes the processing attempt id | becomes 2 fulfilments |
+
+Because each replay creates a new processing attempt, the vulnerable key is
+different every time, so the database's uniqueness protection never matches and
+a second fulfilment is written. **No database constraint is disabled** — it
+stays enabled and simply has nothing to catch, which is exactly how this bug
+behaves in a real integration.
+
+**Where to switch it:** Settings → **Demo / test behavior**. It requires the
+Demo Access Code, like every other state change.
+
+**What it cannot affect.** It applies *only* when all four are true: the
+processing attempt is a PayChaos replay, it belongs to a chaos run, that run is
+C01, and the vulnerable profile is switched on. Real Razorpay webhook
+processing, ordinary payments, and the C03, C07 and C11 scenarios are all
+unreachable from it.
+
+**It never survives a reset.** Demo Reset restores `SAFE` in the same
+transaction that clears the data.
+
+**What it produces:** two fulfilments for one payment → `INV-002` FAIL →
+a Finding → an `RC-002 MISSING_BUSINESS_IDEMPOTENCY` diagnosis. No invariant,
+finding or diagnosis is fabricated; the existing deterministic engine computes
+all of it from the evidence the bug leaves behind.
 
 ---
 
