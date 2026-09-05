@@ -568,6 +568,34 @@ spec. The reset endpoint's own 401-without-a-session is proven at unit level in
 in whatever database they are pointed at. Do not run either against a database
 holding demo evidence you intend to keep.
 
+## 5.1b Testing FINAL-08 and the SKIPPED_DUPLICATE exception
+
+The authoritative rule lives in `docs/MONEY_INVARIANTS.md` §38.1. What tests
+must pin:
+
+**The exception, and only the exception.** A `SKIPPED_DUPLICATE` attempt has
+authoritatively recorded that protected merchant processing did not execute, so
+its NULL `state_before` / `state_after` are expected and must not make
+`INV-001` or `INV-007` `UNKNOWN`.
+
+**Strictness everywhere else.** `SUCCEEDED`, `FAILED`, `PENDING`, `HELD`,
+`PROCESSING` — or any state that does not prove protected work was skipped —
+with missing required evidence must **still** produce `UNKNOWN`. A test asserting
+this must exist for each, or the exception could widen unnoticed.
+
+**`UNKNOWN` is never converted into `PASS`.** The fix removes a false *cause* of
+`UNKNOWN`; it does not change `UNKNOWN` semantics. Tests must continue to pin
+that an inconclusive regression terminalizes `ERROR` with `NO_CHANGE`
+(decisions D-5 / D-6), and that a proven duplicate still yields `FAIL`.
+
+**Do not weaken an invariant to make a regression pass.** If a re-test cannot
+reach a deterministic verdict, the correct response is to find the missing
+evidence — never to relax the rule that noticed it was missing.
+
+Pinned by `tests/unit/invariants/skipped-duplicate-evidence.test.ts`, which is
+mutation-verified: removing the exception fails exactly the two tests that
+model the deployed defect.
+
 ## 5.2 Destructive opt-in
 
 Destructive integration tests are gated on exactly one convention:

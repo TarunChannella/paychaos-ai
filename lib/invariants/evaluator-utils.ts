@@ -783,6 +783,26 @@ export function isSuccessfulProcessing(status: string): boolean {
   return status === PROCESSING_ATTEMPT_STATUS_SUCCEEDED;
 }
 
+/**
+ * Did this attempt provably perform NO protected work?
+ *
+ * Only `SKIPPED_DUPLICATE` qualifies. The status is itself the proof: the
+ * dedup boundary refused the attempt before any business logic ran, so it
+ * created no fulfilment and changed no protected state. Its snapshots are
+ * NULL BY DESIGN, not because evidence was lost.
+ *
+ * That distinction matters when counting protected effects. "We have no
+ * evidence of what this attempt did" and "this attempt provably did nothing"
+ * are different claims, and only the first is an evidence gap. `PENDING`,
+ * `HELD` and `PROCESSING` are deliberately NOT included — they are in flight
+ * and may still act, so their missing evidence is genuinely unknown. `FAILED`
+ * is excluded too: it is not worth widening this on an assumption about
+ * rollback.
+ */
+export function didNoProtectedWork(status: string): boolean {
+  return status === PROCESSING_ATTEMPT_STATUS_SKIPPED_DUPLICATE;
+}
+
 /** Still in flight — proves neither success nor failure. */
 export function isInFlightProcessing(status: string): boolean {
   return (

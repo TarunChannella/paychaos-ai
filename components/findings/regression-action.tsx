@@ -87,6 +87,7 @@ export function RegressionAction({
   const [kind, setKind] = useState<string | null>(null);
   const [reason, setReason] = useState<string | null>(null);
   const [continuation, setContinuation] = useState<string | null>(null);
+  const [regressionStatus, setRegressionStatus] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const inFlight = useRef(false);
   const { requestUnlock, unlockDialog } = useDemoUnlock();
@@ -100,6 +101,7 @@ export function RegressionAction({
     setKind(null);
     setReason(null);
     setContinuation(null);
+    setRegressionStatus(null);
     setFailed(false);
 
     try {
@@ -119,6 +121,10 @@ export function RegressionAction({
       const returnedContinuation =
         typeof record["continuation"] === "string"
           ? (record["continuation"] as string)
+          : null;
+      const returnedStatus =
+        typeof record["regressionStatus"] === "string"
+          ? (record["regressionStatus"] as string)
           : null;
 
       // The in-flight guard is released before offering the code, or the
@@ -150,6 +156,7 @@ export function RegressionAction({
 
       setKind(returnedKind);
       setContinuation(returnedContinuation);
+      setRegressionStatus(returnedStatus);
       // The casefile is server-derived, so the persisted status, the
       // before/after evidence and the finding lifecycle are re-read rather
       // than patched locally from this response.
@@ -221,6 +228,34 @@ export function RegressionAction({
             >
               {kind}
             </span>
+          )}
+          {/* THE PERSISTED VERDICT, not the operation kind.
+              `COMPLETED` only means the orchestration finished and reached a
+              verdict — that verdict can be ERROR or STILL_FAILING. A deployed
+              run showed "COMPLETED / The regression reached a verdict" while
+              the persisted status was ERROR and the Finding stayed OPEN, which
+              read as success. The status is now always shown beside it. */}
+          {regressionStatus !== null && (
+            <span
+              className={
+                regressionStatus === "RESOLVED"
+                  ? "ml-2 font-mono font-semibold text-emerald-700 dark:text-emerald-400"
+                  : "ml-2 font-mono font-semibold text-destructive"
+              }
+              data-testid="regression-action-status"
+            >
+              {regressionStatus}
+            </span>
+          )}
+          {regressionStatus !== null && regressionStatus !== "RESOLVED" && (
+            <p
+              className="mt-1 text-destructive"
+              data-testid="regression-action-status-note"
+            >
+              {regressionStatus === "ERROR"
+                ? "The regression proved nothing: it neither confirmed a fix nor reproduced the failure. The finding is left exactly as it was."
+                : "The regression reproduced the failure. The finding remains open."}
+            </p>
           )}
           <p className="mt-1">
             {(kind !== null ? KIND_MESSAGE[kind] : null) ??

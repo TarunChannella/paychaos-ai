@@ -2963,6 +2963,81 @@ Database unavailable while loading evidence
 
 ---
 
+# 38.1 FINAL-08 — snapshot completeness, and the SKIPPED_DUPLICATE exception
+
+**Architect blocker FINAL-08** requires that when an invariant counts protected
+merchant effects, every *relevant* processing attempt must carry usable
+`state_before` / `state_after` merchant snapshots. One relevant attempt without
+them means the count is not proven, so the result is `UNKNOWN` — even when
+another attempt is complete. Two snapshots whose required nested entities are
+both absent compare equal, and that equality proves nothing.
+
+That rule stands. This section records the one approved exception to *which*
+attempts are relevant.
+
+## The exception (approved architect decision)
+
+A processing attempt whose persisted status is **`SKIPPED_DUPLICATE`** has
+authoritatively recorded that **protected merchant processing did not
+execute**: the deduplication boundary refused it before any business logic ran.
+
+Therefore:
+
+- it is **not required** to carry merchant before/after snapshots;
+- its NULL `state_before` / `state_after` are **expected**, not an evidence gap;
+- it **must not** cause `INV-001` or `INV-007` to become `UNKNOWN` merely
+  because those snapshots are absent.
+
+**The exception applies ONLY to `SKIPPED_DUPLICATE`.** FINAL-08 remains fully
+strict for every other status:
+
+| Attempt status | Missing required evidence |
+|---|---|
+| `SKIPPED_DUPLICATE` | expected — attempt is not relevant to the count |
+| `SUCCEEDED` | **UNKNOWN** |
+| `FAILED` | **UNKNOWN** |
+| `PENDING` / `HELD` / `PROCESSING` | **UNKNOWN** |
+| any other state | **UNKNOWN** |
+
+The distinction is between two different claims. *"We have no evidence of what
+this attempt did"* is an evidence gap. *"This attempt provably did nothing"* is
+evidence — and the persisted status is that proof. Only the second is exempt.
+
+## What this does NOT change
+
+**`UNKNOWN` is never converted into `PASS`.** This decision removes a *false
+cause* of `UNKNOWN`; it does not change what `UNKNOWN` means, when it is
+produced, or how it is treated downstream. An inconclusive regression still
+terminalizes as `ERROR` and still leaves its Finding exactly as it was
+(`docs/TESTING.md`, Phase 4E decisions D-5 and D-6).
+
+No invariant is weakened. A genuinely proven duplicate still dominates
+incomplete evidence and still yields `FAIL`.
+
+## Why it was needed
+
+A real deployed C01 regression, on genuinely fresh Razorpay Test Mode evidence
+under the SAFE profile, produced:
+
+```text
+INV-002 = PASS      INV-006 = PASS
+INV-001 = UNKNOWN   INV-007 = UNKNOWN
+  -> chaos run outcome UNKNOWN
+  -> regression ERROR, Finding left OPEN
+```
+
+The blocking attempt was a `SKIPPED_DUPLICATE` row, created when Razorpay
+legitimately delivered the same event more than once and PayChaos deduplicated
+it — the duplicate-delivery protection working exactly as designed. A correct
+merchant with correct deduplication could therefore never resolve its own
+Finding.
+
+Implemented as `didNoProtectedWork()` in `lib/invariants/evaluator-utils.ts`,
+applied in `incompletePairs()` in `lib/invariants/evaluators.ts`. Pinned by
+`tests/unit/invariants/skipped-duplicate-evidence.test.ts`.
+
+---
+
 # 39. EVIDENCE RULES
 
 Invariant evidence must be observable fact.

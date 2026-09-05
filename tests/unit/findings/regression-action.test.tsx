@@ -258,10 +258,29 @@ describe("regression control — every lifecycle state renders honestly", () => 
     );
     expect(message).toContain("waiting for the required");
     expect(message).toContain("NOT complete");
-    // The component never renders a verdict of its own. Checked against
+    // The component never ASSERTS a verdict of its own. Checked against
     // comment-stripped code, because the doc block legitimately mentions
-    // RESOLVED in order to say this component does not render it.
-    expect(ACTION_CODE).not.toContain("RESOLVED");
+    // RESOLVED in order to say this component does not decide it.
+    //
+    // NARROWED after a confirmed production defect. This used to ban the
+    // literal "RESOLVED" outright. The component now ECHOES the server's
+    // persisted `regressionStatus`, which is the opposite of fabricating a
+    // verdict — a deployed run rendered "COMPLETED / The regression reached a
+    // verdict" while the persisted status was ERROR and the Finding stayed
+    // OPEN, which read as success. Showing the real status is the fix.
+    //
+    // The property that actually matters is preserved and made explicit: the
+    // status must be RENDERED FROM STATE, never written as a literal, and
+    // every "RESOLVED" occurrence must be a comparison against that state.
+    expect(ACTION_CODE).toContain("{regressionStatus}");
+    for (const occurrence of ACTION_CODE.split("RESOLVED").slice(0, -1)) {
+      const context = occurrence.slice(-40);
+      expect(
+        context,
+        `every RESOLVED must be a comparison against regressionStatus, saw: ${context}`,
+      ).toMatch(/regressionStatus\s*(===|!==)\s*"$/);
+    }
+    // A verdict phrase of the component's own invention stays banned.
     expect(ACTION_CODE).not.toContain("FIX VERIFIED");
     expect(ACTION_CODE).not.toContain("Fix verified");
   });

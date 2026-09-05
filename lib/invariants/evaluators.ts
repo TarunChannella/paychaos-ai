@@ -29,6 +29,7 @@ import {
   EVENT_TYPE_PAYMENT_FAILED,
   fulfilOrderRows,
   isPaymentCorrelatedToOrderPath,
+  didNoProtectedWork,
   isSuccessfulProcessing,
   isSupportedBusinessEventType,
   isTrustedProviderEvent,
@@ -296,10 +297,32 @@ function incompletePairs(
 ): readonly SnapshotPair[] {
   return pairs.filter(
     (p) =>
-      p.before === null ||
-      p.after === null ||
-      !isSnapshotComplete(p.before, required) ||
-      !isSnapshotComplete(p.after, required),
+      // An attempt the dedup boundary SKIPPED did no protected work at all,
+      // so it has no protected effect to evidence and its NULL snapshots are
+      // by design rather than a gap. Counting it as missing evidence conflates
+      // "we cannot tell what this attempt did" with "this attempt provably did
+      // nothing" — and the status is the proof of the second.
+      //
+      // WHY THIS MATTERS, from a real deployed run: a fresh SAFE C01
+      // regression evaluated INV-002 PASS and INV-006 PASS, but INV-001 and
+      // INV-007 returned UNKNOWN citing "relevant attempts without complete
+      // evidence = 1". That attempt was a SKIPPED_DUPLICATE row created when
+      // Razorpay legitimately delivered the same event more than once and
+      // PayChaos deduplicated it — the duplicate-delivery protection working
+      // exactly as intended. The aggregate outcome became UNKNOWN, the frozen
+      // D-6 rule correctly refused to call an inconclusive run a verdict, and
+      // the regression terminalized ERROR. A correct merchant plus correct
+      // dedup could therefore never resolve its own Finding.
+      //
+      // This narrows WHICH attempts must carry evidence. It does not relax
+      // what that evidence must show: a SUCCEEDED attempt missing a snapshot
+      // still forces UNKNOWN (architect blocker FINAL-08), and no UNKNOWN is
+      // ever converted to PASS.
+      !didNoProtectedWork(p.status) &&
+      (p.before === null ||
+        p.after === null ||
+        !isSnapshotComplete(p.before, required) ||
+        !isSnapshotComplete(p.after, required)),
   );
 }
 
