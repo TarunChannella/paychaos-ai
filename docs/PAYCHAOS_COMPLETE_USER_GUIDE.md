@@ -332,6 +332,38 @@ When it passes, the Finding becomes RESOLVED, and because the scenario now has
 a passing run, its 15-point deduction disappears and the Reliability Score
 rises.
 
+### C01 re-tests need a fresh payment — and the app will say so
+
+A C01 failure permanently marks its own subject: the duplicate replay leaves
+more than one fulfilment on that order, and PayChaos never deletes evidence. The
+safety gate requires a clean *paid, exactly-one-fulfilment* baseline before it
+will run C01, so that order can never be re-tested — correctly.
+
+So a C01 re-test uses a **brand-new payment**. When you click **Run Regression
+Test** and no suitable new payment exists yet, PayChaos does not fail. It
+reports **AWAITING_EXTERNAL_PREREQUISITE**, creates nothing, and tells you:
+
+> *Create a fresh successful Razorpay Test Mode payment with the Safe
+> Idempotency Profile enabled, then start the regression again.*
+
+What to do:
+
+1. Switch the profile to **SAFE** (Settings → Demo / test behavior).
+2. Demo Merchant → **Create Internal Test Order** → **Create Razorpay Test
+   Order** → **Pay with Razorpay**, completing a second successful Test Mode
+   payment.
+3. Confirm that new order shows **fulfilment count = 1**.
+4. Go back to the original Finding and click **Run Regression Test** again.
+
+PayChaos then picks that new evidence itself — you never choose it — runs C01
+against it, and the duplicate replay leaves the count at 1. `INV-002` passes,
+the regression is RESOLVED and the Finding becomes RESOLVED.
+
+**The original failure is never touched.** Its FAIL, its evidence and its
+duplicate fulfilments stay exactly as they were. The re-test proves the
+*current* code is correct on *new* evidence — it does not claim the original
+payment became healthy, and nothing about it is repaired or rewritten.
+
 ---
 
 ## Section 9 — The Reliability Score (exact rules)
@@ -599,7 +631,18 @@ vs Observed → scroll to **Evidence-Based Diagnosis** → click **Re-run
 diagnosis** if it is not yet diagnosed.
 
 **G. Regression** — on the Finding, click **Go to regression proof ↓** → click
-**Run Regression Test** → wait → the Finding becomes RESOLVED.
+**Run Regression Test**.
+
+For a **C01** finding, expect **AWAITING_EXTERNAL_PREREQUISITE** the first
+time: it needs a brand-new payment, because the original order is permanently
+marked by the very failure being re-tested. Switch the profile to **SAFE**,
+make a second successful Test Mode payment (Demo Merchant → **Create Internal
+Test Order** → **Create Razorpay Test Order** → **Pay with Razorpay**), confirm
+that new order shows **fulfilment count = 1**, then return to the Finding and
+click **Run Regression Test** again. The Finding becomes RESOLVED, and the
+original FAIL stays visible beside it.
+
+For **C03**, it runs straight through — that scenario needs no payment at all.
 
 **H. Reliability Score** — Reliability → read the ring, then the per-scenario
 breakdown, then "What to do next".

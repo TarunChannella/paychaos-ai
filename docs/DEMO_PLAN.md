@@ -534,12 +534,62 @@ Regression Run
         ↓
 Same C01 Scenario
         ↓
-Same logical source event / equivalent controlled setup
+A FRESH genuine source event  (NOT the original — see below)
         ↓
-Corrected merchant implementation
+Corrected merchant implementation (SAFE profile)
         ↓
-Re-evaluate C01 invariants
+Re-evaluate the same C01 invariants
 ```
+
+## Why the re-test uses FRESH evidence
+
+The original subject is permanently contaminated by the failure being
+re-tested: the duplicate replay left more than one `FULFIL_ORDER` row on that
+order, and those rows are preserved evidence that is never deleted.
+`PRECHECK-08` requires a PAID-with-exactly-one-fulfilment baseline, so the
+original order can never satisfy it again — correctly. Re-running C01 against
+it is BLOCKED, which is the safety gate doing its job, not a defect.
+
+A re-test therefore runs against a NEW genuine Razorpay Test Mode payment.
+This is the same reasoning C07 already applies to its fresh order.
+
+```text
+SAFE profile
+        ↓
+Run Regression Test
+        ↓
+no suitable new provider evidence yet
+        ↓
+AWAITING_EXTERNAL_PREREQUISITE      (nothing is created)
+        ↓
+operator creates a SECOND fresh order + Razorpay Test Order
++ successful Test Mode payment, profile still SAFE
+        ↓
+fresh baseline fulfilment = 1
+        ↓
+Run Regression Test again
+        ↓
+PayChaos SERVER-SELECTS the fresh genuine evidence
+        ↓
+new C01 chaos run -> duplicate replay under SAFE behaviour
+        ↓
+fresh fulfilment count remains 1
+        ↓
+INV-002 PASS -> regression RESOLVED -> Finding RESOLVED
+        ↓
+original historical FAIL preserved, unchanged
+```
+
+**What is and is not claimed.** The regression proves the CURRENT
+implementation is correct, using new evidence. It never claims the original
+contaminated payment became healthy. That payment is never repaired, deleted
+or rewritten, `INV-002` keeps its total-count rule, and `PRECHECK-08` is
+unchanged.
+
+**Provider evidence stays genuine.** The fresh source is chosen server-side
+from persisted, signature-verified `webhook_events` rows — the operator never
+nominates it — and no synthetic row is ever presented as
+`REAL_RAZORPAY_WEBHOOK`.
 
 Expected result:
 

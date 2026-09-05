@@ -16,6 +16,7 @@ import {
 } from "@/lib/findings/repository";
 import { evaluateChaosRun } from "@/lib/invariants/service";
 import { resolveRegressionEligibility } from "@/lib/regression/eligibility";
+import { resolveFreshC01Source } from "@/lib/regression/fresh-source";
 import { decideRegressionOutcome } from "@/lib/regression/finalization";
 import {
   markFindingStillFailingAfterRegression,
@@ -150,7 +151,16 @@ type RegressionPlan =
 
 type PlanResult =
   | { readonly ok: true; readonly plan: RegressionPlan }
-  | { readonly ok: false; readonly reason: RegressionServiceReason };
+  | { readonly ok: false; readonly reason: RegressionServiceReason }
+  | {
+      /**
+       * Not a failure. A genuine external Test Mode action must happen before
+       * this scenario can be re-tested at all, and nothing has been created.
+       */
+      readonly ok: false;
+      readonly awaiting: RegressionContinuation;
+      readonly reason: RegressionServiceReason;
+    };
 
 /**
  * Rebuilds the original scenario's creation input from persisted evidence,
@@ -185,13 +195,54 @@ async function resolveRegressionPlan(
   }
 
   if (scenarioId === "C01") {
-    const sourceId = originalRun.source_webhook_event_id;
-    if (sourceId === null) {
+    // PHASE 5 CORRECTION — a C01 re-test uses FRESH evidence, never the
+    // original subject.
+    //
+    // This branch used to replay `originalRun.source_webhook_event_id`. That
+    // is unpassable by construction: the original C01 failure leaves more than
+    // one FULFIL_ORDER row on its order, that evidence is preserved on
+    // purpose, and PRECHECK-08 requires a PAID-with-exactly-one-fulfilment
+    // baseline. The deployed run proved it — the re-test was BLOCKED with
+    // `C01_BASELINE_NOT_PAID_ONE_FULFILMENT` and the regression terminalized
+    // as ERROR.
+    //
+    // The precheck is correct and is not touched. The subject is genuinely
+    // contaminated, by the very defect being re-tested, so the fix is to
+    // re-test against new genuine evidence — the same reasoning C07 already
+    // applies to its order, one branch below.
+    //
+    // REG-002 is preserved: this is still scenario C01, still mechanism B,
+    // still REPLAY_EVENT, still the same invariant set. Only the subject is
+    // new, which is what makes it a re-test rather than a re-reading of the
+    // failure.
+    if (originalRun.source_webhook_event_id === null) {
       return { ok: false, reason: "ORIGINAL_PATH_UNRESOLVED" };
     }
-    if (!(await revalidateEligibility({ scenarioId: "C01" }, sourceId))) {
+
+    const fresh = await resolveFreshC01Source(originalRun);
+    if (fresh === null) {
+      // Nothing is wrong and nothing is created — a new Test Mode payment
+      // simply has not happened yet. Reported as AWAITING so the operator is
+      // told what to do, instead of being handed an execution error.
+      return {
+        ok: false,
+        awaiting: "C01_TEST_MODE_FRESH_CAPTURE",
+        reason: "FRESH_CAPTURE_REQUIRED",
+      };
+    }
+
+    // Re-validated through the frozen chaos eligibility service exactly as
+    // before, so a source picked above still has to satisfy the same gate any
+    // operator-selected source would.
+    if (
+      !(await revalidateEligibility(
+        { scenarioId: "C01" },
+        fresh.webhookEventId,
+      ))
+    ) {
       return { ok: false, reason: "SOURCE_NO_LONGER_ELIGIBLE" };
     }
+
     return {
       ok: true,
       plan: {
@@ -200,7 +251,7 @@ async function resolveRegressionPlan(
           scenarioId: "C01",
           mechanism: "B",
           faultType: "REPLAY_EVENT",
-          sourceWebhookEventId: sourceId,
+          sourceWebhookEventId: fresh.webhookEventId,
         },
         execute: executeC01Replay,
       },
@@ -556,6 +607,19 @@ export async function startRegression(
     input.freshOrderId,
   );
   if (!planned.ok) {
+    // A missing external prerequisite is NOT a refusal and NOT an error.
+    // Nothing was created, and the operator is told exactly what to do —
+    // rather than being handed an execution failure for a payment that simply
+    // has not been made yet.
+    if ("awaiting" in planned) {
+      return {
+        kind: "AWAITING_EXTERNAL_PREREQUISITE",
+        findingId: input.findingId,
+        scenarioId: eligibility.scenarioId,
+        reason: planned.reason,
+        continuation: planned.awaiting,
+      };
+    }
     return {
       kind: "NOT_STARTED",
       findingId: input.findingId,

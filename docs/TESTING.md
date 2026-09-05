@@ -535,6 +535,39 @@ instead:
 `078-phase5-c01-vulnerable-profile` follows this split. Its manual half is
 recorded below under "Phase 5 — C01 controlled vulnerability".
 
+## 5.1a End-to-end specs must never probe with a destructive call
+
+**A probe must never be able to change what it is probing.**
+
+`access-unlock.spec.ts` detected whether the access gate was enabled by POSTing
+to `/api/demo/reset` and checking for a 401/403. That endpoint *is* gated — but
+the gate is **disabled by default** for local development, so in an ordinary run
+the POST was not refused. It succeeded, cleared all ten runtime tables, and the
+probe then correctly reported "gate off" and skipped. Two tests called it, so a
+single Playwright run reset the database twice, silently.
+
+A manually created C01 demonstration — a real Razorpay Test Mode payment, its
+duplicate fulfilments, four Findings and a regression attempt — was destroyed
+this way, and the intermittent E2E failures that had been blamed on machine load
+were the suites racing a database being wiped underneath them.
+
+**The rule:** no E2E spec may call `/api/demo/reset`, or any other endpoint that
+destroys persisted evidence, for any purpose — including as a capability probe.
+
+**The sanctioned gate probe** is `POST /api/demo/profile` with a deliberately
+invalid body. That route checks the gate *before* it parses the body, so a gated
+instance answers 401 and an ungated one answers 400, and **neither path writes
+anything**. The probe body must also be an invalid profile value: sending a
+valid one would flip the controlled C01 vulnerability on an ungated instance.
+
+Enforced by `tests/unit/access/e2e-probe-safety.test.ts`, which scans every
+spec. The reset endpoint's own 401-without-a-session is proven at unit level in
+`tests/unit/api/demo-reset-route.test.ts` — no E2E call is needed for it.
+
+**Operationally:** the integration and Playwright suites create and delete rows
+in whatever database they are pointed at. Do not run either against a database
+holding demo evidence you intend to keep.
+
 ## 5.2 Destructive opt-in
 
 Destructive integration tests are gated on exactly one convention:
@@ -3861,9 +3894,37 @@ Supabase SQL Editor.
    MISSING_BUSINESS_IDEMPOTENCY` with a recommendation.
 10. Re-evaluate the same run. Expect: **no second Finding**.
 11. Settings → **Use Safe Idempotency Profile**.
-12. Finding → **Run Regression Test**. Expect: new evidence, INV-002 **PASS**,
-    the original FAIL still visible, Finding RESOLVED by the existing rules.
-13. Reliability. Expect: score/readiness recalculated by the existing engine.
 
-Record the result in the phase handoff. Steps 4, 6, 7, 8 and 12 are the ones
-no automated test can prove.
+### Fix verification uses FRESH evidence, not the original payment
+
+The original subject is permanently contaminated by the failure just proved:
+its order now carries more than one `FULFIL_ORDER` row, that evidence is
+preserved deliberately, and `PRECHECK-08` requires a
+PAID-with-exactly-one-fulfilment baseline. Re-testing it would be BLOCKED —
+correctly. A re-test therefore runs against a NEW genuine payment.
+
+12. Finding → **Run Regression Test**. Expect
+    **`AWAITING_EXTERNAL_PREREQUISITE`**, not an error. Nothing is created —
+    no chaos run, no regression run, no evaluation. The UI states what to do.
+13. Demo Merchant → **Create Internal Test Order** → **Create Razorpay Test
+    Order** → **Pay with Razorpay** → complete a **second, successful** Test
+    Mode payment, with the profile still **SAFE**.
+14. Confirm the fresh order's baseline: **fulfilment count = 1**.
+15. Return to the original Finding → **Run Regression Test** again. PayChaos
+    server-selects the fresh genuine evidence; the operator never nominates it.
+16. Expect: a NEW C01 chaos run on the fresh subject, duplicate replay under
+    SAFE behaviour, fresh fulfilment count **still 1**, **INV-002 PASS**,
+    regression **RESOLVED**, Finding **RESOLVED**.
+17. Confirm the original historical **FAIL is preserved** — its invariant
+    result, its Finding evidence and its duplicate fulfilments are unchanged.
+18. Reliability. Expect: score/readiness recalculated by the existing engine.
+
+**What this does and does not claim.** The regression proves the CURRENT
+implementation is correct, using new evidence. It never claims the original
+contaminated payment became healthy, and nothing about it is repaired,
+deleted or rewritten. `INV-002` keeps its total-count rule; `PRECHECK-08` is
+unchanged; provider evidence stays genuine, and no synthetic row is ever
+presented as `REAL_RAZORPAY_WEBHOOK`.
+
+Record the result in the phase handoff. Steps 4, 6, 7, 8, 12, 14, 16 and 17
+are the ones no automated test can prove.

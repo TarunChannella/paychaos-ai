@@ -235,6 +235,18 @@ export interface StartRegressionInput {
 export const REGRESSION_CONTINUATIONS = Object.freeze([
   "C07_TEST_MODE_CHECKOUT",
   "C11_A_TEST_MODE_FAILED_PAYMENT",
+  /**
+   * C01 needs a genuinely NEW successful Test Mode capture before it can be
+   * re-tested at all (Phase 5 correction).
+   *
+   * The original C01 subject is permanently contaminated by the very failure
+   * being re-tested: the duplicate replay left more than one FULFIL_ORDER row
+   * on that order, and those rows are preserved evidence that must never be
+   * deleted. `PRECHECK-08` requires a PAID-with-exactly-one-fulfilment
+   * baseline, so the original order can never satisfy it again — correctly.
+   * A re-test therefore needs fresh genuine evidence, not the old subject.
+   */
+  "C01_TEST_MODE_FRESH_CAPTURE",
 ] as const);
 
 export type RegressionContinuation = (typeof REGRESSION_CONTINUATIONS)[number];
@@ -245,6 +257,12 @@ export const REGRESSION_SERVICE_REASONS = Object.freeze([
   "NOT_ELIGIBLE",
   /** A provider-dependent scenario needs a fresh order and none was given. */
   "FRESH_ORDER_REQUIRED",
+  /**
+   * C01 needs a fresh genuine capture and none is eligible yet. Reported as
+   * an AWAITING state rather than an error: nothing is wrong, an external
+   * Test Mode payment simply has not happened yet.
+   */
+  "FRESH_CAPTURE_REQUIRED",
   /** The chosen fresh order is no longer a valid subject. */
   "FRESH_ORDER_NOT_ELIGIBLE",
   /** The original genuine source evidence is no longer eligible to replay. */
@@ -363,6 +381,32 @@ export type StartRegressionResult =
       readonly reason: RegressionServiceReason;
       /** The R1 ineligibility code, when eligibility was what refused. */
       readonly ineligibility: RegressionIneligibilityCode | null;
+    }
+  | {
+      /**
+       * The regression cannot begin until a genuine external Test Mode action
+       * has produced fresh evidence. NOTHING was created: no chaos run, no
+       * regression run, no evaluation.
+       *
+       * WHY THIS IS A SEPARATE KIND FROM `AWAITING_EXTERNAL_ACTION`.
+       * That one means "a regression run EXISTS, is armed, and is waiting" —
+       * it carries a `RegressionAttemptRef` and its follow-up is *advance*.
+       * This one means "no attempt exists yet" and its follow-up is *start
+       * again, once the prerequisite is met*. Reusing the same discriminant
+       * would put an `attempt` on a result that has none, and would offer an
+       * "Advance regression" action with nothing to advance.
+       *
+       * It could not be modelled as a PENDING regression row either:
+       * `regression_runs.chaos_run_id` is NOT NULL, and the chaos run cannot
+       * be created because PRECHECK-08 correctly refuses the contaminated
+       * subject. Persisting a placeholder would mean weakening one of those
+       * two guarantees to satisfy a UI state.
+       */
+      readonly kind: "AWAITING_EXTERNAL_PREREQUISITE";
+      readonly findingId: string;
+      readonly scenarioId: string;
+      readonly reason: RegressionServiceReason;
+      readonly continuation: RegressionContinuation;
     }
   | {
       /**

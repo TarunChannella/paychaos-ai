@@ -40,6 +40,8 @@ const KIND_MESSAGE: Record<string, string> = {
   COMPLETED: "The regression reached a verdict. The result is shown below.",
   AWAITING_EXTERNAL_ACTION:
     "The regression is waiting for the required Razorpay Test Mode action. It is NOT complete, and no result will be claimed until that genuine action produces evidence.",
+  AWAITING_EXTERNAL_PREREQUISITE:
+    "This re-test needs fresh evidence before it can start, and nothing has been created yet.",
   IN_PROGRESS: "The regression is running. No verdict has been reached yet.",
   SUPERSEDED:
     "This attempt reached a verdict, but a newer attempt has since been recorded for this finding. The newer attempt stands.",
@@ -49,6 +51,25 @@ const KIND_MESSAGE: Record<string, string> = {
     "The server refused to start a regression for this finding. No regression was created.",
   ORPHAN_START:
     "Another regression start won the race for this finding. The safety-gated run it created is preserved as audit evidence and was never executed.",
+};
+
+/**
+ * What the operator must actually DO, per continuation.
+ *
+ * Kept separate from KIND_MESSAGE because the kind says what the SERVER did
+ * and this says what the HUMAN must do next. A state that waits on a person
+ * without telling them what to perform is how an operator ends up clicking the
+ * same button again and reading it as a fault.
+ */
+const CONTINUATION_MESSAGE: Record<string, string> = {
+  C01_TEST_MODE_FRESH_CAPTURE:
+    "Create a fresh successful Razorpay Test Mode payment with the Safe Idempotency Profile enabled, then start the regression again. " +
+    "PayChaos will use that new verified webhook evidence to re-test C01. " +
+    "The original failure, its evidence and its duplicate fulfilments are preserved exactly as they are — the original payment is not being claimed healthy.",
+  C07_TEST_MODE_CHECKOUT:
+    "Complete the Razorpay Test Mode Checkout for the armed order, then advance the regression.",
+  C11_A_TEST_MODE_FAILED_PAYMENT:
+    "Cause a genuinely failed Razorpay Test Mode payment for the observed order, then advance the regression.",
 };
 
 type Phase = "idle" | "running";
@@ -65,6 +86,7 @@ export function RegressionAction({
   const [phase, setPhase] = useState<Phase>("idle");
   const [kind, setKind] = useState<string | null>(null);
   const [reason, setReason] = useState<string | null>(null);
+  const [continuation, setContinuation] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const inFlight = useRef(false);
   const { requestUnlock, unlockDialog } = useDemoUnlock();
@@ -77,6 +99,7 @@ export function RegressionAction({
     setPhase("running");
     setKind(null);
     setReason(null);
+    setContinuation(null);
     setFailed(false);
 
     try {
@@ -92,6 +115,10 @@ export function RegressionAction({
       const returnedReason =
         typeof record["reason"] === "string"
           ? (record["reason"] as string)
+          : null;
+      const returnedContinuation =
+        typeof record["continuation"] === "string"
+          ? (record["continuation"] as string)
           : null;
 
       // The in-flight guard is released before offering the code, or the
@@ -122,6 +149,7 @@ export function RegressionAction({
       }
 
       setKind(returnedKind);
+      setContinuation(returnedContinuation);
       // The casefile is server-derived, so the persisted status, the
       // before/after evidence and the finding lifecycle are re-read rather
       // than patched locally from this response.
@@ -199,6 +227,15 @@ export function RegressionAction({
               reason ??
               "The regression request did not succeed."}
           </p>
+          {continuation !== null &&
+            CONTINUATION_MESSAGE[continuation] !== undefined && (
+              <p
+                className="mt-2 text-foreground"
+                data-testid="regression-action-continuation"
+              >
+                {CONTINUATION_MESSAGE[continuation]}
+              </p>
+            )}
           {reason !== null && kind !== null && (
             <p
               className="mt-1 font-mono"

@@ -21,6 +21,7 @@ const resolveRegressionEligibility = vi.fn();
 const getChaosRunById = vi.fn();
 const createChaosRun = vi.fn();
 const revalidateEligibility = vi.fn();
+const resolveFreshC01Source = vi.fn();
 const executeC01Replay = vi.fn();
 const executeC03InvalidSignatureTest = vi.fn();
 const armC07ClientConfirmationDrop = vi.fn();
@@ -57,6 +58,9 @@ vi.mock("@/lib/chaos/run-service", () => ({
 }));
 vi.mock("@/lib/chaos/eligibility-service", () => ({
   revalidateEligibility: (...a: unknown[]) => revalidateEligibility(...a),
+}));
+vi.mock("@/lib/regression/fresh-source", () => ({
+  resolveFreshC01Source: (...a: unknown[]) => resolveFreshC01Source(...a),
 }));
 vi.mock("@/lib/chaos/replay-service", () => ({
   executeC01Replay: (...a: unknown[]) => executeC01Replay(...a),
@@ -389,7 +393,21 @@ describe("Phase 4E-R2 service — C03", () => {
 // ============================================================================
 
 describe("Phase 4E-R2 service — C01", () => {
-  function arrangeC01(eligibleSource = true) {
+  /**
+   * A genuinely NEW capture, never the original. The original subject is
+   * permanently contaminated by the failure being re-tested (its order carries
+   * more than one FULFIL_ORDER row), so a re-test that reused it would be
+   * blocked by PRECHECK-08 — which is the production defect this arrangement
+   * now models.
+   */
+  const FRESH_SOURCE_EVENT_ID = "fresh-source-event-id";
+
+  function arrangeC01(eligibleSource = true, freshAvailable = true) {
+    resolveFreshC01Source.mockResolvedValue(
+      freshAvailable
+        ? { webhookEventId: FRESH_SOURCE_EVENT_ID, orderId: "fresh-order-id" }
+        : null,
+    );
     resolveRegressionEligibility.mockResolvedValue(eligible("C01", "INV-002"));
     getChaosRunById.mockImplementation((id: string) =>
       Promise.resolve(
@@ -438,7 +456,18 @@ describe("Phase 4E-R2 service — C01", () => {
     });
   }
 
-  it("7: reuses the same scenario and the original genuine source", async () => {
+  it("7: reuses the same scenario but a FRESH source, never the contaminated original", async () => {
+    // REWRITTEN after a confirmed production defect. This previously asserted
+    // that the regression reuses `SOURCE_EVENT_ID` — the original run's own
+    // source — and that is precisely what could never pass: the original C01
+    // failure leaves more than one FULFIL_ORDER row on its order, that
+    // evidence is preserved deliberately, and PRECHECK-08 requires a
+    // PAID-with-exactly-one-fulfilment baseline. The deployed regression was
+    // BLOCKED with C01_BASELINE_NOT_PAID_ONE_FULFILMENT and terminalized ERROR.
+    //
+    // REG-002 still holds: same scenario, same mechanism, same fault type,
+    // same invariant set. Only the SUBJECT is new — which is what makes it a
+    // re-test rather than a re-reading of the original failure.
     arrangeC01();
     await startRegression({ findingId: FINDING_ID });
 
@@ -446,8 +475,42 @@ describe("Phase 4E-R2 service — C01", () => {
       scenarioId: "C01",
       mechanism: "B",
       faultType: "REPLAY_EVENT",
-      sourceWebhookEventId: SOURCE_EVENT_ID,
+      sourceWebhookEventId: FRESH_SOURCE_EVENT_ID,
     });
+
+    // The contaminated original is never the subject again.
+    expect(createChaosRun).not.toHaveBeenCalledWith(
+      expect.objectContaining({ sourceWebhookEventId: SOURCE_EVENT_ID }),
+    );
+  });
+
+  it("7b: no fresh capture yet is AWAITING, not an error, and creates nothing", async () => {
+    // The UX requirement: an operator who has not yet made a new Test Mode
+    // payment must be told what to do, not handed an execution error for a
+    // payment that simply has not happened.
+    arrangeC01(true, false);
+    const result = await startRegression({ findingId: FINDING_ID });
+
+    expect(result).toMatchObject({
+      kind: "AWAITING_EXTERNAL_PREREQUISITE",
+      reason: "FRESH_CAPTURE_REQUIRED",
+      continuation: "C01_TEST_MODE_FRESH_CAPTURE",
+    });
+    // Nothing persisted, nothing executed, nothing evaluated.
+    expect(createChaosRun).not.toHaveBeenCalled();
+    expect(insertPendingRegressionRun).not.toHaveBeenCalled();
+    expect(executeC01Replay).not.toHaveBeenCalled();
+    expect(evaluateChaosRun).not.toHaveBeenCalled();
+  });
+
+  it("7c: the original Finding and its failed invariant are never touched", async () => {
+    arrangeC01(true, false);
+    await startRegression({ findingId: FINDING_ID });
+
+    expect(resolveFindingAfterRegression).not.toHaveBeenCalled();
+    expect(markFindingStillFailingAfterRegression).not.toHaveBeenCalled();
+    expect(finalizeRegressionResolved).not.toHaveBeenCalled();
+    expect(finalizeRegressionError).not.toHaveBeenCalled();
   });
 
   it("8: the source is REVALIDATED before the run is created", async () => {
@@ -456,7 +519,7 @@ describe("Phase 4E-R2 service — C01", () => {
 
     expect(revalidateEligibility).toHaveBeenCalledWith(
       { scenarioId: "C01" },
-      SOURCE_EVENT_ID,
+      FRESH_SOURCE_EVENT_ID,
     );
     const revalidateOrder =
       revalidateEligibility.mock.invocationCallOrder[0] ?? 0;
@@ -1395,6 +1458,12 @@ describe("Phase 4E-R2 service — evidence and recovery", () => {
   });
 
   it("49: C01 NOT_STARTABLE plus a durable COMPLETED row still evaluates", async () => {
+    // A fresh subject is available; this test is about the NOT_STARTABLE +
+    // durable-COMPLETED path, not about how the source is chosen.
+    resolveFreshC01Source.mockResolvedValue({
+      webhookEventId: "fresh-source-event-id",
+      orderId: "fresh-order-id",
+    });
     resolveRegressionEligibility.mockResolvedValue(eligible("C01", "INV-002"));
     getChaosRunById.mockImplementation((id: string) =>
       Promise.resolve(

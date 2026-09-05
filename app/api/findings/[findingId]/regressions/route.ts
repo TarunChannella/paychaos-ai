@@ -172,6 +172,32 @@ export async function POST(
       );
     }
 
+    if (result.kind === "AWAITING_EXTERNAL_PREREQUISITE") {
+      // NOT a refusal and NOT an error. A genuine Razorpay Test Mode action
+      // has to happen before this scenario can be re-tested, and nothing was
+      // created — no chaos run, no regression run, no evaluation.
+      //
+      // 200, deliberately: the request was valid and the server did exactly
+      // what it should. A 409 would tell the operator something went wrong,
+      // when the honest message is "make the payment, then start it again".
+      logEvent("regression_start_request", {
+        outcome: "AWAITING_EXTERNAL_PREREQUISITE",
+        reason: result.reason,
+        continuation: result.continuation,
+        scenario_id: result.scenarioId,
+      });
+      return NextResponse.json(
+        {
+          kind: result.kind,
+          findingId: result.findingId,
+          scenarioId: result.scenarioId,
+          reason: result.reason,
+          continuation: result.continuation,
+        },
+        { status: 200 },
+      );
+    }
+
     if (result.kind === "ORPHAN_START") {
       // A concurrent start won the active-regression race. The safety-gated
       // run it created is preserved as audit evidence, never executed.

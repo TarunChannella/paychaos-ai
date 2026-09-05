@@ -76,12 +76,16 @@ describe("Phase 4E-R1 — directory contents", () => {
   });
 
   it("3: the R2 additions are the only new modules in this directory", () => {
-    // An unreviewed fifth-plus module would fail here rather than slipping in
-    // under R1's scoping.
+    // An unreviewed module would fail here rather than slipping in under R1's
+    // scoping. Advanced once, for the Phase 5 correction: `fresh-source.ts`
+    // exists because a C01 re-test must run against NEW genuine evidence — the
+    // original subject is permanently contaminated by the failure being
+    // re-tested, and PRECHECK-08 correctly refuses it. The list stays exact.
     expect(allFiles).toEqual([
       "eligibility.ts",
       "finalization.ts",
       "finding-lifecycle-repository.ts",
+      "fresh-source.ts",
       "repository.ts",
       "service.ts",
       "types.ts",
